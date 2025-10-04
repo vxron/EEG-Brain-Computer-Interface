@@ -1,17 +1,49 @@
-C++ program for EEG-Based Brain-Computer-Interface (BCI) Using SSVEP and State Vector Machine
+# EEG-Based Brain-Computer Interface (BCI) Using SSVEP and Support Vector Machine (SVM)
 
-main --> CMakeHelloWorld.h/.cpp
-[acq]
---> EEG data ingest from Unicorn Black EEG headset (using their C API)
---> "Fake" data stream file for unit testing
-[decode]
---> Calibrate mode (training protocol): extract tuned decision model for new user with labelled (R/L) SSVEP inputs (SVM lives here)
---> Run mode: decode SSVEPs vs no action states with extracted model
-[process]
---> Condition raw EEG data for frequencies of interest, artifact reduction
---> Feature extraction for SSVEP decoding (SVM model)
-[stimulus]
---> Flashing L/R arrows of 2 different frequencies (on its own thread)
---> Calibrate and run modes are separate, controllable from terminal (calibrate must be accompanied with protocol instructions)
-[utils]
---> Files containing common classes, structs, enums used by different modules
+This C++ program will implement a Steady-State Visually Evoked Potential (SSVEP)-based Brain-Computer Interface (BCI) pipeline using EEG data acquired from the Unicorn Black headset.  
+The system will support both calibration (training) and run modes, decoding left/right flicker responses into control commands via a trained SVM.
+
+---
+
+## Project Structure
+
+- **main/**
+  - `CMakeHelloWorld.cpp`, `CMakeHelloWorld.h`
+  - Entry point and initialization
+
+- **acq/**
+  - EEG data acquisition via Unicorn Black C API
+  - "Fake" data stream generator for unit testing
+
+- **decode/**
+  - Calibration mode:
+    - Guides the user through a training protocol
+    - Extracts an SVM model using labeled (Left/Right) trials
+  - Run mode:
+    - Uses trained SVM to classify live EEG into Left / Right / No Action
+
+- **process/**
+  - Preprocessing (filtering, artifact reduction)
+  - Feature extraction (SSVEP frequency-domain features for SVM)
+
+- **stimulus/**
+  - Displays flickering Left/Right arrows at distinct frequencies
+  - Runs in its own thread for precise visual timing
+  - Supports both Calibration and Run modes (controlled via terminal)
+
+- **utils/**
+  - Shared utilities: common classes, structs, and enums across modules
+
+## Workflow
+
+1. **Calibration**
+   - Launch calibration mode
+   - Present flickering arrows
+   - Collect labeled EEG samples
+   - Train the SVM classifier
+
+2. **Run**
+   - Start real-time decoding
+   - Classify user intent (Left, Right, or No Action)
+   - Output control signals for downstream actuation
+
