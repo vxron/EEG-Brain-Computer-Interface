@@ -6,7 +6,7 @@ add_executable(CMakeHelloWorld
   src/utils/RingBuffer.h
   src/acq/FakeAcquisition.h
   src/acq/FakeAcquisition.cpp
- "src/process/SlidingWindow.h" "src/process/SlidingWindow.cpp" "src/acq/RunAcq.cpp" "src/acq/RunAcq.h")
+ "src/process/SlidingWindow.h" "src/process/SlidingWindow.cpp" "src/acq/RunAcq.cpp" "src/acq/RunAcq.h" "src/acq/IAcqProvider.h" "src/acq/UnicornAcq.h")
 
 # Link spdlog to the exe
 target_link_libraries(CMakeHelloWorld PRIVATE spdlog::spdlog)

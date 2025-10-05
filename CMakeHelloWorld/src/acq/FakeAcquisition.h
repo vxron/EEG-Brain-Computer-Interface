@@ -23,8 +23,9 @@
 #include <cstdint>   // uint32_t
 #include "../utils/Types.h" // gives NUM_CH_CHUNK, NUM_SCANS_CHUNK
 #include <random>    // std::mt19937, std::normal_distribution 
+#include "IAcqProvider.h" // IAcqProvider_S
 
-class FakeAcquisition_C {
+class FakeAcquisition_C : public IAcqProvider_S {
 public:
 	// Configs Object (must be declared before in-class usage/declarations)
 	// NOTE: Uses NUM_CH_CHUNK and NUM_SCANS_CHUNK from Types.h for layout
@@ -48,7 +49,11 @@ public:
 	FakeAcquisition_C& operator=(FakeAcquisition_C&&) = default;
 	~FakeAcquisition_C() = default;
 
-	bool mock_GetData(std::size_t const numberOfScans, float* dest, uint32_t destLen); // mirrors Unicorn C API GetData()
+	// Lifecycle methods to match IAcqProvider_S interface
+	bool start() override { return true; } // nothing to init
+	void stop() override {} // nothing to cleanup
+
+	bool getData(std::size_t numberOfScans, float* dest, std::uint32_t destLen) override; // mirrors Unicorn C API GetData()
 	void setActiveStimulus(double fStimHz); // sets the active stimulus frequency (0 = none)
 
 private:

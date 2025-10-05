@@ -63,7 +63,7 @@ void FakeAcquisition_C::setActiveStimulus(double fStimHz) {
 	activeStimulusHz_ = fStimHz;
 }
 
-bool FakeAcquisition_C::mock_GetData(std::size_t numberOfScans, float* dest, uint32_t destLen) {
+bool FakeAcquisition_C::getData(std::size_t numberOfScans, float* dest, std::uint32_t destLen) {
 	// validate arguments
 	if (dest == NULL || numberOfScans <= 0) {
 		return 0;
