@@ -11,6 +11,14 @@
 #include <csignal>		    // CTR-C handler (SIGINT)
 #include <atomic>			// std::atomic_bool for thread-safe flag (to be used with std::thread)
 // atomic means op happens as one indivisible step from pov of other threads
+#include "acq/IAcqProvider.h" // IAcqProvider_S interface
+#include "../utils/Types.h" // common types
+
+#ifdef ACQ_BACKEND_FAKE
+#include "acq/FakeAcquisition.h" // class FakeAcquisition_C : IAcqProvider_S
+#else
+#include "acq/UnicornAcq.h" // class UnicornAcq_C : IAcqProvider_S
+#endif
 
 
 // g_stop.load --> has anyone asked me to stop yet

@@ -15,5 +15,7 @@ find_package(spdlog REQUIRED)
 
 message(STATUS ">>> spdlog imported OK")
 
+option(USE_FAKE_ACQ "Use fake acquisition backend" ON)
+
 # Build the subdir that defines the executable
 add_subdirectory(CMakeHelloWorld)
