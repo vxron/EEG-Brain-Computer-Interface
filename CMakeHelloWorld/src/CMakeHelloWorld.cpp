@@ -2,17 +2,22 @@
 // Goal: show a working console app that uses spdlog,
 //       prints a few messages with timestamps, sleeps between them,
 //       and then waits for Enter so the window doesn't close immediately.
+// STAYING SINGLE THREAD FOR NOW = NO RING BUFFER YET.
 
 #include "CMakeHelloWorld.h"
+#include "acq/IAcqProvider.h" // IAcqProvider_S interface
+#include "utils/Types.h"   // common types
 #include <spdlog/spdlog.h>   // main spdlog API (info/warn/error, set_pattern, set_level)
 #include <chrono>            // std::chrono::seconds for sleeping
-#include <thread>            // std::this_thread::sleep_for
+#include <thread>			 // std::this_thread::sleep_for
 #include <iostream>          // std::cin.get() to pause on exit
-#include <csignal>		    // CTR-C handler (SIGINT)
-#include <atomic>			// std::atomic_bool for thread-safe flag (to be used with std::thread)
-// atomic means op happens as one indivisible step from pov of other threads
-#include "acq/IAcqProvider.h" // IAcqProvider_S interface
-#include "../utils/Types.h" // common types
+#include <csignal>		     // CTR-C handler (SIGINT)
+#include <atomic>			 // std::atomic_bool for thread-safe flag
+#include <cstdint>
+#include <cstddef>
+#include <numeric>			// std::accumulate
+#include <cmath>			// std::ceil
+#include <memory>			// std::unique_ptr
 
 #ifdef ACQ_BACKEND_FAKE
 #include "acq/FakeAcquisition.h" // class FakeAcquisition_C : IAcqProvider_S
@@ -20,10 +25,12 @@
 #include "acq/UnicornAcq.h" // class UnicornAcq_C : IAcqProvider_S
 #endif
 
+// Consts
+constexpr double fs = 250.0; // Hz, Unicorn sampling rate
+const double CHUNK_PERIOD_S = static_cast<double>(NUM_SCANS_CHUNK) / fs; // s, assumes 250Hz sampling rate
+const long CHUNK_PERIOD_MS = static_cast<long>(std::ceil(CHUNK_PERIOD_S * 1000.0)); // ms, round up to nearest ms
 
-// g_stop.load --> has anyone asked me to stop yet
-
-using namespace std::chrono_literals;
+using SteadyClock = std::chrono::steady_clock;
 
 // global "stop flag" toggled by ctrl+c
 // static bcuz it only needs to be accessed here (no externs from other files)
@@ -32,9 +39,12 @@ static std::atomic<bool> g_stop(false);
 
 // simple signal handler for ctrl+c
 // windows sends SIGINT; we set our flag so main can react
-void on_sigint(int) {
-	// saying: "im asking u to stop now"
+static void on_sigint(int) {
 	g_stop.store(true, std::memory_order_relaxed);
+}
+
+static inline double now_seconds() {
+	return std::chrono::duration<double>(SteadyClock::now().time_since_epoch()).count();
 }
 
 int main() try
@@ -50,32 +60,64 @@ int main() try
 	// Install the Ctrl+C handler
 	std::signal(SIGINT, on_sigint);
 
-	// Start a background worker using std::jthread
-	//     - std::jthread automatically joins in its destructor
-	//     - it passes a stop_token to the thread function which we use to break out of its polling loop
-	std::jthread worker([](std::stop_token stopToken) {
-		spdlog::info("Worker started");
-		int tick = 0;
+	// Construct the acquisition provider (as pointer to base class object, re: polymorphism)
+	std::unique_ptr<IAcqProvider_S> AcqProvider;
 
-		// loop until someone calls worker.request_stop() OR main thread calls std::jthread's destructor
-		while (!stopToken.stop_requested()) {
-			spdlog::info("Worker tick {}", tick++);
-			std::this_thread::sleep_for(1s); // simulate doing work every second
+#ifdef ACQ_BACKEND_FAKE
+	spdlog::info("Backend: FAKE");
+	// use preconstructed pointer to base class object
+	AcqProvider = std::make_unique<FakeAcquisition_C>(FakeAcquisition_C::stimConfigs_S{}); // {} = deafault configs
+
+	//FakeAcquisition_C AcqProvider{ FakeAcquisition_C::stimConfigs_S{} }; 
+#else
+	spdlog::info("Backend: REAL (Unicorn)");
+	//UnicornAcq_C AcqProvider; // TODO
+#endif
+
+	// Start provider & nullcheck
+	if (!AcqProvider || !AcqProvider->start()) {
+		spdlog::critical("Failed to start acquisition provider.");
+		return 1;
+	}
+
+	// Prepare chunk buffer
+	bufferChunk_S chunk{}; // {} uses in-class member initializers (defaults)
+	uint64_t seq = 0;
+	int consecutiveFailures = 0;
+	constexpr int kMaxConsecutiveFailures = 3;
+
+	// Main thread waits until ctrl+c flips g_stop; in the meantime, it reads in one chunk of data
+	while (!g_stop.load(std::memory_order_relaxed)) {
+		chunk.t0 = now_seconds();
+		chunk.seq = seq++;
+
+		const bool ok = AcqProvider->getData(NUM_SCANS_CHUNK, chunk.data.data(), static_cast<uint32_t>(chunk.data.size()));
+#ifdef ACQ_BACKEND_FAKE
+		std::this_thread::sleep_for(std::chrono::milliseconds(CHUNK_PERIOD_MS)); // mimick acquisition time of one chunk
+#endif
+
+		if (!ok) {
+			consecutiveFailures++;
+			spdlog::warn("getData operation failed ({}/{})", consecutiveFailures, kMaxConsecutiveFailures);
+			if (consecutiveFailures >= kMaxConsecutiveFailures) {
+				spdlog::error("Too many consecutive failures; stopping.");
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			continue;
 		}
 
-		spdlog::info("Worker stopping since stop_requested=true");
-	});
+		consecutiveFailures = 0; // reset if ok
+		
+		// compute the mean of chunk.data
+		const float mean = std::accumulate(chunk.data.begin(), chunk.data.end(), 0.0f) / chunk.data.size();
+		spdlog::info("Mean of acquired chunk data: {:.2f} uV", mean);
 
-	// Main thread waits until ctrl+c flips g_stop, but stays responsive.
-	// so we can put lightweight status updates here while background thread is running
-	while (!g_stop.load(std::memory_order_relaxed)) {
-		//spdlog::info("Main thread waiting...");
-		std::this_thread::sleep_for(100ms);
 	}
 
 	// user requested stop ctrl+c --> ask worker to stop
+	AcqProvider->stop();
 	spdlog::info("ctrl+c detected, asking worker to stop...");
-	worker.request_stop(); // sets the token seen by worker loop
 
 	// when main() ends, worker's destructor will be called, which joins the thread safely
 	// destructor joins = when the object goes out of scope, auto-wait for thread to finish
