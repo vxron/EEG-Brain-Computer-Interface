@@ -79,6 +79,9 @@ int main() try
 		spdlog::critical("Failed to start acquisition provider.");
 		return 1;
 	}
+#ifdef ACQ_BACKEND_FAKE
+	AcqProvider->setActiveStimulus(10.0);
+#endif
 
 	// Prepare chunk buffer
 	bufferChunk_S chunk{}; // {} uses in-class member initializers (defaults)
@@ -90,6 +93,14 @@ int main() try
 	while (!g_stop.load(std::memory_order_relaxed)) {
 		chunk.t0 = now_seconds();
 		chunk.seq = seq++;
+
+		// Frequency flip test for fake provider
+#ifdef ACQ_BACKEND_FAKE
+		if (chunk.seq == 50) { // after ~6.4s
+			spdlog::info("Changing stimulus frequency.");
+			AcqProvider->setActiveStimulus(15.0);
+		}
+#endif
 
 		const bool ok = AcqProvider->getData(NUM_SCANS_CHUNK, chunk.data.data(), static_cast<uint32_t>(chunk.data.size()));
 #ifdef ACQ_BACKEND_FAKE
@@ -112,7 +123,6 @@ int main() try
 		// compute the mean of chunk.data
 		const float mean = std::accumulate(chunk.data.begin(), chunk.data.end(), 0.0f) / chunk.data.size();
 		spdlog::info("Mean of acquired chunk data: {:.2f} uV", mean);
-
 	}
 
 	// user requested stop ctrl+c --> ask worker to stop

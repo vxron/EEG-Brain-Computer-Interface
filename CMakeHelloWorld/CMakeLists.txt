@@ -14,10 +14,10 @@ add_executable(CMakeHelloWorld
 
   # RunAcq / processing
   src/acq/RunAcq.h
-  src/acq/RunAcq.cpp
+  
   src/process/SlidingWindow.h
   src/process/SlidingWindow.cpp
-)
+   "src/process/FtrExtract.h" "src/process/FtrExtract.cpp")
 
 # Choose backend at build time (option defined in the ROOT CMakeLists.txt)
 if(USE_FAKE_ACQ)

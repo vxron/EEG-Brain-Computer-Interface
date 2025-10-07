@@ -14,6 +14,7 @@
 #include <vector>
 #include <array>
 #include <cstddef>
+#include <string>
 
 // Tunables for chunking policy
 constexpr std::size_t NUM_CH_CHUNK = 8; // Unicorn EEG has 8 channels (EEG1...EEG8)
@@ -32,3 +33,13 @@ struct bufferChunk_S {
 	std::size_t numScans = NUM_SCANS_CHUNK;      // number of scans (time steps) in this chunk 
 	std::array<float, NUM_SAMPLES_CHUNK> data{}; // interleaved samples: [ch0s0, ch1s0, ch2s0, ..., chN-1s0, ch0s1, ch1s1, ..., chN-1sM-1]
 }; // bufferChunk_S
+
+
+/*
+* public Class for per channel vectors that will be used for feature extraction
+*/
+struct dataVecPerCh_S {
+	std::size_t chIdx; // e.g., 0, 1, etc
+	std::string chLabel; // e.g., EEG0, EEG1, etc
+	std::vector<float> dataVecPerCh; 
+}; // dataVecPerCh_S
