@@ -38,14 +38,16 @@ public:
 	~SlidingWindow_C() = default;
 
 	// Method to push a new chunk into the sliding window
-	bool push_chunk_to_window(const bufferChunk_S& chunk, std::vector<dataVecPerCh_S>* dest); // pass by const ref to avoid copy, non-const because we modify internal state
+	bool push_chunk_to_window(const bufferChunk_S chunk, std::vector<float>* dest); // pass by const ref to avoid copy, non-const because we modify internal state
 	void close(); // close the queue
 
 private:
 	// don't need to call this from any other module/class
 	// emits chunk in the form of a vector of floats to processing unit 
 	// dest is pointer to float vector that should get formed in process module
-	bool emit_vectors_for_processing(std::vector<dataVecPerCh_S>* dest); //should it be const? dont think so cuz its modifying data at dest?
+	bool emit_vectors_for_processing(std::vector<float>* dest); //should it be const? dont think so cuz its modifying data at dest?
+
+	EmittedWindow build_payload_for_current_window_();
 
 	std::vector<bufferChunk_S> buffer_; // the ring buffer storage; preallocate upon construction
 
@@ -56,5 +58,6 @@ private:
 	std::size_t windowCapacity_; // total number of chunks needed in buffer for "full" state
 	std::size_t hopSizeInChunks_; // number of chunks to hop/step on each emit
 	std::size_t chunkCount_ = 0; // number of chunks currently in buffer
+	std::size_t hopCountdown_; // hop counter to keep track of emit time
 
 }; // SlidingWindow_C

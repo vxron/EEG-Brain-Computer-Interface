@@ -6,6 +6,7 @@ add_executable(CMakeHelloWorld
   # Utils / types
   src/utils/Types.h
   src/utils/RingBuffer.h
+  src/utils/ModelStore.h
 
   # Acquisition (fake always present)
   src/acq/IAcqProvider.h
@@ -15,9 +16,9 @@ add_executable(CMakeHelloWorld
   # RunAcq / processing
   src/acq/RunAcq.h
   
-  src/process/SlidingWindow.h
-  src/process/SlidingWindow.cpp
-   "src/process/FtrExtract.h" "src/process/FtrExtract.cpp")
+  src/ftrExtract/SlidingWindow.h
+  src/ftrExtract/SlidingWindow.cpp
+   "src/ftrExtract/FtrExtract.h" "src/ftrExtract/FtrExtract.cpp" "src/App.cpp" "src/utils/ModelStore.cpp")
 
 # Choose backend at build time (option defined in the ROOT CMakeLists.txt)
 if(USE_FAKE_ACQ)

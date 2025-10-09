@@ -1,5 +1,6 @@
 #include <iostream> // std::cerr and std::endl
 #include "SlidingWindow.h"
+#include <spdlog/spdlog.h>   // main spdlog API (info/warn/error, set_pattern, set_level)
 
 SlidingWindow_C::SlidingWindow_C(std::uint64_t windowLengthIn_ms, std::uint64_t hopIn_ms) : windowLength_ms(windowLengthIn_ms), hop_ms(hopIn_ms) {
 	
@@ -28,19 +29,19 @@ SlidingWindow_C::SlidingWindow_C(std::uint64_t windowLengthIn_ms, std::uint64_t 
 	hopSizeInChunks_ = static_cast<std::size_t>(hop_ms) / static_cast<std::size_t>(chunkPeriod_ms);
 
 	buffer_.resize(windowCapacity_); // pre-allocate storage
+
+	hopCountdown_ = hopSizeInChunks_; // must initialize before first decrement (timer)
 }
 
-bool SlidingWindow_C::push_chunk_to_window(const bufferChunk_S& chunk, std::vector<dataVecPerCh_S>* dest) {
+bool SlidingWindow_C::push_chunk_to_window(const bufferChunk_S chunk, std::vector<float>* dest) {
 	if (closed_) {
 		return false;
 	}
 
-	std::size_t hopCountdown = hopSizeInChunks_;
-
 	// copy chunk into buffer at tailIdx_
-	buffer_[tailIdx_] = chunk; // does this need to use std::move instead of just direct assignment?
+	buffer_[tailIdx_] = std::move(chunk); // does this need to use std::move instead of just direct assignment?
 	tailIdx_++;
-	hopCountdown--;
+	hopCountdown_--;
 
 	if (chunkCount_ < windowCapacity_) {
 		// still filling buffer, not ready
@@ -49,10 +50,19 @@ bool SlidingWindow_C::push_chunk_to_window(const bufferChunk_S& chunk, std::vect
 	else {
 		// buffer is full --> increment head to continue reflecting oldest value in queue
 		headIdx_++;
+		if (headIdx_ == windowCapacity_) {
+			headIdx_ = 0; // wrap around
+		}
 		// check to see if hop countdown has expired, indicating time to emit
-		if (hopCountdown <= 0) {
-			emit_vectors_for_processing(dest);
-			hopCountdown = hopSizeInChunks_; // reset
+		if (hopCountdown_ == 0) {
+			// only emit if buffer is full
+			if (chunkCount_ == windowCapacity_) {
+				emit_vectors_for_processing(dest);
+				hopCountdown_ = hopSizeInChunks_; // reset
+			}
+			else {
+				hopCountdown_ = 0; // keep at 0 in case its full next iter
+			}
 		}
 	}
 	if (tailIdx_ == windowCapacity_) {
@@ -68,11 +78,19 @@ void SlidingWindow_C::close() {
 }
 
 // input is pointer to vector of dataVecPerCh_S objects 
-bool SlidingWindow_C::emit_vectors_for_processing(std::vector<dataVecPerCh_S>* dest) {
+bool SlidingWindow_C::emit_vectors_for_processing(std::vector<float>* dest) {
 	// emit snapshot of current vector (cumulative chunks) for processing
 	// format: chunks
 	// each chunk contains N samples ch1.. ch8 
 	// start popping from head
+	
+	if (!dest) return false;
+	// ensure dest has enough space; if not, allocate it
+	if (dest->size() != NUM_SAMPLES_CHUNK * windowCapacity_) {
+		spdlog::warn("Suspicious: Resized float vector in SlidingWindow.cpp");
+		dest->resize(NUM_SAMPLES_CHUNK * windowCapacity_);
+	}
+
 	
 	std::size_t chunkIdx = headIdx_;
 	for (std::size_t i = 0; i < windowCapacity_; i++) {
@@ -83,25 +101,26 @@ bool SlidingWindow_C::emit_vectors_for_processing(std::vector<dataVecPerCh_S>* d
 			chunkIdx = 0;
 		}
 
-		int k = 0;
-		// iterate over chunk and push floats to per channel vectors
+		int offset = 0;
+		int N = 0;
+		// iterate over chunk and push floats to vector in CHANNEL-MAJOR LAYOUT [ch0 samples] [ch1 samples]... [chN-1 samples]
 		for (int j = 0; j < NUM_SAMPLES_CHUNK; j++) {
 			
-			// 0 should go to ch0, up to num of channels, then repeat
-			if (k < NUM_CH_CHUNK) {
-				// write to channel
-				dest[k]->dataVecPerCh.push_back(oldestChunk.data[j]); // is it arrow or point idk to access data vector of dataVecPerCh_S object??
-				k++;
+			if (offset < NUM_CH_CHUNK) {
+				offset++;
 			}
 			else {
-				// new sample started, write to 0th
-				k = 0;
-				dest[k]->dataVecPerCh.push_back(oldestChunk.data[j]);
-				k = 1; // increment for next iter
+				// new sample started, increment sample number
+				N++;
+				offset = 0; // reset
 			}
+
+			(*dest)[i*NUM_SAMPLES_CHUNK + offset+N*NUM_CH_CHUNK] = oldestChunk.data[j];
 			
 		}
 	}
+
+	return true;
 
 }
 

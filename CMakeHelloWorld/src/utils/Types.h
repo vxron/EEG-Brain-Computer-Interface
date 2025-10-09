@@ -35,11 +35,47 @@ struct bufferChunk_S {
 }; // bufferChunk_S
 
 
+// enum class to avoid name collisions & strongly typed (no implicit conversion to/from int)
+enum class AppState_E {
+	appState_Calibrate,
+	appState_Idle,
+	appState_Run,
+	appState_Shutdown,
+	appState_Error
+}; // AppMode_E
+
+
+enum class SSVEPState_E {
+	SSVEP_left,
+	SSVEP_right,
+	SSVEP_None,
+}; // SSVEPState_E
+
+
 /*
-* public Class for per channel vectors that will be used for feature extraction
+* public Class for per channel vectors that will be used for feature extraction --> DELETE
 */
 struct dataVecPerCh_S {
 	std::size_t chIdx; // e.g., 0, 1, etc
 	std::string chLabel; // e.g., EEG0, EEG1, etc
-	std::vector<float> dataVecPerCh; 
+	std::vector<float> dataVecPerCh;
+	double t0 = 0.0;                            // timestamp of first scan in vector
 }; // dataVecPerCh_S
+
+
+struct WindowMeta {
+	std::uint64_t t0_ms{};
+	std::uint64_t t1_ms{};
+	std::uint64_t t_center_ms{};
+	// helps us check for drift, gaps
+	std::uint64_t idx0{};   // first absolute sample index in stream
+	std::uint64_t idx1{};   // last absolute sample index
+};
+
+struct EmittedWindow {
+	// Major-interleaved samples, ready for feature extractor
+	std::vector<float> samples_major;
+	WindowMeta meta;
+	// Present only in Calibrate; empty in Run
+	SSVEPState_E label;
+};
