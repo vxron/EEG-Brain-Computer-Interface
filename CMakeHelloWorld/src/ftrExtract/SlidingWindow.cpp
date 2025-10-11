@@ -33,7 +33,7 @@ SlidingWindow_C::SlidingWindow_C(std::uint64_t windowLengthIn_ms, std::uint64_t 
 	hopCountdown_ = hopSizeInChunks_; // must initialize before first decrement (timer)
 }
 
-bool SlidingWindow_C::push_chunk_to_window(const bufferChunk_S chunk, std::vector<float>* dest) {
+bool SlidingWindow_C::push_chunk_to_window(const bufferChunk_S chunk, EmittedWindow_S* dest) {
 	if (closed_) {
 		return false;
 	}
@@ -57,7 +57,7 @@ bool SlidingWindow_C::push_chunk_to_window(const bufferChunk_S chunk, std::vecto
 		if (hopCountdown_ == 0) {
 			// only emit if buffer is full
 			if (chunkCount_ == windowCapacity_) {
-				emit_vectors_for_processing(dest);
+				emit_window_payload(dest);
 				hopCountdown_ = hopSizeInChunks_; // reset
 			}
 			else {
@@ -78,7 +78,7 @@ void SlidingWindow_C::close() {
 }
 
 // input is pointer to vector of dataVecPerCh_S objects 
-bool SlidingWindow_C::emit_vectors_for_processing(std::vector<float>* dest) {
+bool SlidingWindow_C::emit_window_payload(EmittedWindow_S* dest) {
 	// emit snapshot of current vector (cumulative chunks) for processing
 	// format: chunks
 	// each chunk contains N samples ch1.. ch8 
@@ -86,11 +86,12 @@ bool SlidingWindow_C::emit_vectors_for_processing(std::vector<float>* dest) {
 	
 	if (!dest) return false;
 	// ensure dest has enough space; if not, allocate it
-	if (dest->size() != NUM_SAMPLES_CHUNK * windowCapacity_) {
+	/*if (dest->size() != NUM_SAMPLES_CHUNK * windowCapacity_) {
 		spdlog::warn("Suspicious: Resized float vector in SlidingWindow.cpp");
 		dest->resize(NUM_SAMPLES_CHUNK * windowCapacity_);
-	}
+	}*/
 
+	// this next part takes care of filling the samples_major vector
 	
 	std::size_t chunkIdx = headIdx_;
 	for (std::size_t i = 0; i < windowCapacity_; i++) {
@@ -115,10 +116,17 @@ bool SlidingWindow_C::emit_vectors_for_processing(std::vector<float>* dest) {
 				offset = 0; // reset
 			}
 
-			(*dest)[i*NUM_SAMPLES_CHUNK + offset+N*NUM_CH_CHUNK] = oldestChunk.data[j];
+			(*dest).samples_major[i*NUM_SAMPLES_CHUNK + offset+N*NUM_CH_CHUNK] = oldestChunk.data[j];
 			
 		}
 	}
+
+	// we need to attach a label to this window
+
+
+	// we need to define the meta
+
+
 
 	return true;
 

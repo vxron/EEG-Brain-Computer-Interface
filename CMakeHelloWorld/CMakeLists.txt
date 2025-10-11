@@ -18,7 +18,7 @@ add_executable(CMakeHelloWorld
   
   src/ftrExtract/SlidingWindow.h
   src/ftrExtract/SlidingWindow.cpp
-   "src/ftrExtract/FtrExtract.h" "src/ftrExtract/FtrExtract.cpp" "src/App.cpp" "src/utils/ModelStore.cpp")
+   "src/ftrExtract/FtrExtract.h" "src/ftrExtract/FtrExtract.cpp" "src/App.cpp" "src/utils/ModelStore.cpp" "src/utils/TimingManager.h" "src/stimulus/FakeStim.h" "src/stimulus/Stim.h" "src/utils/TimingManager.cpp")
 
 # Choose backend at build time (option defined in the ROOT CMakeLists.txt)
 if(USE_FAKE_ACQ)
