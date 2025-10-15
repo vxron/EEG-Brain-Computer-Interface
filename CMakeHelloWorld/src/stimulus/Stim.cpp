@@ -88,6 +88,7 @@ void Stim_C::start_new_block(TrainingBlocks_E blockType, std::optional<std::stri
 	}
 	blockOpen_ = true;
 	currentOpenBlock_.blockType = blockType;
+	currentOpenBlock_.blockStartTime = clock_T::now();
 
 	switch (blockType) {
 		case TrainingBlock_ActiveLeft:
@@ -108,9 +109,6 @@ void Stim_C::start_new_block(TrainingBlocks_E blockType, std::optional<std::stri
 			break;
 
 	}
-
-	currentOpenBlock_.blockStartTime = clock_T::now();
-
 }
 
 void Stim_C::close_current_block() {

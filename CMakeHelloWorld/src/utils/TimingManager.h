@@ -48,7 +48,6 @@ private:
 	
 	bool started_ = false;
 	void end_calibration_protocol(); // resets internal counters/state
-	void drain_events_to_indexed_labels(); // drains events from stimulus to indexedLabels_ (called when stim window makes query)
 	// can replace from start (reset head, tail) since sliding window has presumably already seen those labels from last query and time has moved on
 
 	std::vector < LabelSource_S > indexedLabels_; // Stores all labels from the current training protocol

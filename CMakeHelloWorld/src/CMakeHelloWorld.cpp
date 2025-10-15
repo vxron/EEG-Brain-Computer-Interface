@@ -43,6 +43,8 @@ static void on_sigint(int) {
 	g_stop.store(true, std::memory_order_relaxed);
 }
 
+// TODO: use system_clock instead of steady_clock to sync w stimulus/labels/apps
+// this is the seed; then we'll use steady_clock everywhere else to measure durations
 static inline double now_seconds() {
 	return std::chrono::duration<double>(SteadyClock::now().time_since_epoch()).count();
 }
@@ -88,10 +90,11 @@ int main() try
 	uint64_t seq = 0;
 	int consecutiveFailures = 0;
 	constexpr int kMaxConsecutiveFailures = 3;
+	chunk.idx0 = 0;
+	TimingManager.start_stream(now_seconds());
 
 	// Main thread waits until ctrl+c flips g_stop; in the meantime, it reads in one chunk of data
 	while (!g_stop.load(std::memory_order_relaxed)) {
-		chunk.t0 = now_seconds();
 		chunk.seq = seq++;
 
 		// Frequency flip test for fake provider
@@ -119,6 +122,9 @@ int main() try
 		}
 
 		consecutiveFailures = 0; // reset if ok
+
+		// we've filled a chunk... update idx0 for next time
+		chunk.idx0 = seq * NUM_CH_CHUNK;
 		
 		// compute the mean of chunk.data
 		const float mean = std::accumulate(chunk.data.begin(), chunk.data.end(), 0.0f) / chunk.data.size();

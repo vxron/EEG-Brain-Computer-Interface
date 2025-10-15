@@ -61,6 +61,19 @@ enum TrainingBlocks_E {
 	TrainingBlock_None
 }; // TrainingBlocks_E
 
+enum StimulusWindows_E {
+	StimWindow_Arrows,
+	StimWindow_Instructions,
+	StimWindow_None
+}; // StimulusWindows_E
+
+enum BitOperation_E {
+	BitOp_Toggle,
+	BitOp_Set,
+	BitOp_Clear,
+	BitOp_Read
+}; // BitOperation_E
+
 /* END ENUMS */
 
 /* START STRUCTS */
