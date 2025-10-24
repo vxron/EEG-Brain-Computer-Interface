@@ -1,0 +1,180 @@
+@startuml
+skinparam classAttributeIconSize 0
+
+' Data types (timestamp-based)
+class EEGChunk <<datatype>> {
+  +tStart: time_point
+  +tEnd: time_point
+  +samples: float[NUM_CH][NUM_SAMPLES]
+}
+class EEGWindow <<datatype>> {
+  +t0: time_point
+  +t1: time_point
+  +data: float[NUM_CH][WIN_SAMPLES]
+}
+class FeatureVector <<datatype>> { 
+    +values: double[] 
+}
+class LabelBlockTP <<datatype>> {
+  +start: time_point
+  +end: time_point
+  +label: SSVEPState
+}
+class TrainingExample <<datatype>> {
+  +t0: time_point
+  +t1: time_point
+  +feat: FeatureVector
+  +label: SSVEPState
+}
+
+enum AppState { 
+    INIT 
+CALIBRATION 
+TRAINED 
+RUN 
+ERROR
+}
+enum SSVEPState { 
+    None 
+    Left 
+    Right 
+}
+
+' Ring buffer
+class "RingBuffer<EEGChunk>" as RingBuffer {
+  -buf: EEGChunk[]
+  -head: int
+  -tail: int
+  -size_: int
+  +write(c: EEGChunk): bool
+  +readAll(): EEGChunk[]
+  +clear(): void
+  +size(): int
+}
+
+' Acquisition
+interface IAcqProvider {
+  +start(): bool
+  +stop(): void
+  +getData(n: uint32): EEGChunk
+}
+class FakeAcquisition
+class UnicornAcq
+IAcqProvider <|.. FakeAcquisition
+IAcqProvider <|.. UnicornAcq
+
+' Stimulus (standalone)
+class Stimulus {
+  -pendingBlocks: LabelBlockTP[]
+  +run_training_protocol(): bool
+  +start_new_block(): void
+  +close_current_block(): void
+  +drain_closed_blocks(out: LabelBlockTP[]): bool
+}
+
+'TimingManager
+class TimingManager {
+  -blocks: LabelBlockTP[]
+  -guard: milliseconds
+  -latestLabelEnd: time_point
+  +start_stream(base: time_point, fsHz: double, guard: milliseconds): void
+  +ingest_closed_blocks_timepoint(batch: LabelBlockTP[]): void
+  +label_for_window(ws: time_point, we: time_point): SSVEPState
+  +known_label_coverage_end(): time_point
+}
+
+' Sliding window 
+class SlidingWindow {
+  -winDur: duration
+  -hopDur: duration
+  -nextWinStart: time_point
+  -chunkQ: EEGChunk[*]
+  +init(base: time_point, winDur, hopDur): void
+  +push_chunk(c: EEGChunk): void
+  +pop_ready_windows(out: EEGWindow[]): void
+}
+
+'  Feature extraction & decision 
+class FeatureExtractor {
+  +toVector(win: EEGWindow): FeatureVector
+}
+class DecisionBaseline {
+  -k: double
+  +predict(feat: FeatureVector): SSVEPState
+}
+
+' Training data 
+class TrainingSet {
+  -rows: TrainingExample[]
+  +add(ex: TrainingExample): void
+  +export(): TrainingExample[]
+}
+
+' Actuation 
+class PIDController {
+  -Kp: double
+  -Ki: double
+  -Kd: double
+  -integrator: double
+  -prevErr: double
+  +reset(): void
+  +update(err: double, dt: double): double
+}
+class ActuatorDriver {
+  -pid: PIDController
+  +command(state: SSVEPState): double
+  +apply(u: double): void
+}
+class ServoMotor {
+  +setDutyCycle(pwm: double): void
+}
+ActuatorDriver --> PIDController : uses
+ActuatorDriver --> ServoMotor : controls
+
+' top-level App 
+class App {
+  -state: AppState
+  -acq: IAcqProvider
+  -rb: RingBuffer
+  -stim: Stimulus
+  -tm: TimingManager
+  -sw: SlidingWindow
+  -fx: FeatureExtractor
+  -decider: DecisionBaseline
+  -train: TrainingSet
+  -act: ActuatorDriver
+  +start_calibrate_mode(): bool
+  +run_calibration_loop(): void
+  +start_run_mode(): bool
+  +run_inference_loop(): void
+  +go_idle(): bool
+  +shutdown(): bool
+}
+
+' ==== Relationships ====
+App o-- RingBuffer : owns
+App o-- Stimulus : owns
+App o-- TimingManager : owns
+App o-- SlidingWindow : owns
+App o-- FeatureExtractor : owns
+App o-- DecisionBaseline : owns
+App o-- TrainingSet : owns
+App o-- ActuatorDriver : owns
+App ..> IAcqProvider : configures (Fake/Unicorn)
+
+IAcqProvider --> RingBuffer : writes EEGChunk
+SlidingWindow --> RingBuffer : reads EEGChunk
+SlidingWindow ..> EEGWindow : <<emits>>
+FeatureExtractor ..> EEGWindow : <<consumes>>
+DecisionBaseline ..> FeatureVector : <<consumes>>
+
+' Orchestration  
+App ..> Stimulus : "pull closed LabelBlockTP"
+App ..> TimingManager : "push drained blocks\nand query labels"
+App ..> SlidingWindow : "push_chunk()\n& pop_ready_windows()"
+App ..> FeatureExtractor : "toVector()"
+App ..> DecisionBaseline : "predict()"
+App ..> TrainingSet : "add(example) [CALIBRATION]"
+App ..> ActuatorDriver : "apply(decision) [RUN]"
+
+@enduml
