@@ -26,7 +26,6 @@ bool MicroComms_S::bit_manipulation(uint32_t& data, const BitOperation_E& operat
 		data = data & bitMask;
 		break;
 	default:
-		spdlog::error("shoooo bit manipulation");
 		return false;
 	}
 
@@ -35,7 +34,6 @@ bool MicroComms_S::bit_manipulation(uint32_t& data, const BitOperation_E& operat
 
 uint32_t MicroComms_S::read_bit(const uint32_t& data, const uint32_t& bitPos) {
 	if (!valid_bitpos(bitPos)) {
-		spdlog::error("bit_manipulation: bitPos {} out of range", bitPos);
 		return 0;
 	}
 	
@@ -51,7 +49,6 @@ uint32_t MicroComms_S::read_bit(const uint32_t& data, const uint32_t& bitPos) {
 // start..end inclusive, 0=MSB, 31=LSB, start <= end
 uint32_t MicroComms_S::read_bit_range(const uint32_t& data, const uint32_t& bitPosStart, const uint32_t& bitPosEnd) {
 	if (!valid_range(bitPosStart, bitPosEnd)) {
-		spdlog::error("read_bit_range: bad range {}..{}", bitPosStart, bitPosEnd);
 		return 0u;
 	}
 	uint32_t range = data << bitPosStart;
@@ -61,7 +58,6 @@ uint32_t MicroComms_S::read_bit_range(const uint32_t& data, const uint32_t& bitP
 
 bool MicroComms_S::write_bit_range(uint32_t& data, const uint32_t& bitPosStart, const uint32_t bitPosEnd, const uint32_t valueToWrite) {
 	if (!valid_range(bitPosStart, bitPosEnd)) {
-		spdlog::error("read_bit_range: bad range {}..{}", bitPosStart, bitPosEnd);
 		return 0u;
 	}
 	for (int i = bitPosStart; i <= bitPosEnd; i++) {
@@ -72,7 +68,6 @@ bool MicroComms_S::write_bit_range(uint32_t& data, const uint32_t& bitPosStart, 
 
 bool MicroComms_S::write_bit(uint32_t& data, const uint32_t& bitPos, const uint32_t& bitToWrite) {
 	if (!valid_bitpos(bitPos)) {
-		spdlog::error("bit_manipulation: bitPos {} out of range", bitPos);
 		return 0;
 	}
 	if (bitToWrite == 0) {

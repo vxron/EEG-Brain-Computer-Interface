@@ -36,3 +36,6 @@
 
 # Crash dumps
 *.dmp
+
+# Unicorn api dump
+/CapstoneProject/unicorn/bin

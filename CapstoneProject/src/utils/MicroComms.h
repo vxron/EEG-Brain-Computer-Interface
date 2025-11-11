@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <string>
 #include "Types.h"
-#include <spdlog/spdlog.h>
 
 struct MicroComms_S {
 

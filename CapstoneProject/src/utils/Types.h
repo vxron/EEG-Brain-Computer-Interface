@@ -16,6 +16,8 @@
 #include <cstddef>
 #include <string>
 #include <chrono>
+#include "../acq/WindowConfigs.hpp"
+#include "RingBuffer.hpp"
 
 // _T for type
 // Use steady clock for time measurements (monotonic, not affected by system clock changes)
@@ -45,8 +47,12 @@ enum SSVEPState_E {
 	SSVEP_Left,
 	SSVEP_Right,
 	SSVEP_None,
-	SSVEP_Unknown, // e.g., classifier score below threshold
+	SSVEP_Unknown,
 }; // SSVEPState_E
+
+enum StimulusState_E {
+
+};
 
 enum ProtocolPattern_E {
 	Pattern_Alternating,  // L R L R L R ...
@@ -77,8 +83,43 @@ enum BitOperation_E {
 /* END ENUMS */
 
 /* START STRUCTS */
+
+
+/* Generic EEG sample type that will fill ring buffers: comprised of one scan of the number of enabled channels */
+struct eeg_sample_t {
+	std::vector<float> per_channel_values{}; // value for each of the 8 channels **could consider making this an array
+	uint32_t tick;                           // monotonic sample index
+#if CALIB_MODE
+	bool active_label;                       // obtained from stimulus global state 
+#endif 
+};
+
+struct sliding_window_t {
+    size_t const winLen = WINDOW_SAMPLES; // period of about 200*8ms = 1.6s
+    size_t const winHop = WINDOW_HOP; // amount to jump for next window
+    RingBuffer_C<eeg_sample_t> sliding_window{WINDOW_SAMPLES};
+};
+
+// send to stimulus module directly from timing manager
+struct trainingProto_S {
+	std::size_t numActiveBlocks; // number of blocks in this trial (1..N), assumes same number of L/R
+	std::size_t activeBlockDuration_s; // duration of each active block in s
+	std::size_t restDuration_s;  // rest duration between blocks in s
+	ProtocolPattern_E pattern; // alternating, blocked, random
+}; // trainingProto_S
+
+struct LabelSource_S {
+	time_point_T blockStartTime; // timestamp for when new instruction block is sent to display thread
+	time_point_T blockEndTime;   // timestamp for when display completes the block and sends ack
+	SSVEPState_E label = SSVEP_None;         // right, left, none (if no ssvep task, e.g. idle, setup, instructions, rest)
+	uint32_t blockId = 0;       // number of blocks seen so far in the protocol (seq 0,1, 2... unless missing data)
+	TrainingBlocks_E blockType = TrainingBlock_None; // type of block (rest, instructions, active)
+};
+
+
+
 /*
-* bufferChunk_s:
+* bufferChunk_s: THIS SHOULD BE DELETED EVENTUALLY!!!
 * A short duration, fixed-size, array of samples from the EEG device, grouped by time into "scans".
 * ONE scan = ONE sample from EVERY enabled channel at a given time.
 */
@@ -90,39 +131,6 @@ struct bufferChunk_S {
 	std::size_t numScans = NUM_SCANS_CHUNK;      // number of scans (time steps) in this chunk 
 	std::array<float, NUM_SAMPLES_CHUNK> data{}; // interleaved samples: [ch0s0, ch1s0, ch2s0, ..., chN-1s0, ch0s1, ch1s1, ..., chN-1sM-1]
 }; // bufferChunk_S
-
-struct WindowMeta_S {
-	std::uint64_t tStart_ms{}; // window time start
-	std::uint64_t tEnd_ms{}; // window time end
-	// helps us check for drift, gaps
-	std::uint64_t idxStart{};   // first absolute sample index in stream
-	std::uint64_t idxEnd{};   // last absolute sample index
-};
-
-struct EmittedWindow_S {
-	// Major-interleaved samples, ready for feature extractor
-	std::vector<float> samples_major;
-	WindowMeta_S meta;
-	// Present only in Calibrate; empty in Run
-	SSVEPState_E label;
-};
-
-// send to stimulus module directly from timing manager
-struct trainingProto_S {
-	std::size_t numActiveBlocks; // number of blocks in this trial (1..N), assumes same number of L/R
-	std::size_t activeBlockDuration_s; // duration of each active block in s
-	std::size_t restDuration_s;  // rest duration between blocks in s
-	ProtocolPattern_E pattern; // alternating, blocked, random
-}; // trainingProto_S
-
-
-struct LabelSource_S {
-	time_point_T blockStartTime; // timestamp for when new instruction block is sent to display thread
-	time_point_T blockEndTime;   // timestamp for when display completes the block and sends ack
-	SSVEPState_E label = SSVEP_None;         // right, left, none (if no ssvep task, e.g. idle, setup, instructions, rest)
-	uint32_t blockId = 0;       // number of blocks seen so far in the protocol (seq 0,1, 2... unless missing data)
-	TrainingBlocks_E blockType = TrainingBlock_None; // type of block (rest, instructions, active)
-};
 
 
 /* END STRUCTS */
