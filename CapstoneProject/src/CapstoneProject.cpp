@@ -7,7 +7,7 @@
 #include <thread>
 #include <chrono>
 #include <iostream>
-#include "utils/RingBuffer.h"
+#include "utils/RingBuffer.hpp"
 #include "utils/Types.h"
 #include "acq/WindowConfigs.hpp"
 #include <atomic>
@@ -179,13 +179,13 @@ void stimulus_thread_fn(){
 	// runs protocols in calib mode (handle timing & keep track of state in g_record)
 	// should toggle g_record on stimulus switch
 	// in calib mode producer should wait for g_record to toggle? or it can just always check state for data ya thats better 0s and 1s in known fixed order...
-	
+
 }
 
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");
 
-    ringBuffer_C<accel_burst_t> ringBuf(RING_BUFFER_CAPACITY);
+    ringBuffer_C<bufferChunk_S> ringBuf(RING_BUFFER_CAPACITY);
 
     // interrupt caused by SIGINT -> 'handle_singint' acts like ISR (callback handle)
     std::signal(SIGINT, handle_sigint);
@@ -194,7 +194,7 @@ int main() {
     // This builds a new thread that starts executing immediately, running producer_thread_rn in parallel with the main thread (same for cons)
     std::thread prod(producer_thread_fn,std::ref(ringBuf));
     std::thread cons(consumer_thread_fn,std::ref(ringBuf));
-    std::thread joys(stimulus_thread_fn);
+    std::thread stim(stimulus_thread_fn);
 
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
     while(g_stop.load(std::memory_order_acquire) == 0){
@@ -207,7 +207,7 @@ int main() {
     prod.join();
     cons.join(); // close "join" individual threads
 #if CALIBRATION_MODE
-    joys.join();
+    stim.join();
 #endif
     return 0;
 }

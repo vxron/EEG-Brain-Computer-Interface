@@ -27,9 +27,9 @@ using time_point_T = std::chrono::time_point<clock_T>;
 //using time_point_ms_T = std::chrono::time_point<clock_T, ms_T>;
 // convert to ms later so we don't bake in truncation errors for now
 
-// Tunables for chunking policy
+// CHUNKING POLICY
 constexpr std::size_t NUM_CH_CHUNK = 8; // Unicorn EEG has 8 channels (EEG1...EEG8)
-constexpr std::size_t NUM_SCANS_CHUNK = 32; // ~128ms @ 250Hz
+constexpr std::size_t NUM_SCANS_CHUNK = 32; // ~128ms latency @ 250Hz
 constexpr std::size_t NUM_SAMPLES_CHUNK = NUM_CH_CHUNK * NUM_SCANS_CHUNK;
 
 /* START ENUMS */
@@ -86,6 +86,7 @@ enum BitOperation_E {
 
 
 /* Generic EEG sample type that will fill ring buffers: comprised of one scan of the number of enabled channels */
+/*Possibly delete...*/
 struct eeg_sample_t {
 	std::vector<float> per_channel_values{}; // value for each of the 8 channels **could consider making this an array
 	uint32_t tick;                           // monotonic sample index
@@ -94,10 +95,26 @@ struct eeg_sample_t {
 #endif 
 };
 
+/*
+* bufferChunk_s: replacing eeg_sample_t
+* A short duration, fixed-size, array of samples from the EEG device, grouped by time into "scans".
+* ONE scan = ONE sample from EVERY enabled channel at a given time.
+*/
+struct bufferChunk_S {
+	uint64_t tick = 0;                            // monotic sequence number (0,1,2,3...) assigned by producer so consumers can detect dropped chunks
+	double epoch_ms = 0.0;                       // timestamp of first scan in chunk
+	std::size_t numCh = NUM_CH_CHUNK; 		     // number of enabled channels
+	std::size_t numScans = NUM_SCANS_CHUNK;      // number of scans (time steps) in this chunk (32)
+	std::array<float, NUM_SAMPLES_CHUNK> data{}; // interleaved samples: [ch0s0, ch1s0, ch2s0, ..., chN-1s0, ch0s1, ch1s1, ..., chN-1sM-1]
+#if CALIB_MODE
+	bool active_label;                       // obtained from stimulus global state 
+#endif 
+}; // bufferChunk_S
+
 struct sliding_window_t {
     size_t const winLen = WINDOW_SAMPLES; // period of about 200*8ms = 1.6s
     size_t const winHop = WINDOW_HOP; // amount to jump for next window
-    RingBuffer_C<eeg_sample_t> sliding_window{WINDOW_SAMPLES};
+    RingBuffer_C<float> sliding_window{WINDOW_SAMPLES}; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
 };
 
 // send to stimulus module directly from timing manager
@@ -118,19 +135,7 @@ struct LabelSource_S {
 
 
 
-/*
-* bufferChunk_s: THIS SHOULD BE DELETED EVENTUALLY!!!
-* A short duration, fixed-size, array of samples from the EEG device, grouped by time into "scans".
-* ONE scan = ONE sample from EVERY enabled channel at a given time.
-*/
-struct bufferChunk_S {
-	uint64_t seq = 0;                            // monotic sequence number (0,1,2,3...) assigned by producer so consumers can detect dropped chunks
-	uint64_t idx0 = 0;                           // absolute index of the first sample in this chunk (sample 0 of the entire stream is 0)
-	double epoch_ms = 0.0;                       // timestamp of first scan in chunk
-	std::size_t numCh = NUM_CH_CHUNK; 		     // number of enabled channels
-	std::size_t numScans = NUM_SCANS_CHUNK;      // number of scans (time steps) in this chunk 
-	std::array<float, NUM_SAMPLES_CHUNK> data{}; // interleaved samples: [ch0s0, ch1s0, ch2s0, ..., chN-1s0, ch0s1, ch1s1, ..., chN-1sM-1]
-}; // bufferChunk_S
+
 
 
 /* END STRUCTS */

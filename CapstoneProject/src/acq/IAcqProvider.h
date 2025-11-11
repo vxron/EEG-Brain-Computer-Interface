@@ -21,6 +21,6 @@ struct IAcqProvider_S {
 	virtual bool start() = 0; // initialize selected backend
 	virtual void stop() = 0;  // shutdown selected backend
 
-	bool provider_read_one_sample(eeg_sample_t& sample); // uses provider's getdata call to transform into sample format
+	bool provider_read_one_chunk(bufferChunk_S* dest); // uses provider's getdata call to read one chunk into dest (ring buffer)
 }; // IAcqProvider_S
 

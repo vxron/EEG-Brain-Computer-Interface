@@ -10,8 +10,6 @@ extern "C" {
   #include "unicorn.h"
 }
 
-constexpr int UNICORN_ERROR_SUCCESS = 0;
-
 // Simple exception type for hard failures
 struct unicorn_error : std::runtime_error {
     using std::runtime_error::runtime_error;

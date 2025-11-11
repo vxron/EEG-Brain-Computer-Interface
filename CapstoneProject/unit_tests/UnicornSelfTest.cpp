@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <iostream>
 #include <sstream>
+#include <array>
+#include <cstring>
        
 #include "../src/acq/UnicornCheck.h"
 #include "../src/utils/Logger.hpp"
@@ -12,28 +14,60 @@ extern "C" {
   #include "unicorn.h"
 }
 
+constexpr size_t SERIAL_LEN = UNICORN_SERIAL_LENGTH_MAX; 
+
 static bool pick_first_device(UNICORN_DEVICE_SERIAL& out_serial, BOOL onlyPaired, uint32_t& out_count) {
   uint32_t count = 0;
+  // Get number of available serials
   int ec = UNICORN_GetAvailableDevices(nullptr, &count, onlyPaired);
   UWARN_IF_FAIL(ec);
-  LOG_ALWAYS("GetAvailableDevices(" << (onlyPaired ? "paired" : "all") << ") count=" << out_count);
+  LOG_ALWAYS("GetAvailableDevices(" << (onlyPaired ? "paired" : "all") << ") count=" << count);
   if (ec != UNICORN_ERROR_SUCCESS || count == 0) return false;
 
-  std::vector<UNICORN_DEVICE_SERIAL> serials(count);
-  ec = UNICORN_GetAvailableDevices(serials.data(), &count, onlyPaired);
+  // The serials are stored from API as c-style character arrays, so we'll make a vector of all serials
+  // data format for Unicorn serials: [14 bytes][14 bytes][14 bytes] (1 serial = 14 char array)
+  std::vector<char> flat(count*SERIAL_LEN); // Flat buffer of count x char[14]
+  // reinterpret to UNICORN_DEVICE_SERIAL * = char (*)[14]
+  auto serials = reinterpret_cast<UNICORN_DEVICE_SERIAL*>(flat.data());
+
+  // This AP call requires first arg to be SPECIFICALLY a ptr to 14 char array
+  ec = UNICORN_GetAvailableDevices(serials, &count, onlyPaired);
   UWARN_IF_FAIL(ec);
   if (ec != UNICORN_ERROR_SUCCESS || count == 0) return false;
-
+  
   // Display the list
-  for (uint32_t i = 0; i < count; ++i) {
-    LOG_ALWAYS("  Device[" << i << "] serial=" << serials[i]);
+  // Helper for clipping through c-style arrays
+  auto clip_serial = [](const char* s, size_t maxLen) -> std::string {
+        size_t n = 0;
+        while (n < maxLen && s[n] != '\0') ++n;  // stop at null or maxLen
+        return std::string(s, n);
+  }; // if this doesn't work -> can try adding null ourselves when making flats or somthn
+  
+  for (uint32_t i = 0; i<count; i++){
+    std::string clipped = clip_serial(&flat[i*SERIAL_LEN],SERIAL_LEN); // starting index for 14-char arrays is incremented by 14 with each iter
+    LOG_ALWAYS("Device[" << i << "] serial=" << clipped);
   }
 
   // Simply select first one and assign to out_serial passed by main caller
-  std::memcpy(out_serial, serials[0], sizeof(UNICORN_DEVICE_SERIAL)); // copy from serials[0] to out_serial
-  LOG_ALWAYS("Selected serial=" << out_serial);
+  std::memcpy(out_serial, flat.data(), SERIAL_LEN); // copy first serial from flat to out_serial (serial_len=14)
+  LOG_ALWAYS("Selected serial=" << clip_serial(out_serial, SERIAL_LEN));
   out_count = count;
   return true;
+}
+
+static bool reset_and_enable_eeg_channels_only(UNICORN_HANDLE &handle){
+    UNICORN_AMPLIFIER_CONFIGURATION cfg{}; // default init
+    UCHECK(UNICORN_GetConfiguration(handle,&cfg));
+    // reset
+    for(int ch=0;ch<UNICORN_TOTAL_CHANNELS_COUNT;ch++){
+        cfg.Channels[ch].enabled = 0;
+    }
+    // set eeg channels
+    for(int ch=UNICORN_EEG_CONFIG_INDEX;ch<(UNICORN_EEG_CONFIG_INDEX+UNICORN_EEG_CHANNELS_COUNT);ch++){
+        cfg.Channels[ch].enabled = 1;
+    }
+    UCHECK(UNICORN_SetConfiguration(handle,&cfg));
+    return true;
 }
 
 int main() {
@@ -50,10 +84,12 @@ int main() {
     }
   }
 
-  // 2) Open the device
+  // 2) Open the device and set up configs for EEG only
   UNICORN_HANDLE handle{};  // value handle; zero-init
   UCHECK(UNICORN_OpenDevice(serial, &handle));
   LOG_ALWAYS("Device opened.");
+  reset_and_enable_eeg_channels_only(handle);
+  LOG_ALWAYS("Set up EEG.");
 
   // 3) Query the number of acquired channels (needed for GetData buffer sizing)
   uint32_t numAcqCh = 0;
@@ -70,7 +106,6 @@ int main() {
   Reads a specific number of scans into the specified destination buffer of known length.
   Checks whether the destination buffer is big enough to hold the requested number of scans.
 */
-
   const uint32_t scans = 20;
   const uint32_t needed = scans * numAcqCh; // each scan is for all channels
   std::vector<float> buf(needed, 0.0f);

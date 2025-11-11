@@ -14,6 +14,7 @@ set_target_properties(unicorn::unicorn PROPERTIES
 add_executable(CapstoneProject
   src/CapstoneProject.cpp
   src/acq/FakeAcquisition.cpp
+  src/utils/Logger.cpp
 )
 
 # expose headers to IDEs (no compilation)
@@ -42,6 +43,9 @@ if(USE_FAKE_ACQ)
 else()
   add_executable(UnicornSelfTest
   unit_tests/UnicornSelfTest.cpp
+  )
+  target_sources(UnicornSelfTest PRIVATE
+  src/utils/Logger.cpp
   )
   target_include_directories(UnicornSelfTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
