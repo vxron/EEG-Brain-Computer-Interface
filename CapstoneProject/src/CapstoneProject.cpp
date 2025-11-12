@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include "acq/UnicornDriver.h"
 #if CALIB_MODE
 #include <fstream>
 #endif
@@ -36,7 +37,7 @@ void handle_sigint(int) {
     g_stop.store(true,std::memory_order_relaxed);
 }
 
-void producer_thread_fn(RingBuffer_C<eeg_sample_t>& rb){
+void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
     LOG_ALWAYS("producer start");
@@ -46,10 +47,9 @@ void producer_thread_fn(RingBuffer_C<eeg_sample_t>& rb){
     LOG_ALWAYS("PATH=HARDWARE");
 #endif
 
-    
-    lsm9ds1_driver lsm9ds1("/dev/i2c-1", ADDR_XG);
-    if (lsm9ds1.lsm9ds1_init() != 0){
-        LOG_ALWAYS("lsm9ds1_init failed; exiting producer");
+	UnicornDriver_C UnicornDriver{};
+    if (UnicornDriver.unicorn_init() == false || UnicornDriver.unicorn_start_acq() == false){
+        LOG_ALWAYS("unicorn_init failed; exiting producer");
         rb.close();
         return;
     };
@@ -57,7 +57,7 @@ void producer_thread_fn(RingBuffer_C<eeg_sample_t>& rb){
     size_t tick_count = 0;
     // ctrl+c check
     while(!g_stop.load(std::memory_order_relaxed)){
-        accel_burst_t accel_burst_sample {};
+        bufferChunk_S chunk{};
         
 #if I2C_MOCK
         // simulated sample stream 
@@ -72,20 +72,19 @@ void producer_thread_fn(RingBuffer_C<eeg_sample_t>& rb){
         // 119Hz = 0.008s period -> PER BURST
         std::this_thread::sleep_for(8ms);
 #else
-        lsm9ds1.lsm9ds1_read_burst(OUT_X_L_XL, &accel_burst_sample); // error handle?
-        // can this cause problems, is atomic sufficient or do i need to consider semaphore in addition?
+        UnicornDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
         tick_count++;
-        accel_burst_sample.tick = tick_count;
+        chunk.tick = tick_count;
 #if CALIBRATION_MODE
 // does this need a mutex guard or is atomic sufficient?
-        accel_burst_sample.active_label = g_record.load(std::memory_order_acquire); // reader = acquire
+        chunk.active_label = g_record.load(std::memory_order_acquire); // reader = acquire
 
 #endif // CALIBRATION_MODE
 #endif // I2C_MOCK
         
         // blocking push function... will always (eventually) run and return true, 
         // unless queue is closed, in which case we want out
-        if(!rb.push(accel_burst_sample)){
+        if(!rb.push(chunk)){
             break;
         } 
     }
@@ -93,66 +92,91 @@ void producer_thread_fn(RingBuffer_C<eeg_sample_t>& rb){
     rb.close();
 }
 
-// note ctrl+c exit handled on producer side so only one thread reads g_stop
-// when we close the ring buffer, [rb.close() above], pop will return false when consumer tries to pop -> clean exit; otherwise, blocking
-void consumer_thread_fn(ringBuffer_C<accel_burst_t>& rb){
+void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
     using namespace std::chrono_literals;
     logger::tlabel = "consumer";
     LOG_ALWAYS("consumer start");
     size_t tick_count = 0;
 
     sliding_window_t window; // should acquire the data for 1 window with that many pops n then increment by hop... 
-    accel_burst_t temp; // placeholder for accel burst storage 
-    /*
-    // wait for first signal that we've reached the WINDOW_SAMPLES length in the buffer
-    while(rb.get_count() < window.winLen){
-        // don't have enough data
-        continue;
-    }
-    */
+    bufferChunk_S temp; // placeholder
 
 #if CALIBRATION_MODE
-    std::ofstream csv("accel_calib_data.csv");
-    csv << "tick,x,y,z,active\n";
+    std::ofstream csv("eeg_calib_data.csv");
+    // write first 8 EEG channels of first scan per chunk
+    csv << "tick";
+    for (std::size_t ch=0; ch<NUM_CH_CHUNK; ++ch) csv << ",eeg" << (ch+1);
+    csv << ",active\n";
     size_t rows_written = 0;
 #endif
 
-    // BUILD FIRST WINDOW - do we need a mutex guard here?  i kinda dont think so because no one else is gonna be popping? and consumer/producer push/pop is handled intrinsically by semaphores in ringbuf class
-    for(int i=0;i<window.winLen;i++){
-        if(!rb.pop(&temp)){ // internally wait here (pop cmd is blocking)
-            break; // throw error
-        }
-        else {
-            // pop successful -> push into sliding window
-            window.sliding_window.push(temp);
-        }
-    }
+	// build first window
+	while(window.sliding_window.get_count()<window.winLen){
+		// sc
+		if(!rb.pop(&temp)){ // internally wait here (pop cmd is blocking)
+			break;
+		} 
+		else { 
+			// this will fit fine because winLen is a multiple of number of scans per channel = 32
+			// pop sucessful -> push into sliding window
+			for(int i = 0; i<NUM_SAMPLES_CHUNK;i++){
+				window.sliding_window.push(temp.data[i]);
+			}
+		}
+	}
 
     while(!g_stop.load(std::memory_order_relaxed)){
         // emit window to feature extractor (DEEEP COPY)
         //featureExtractor.readin(window);
         // pop out half of window for 50% hop
-        accel_burst_t discard{};
+        float discard;
         for(size_t k=0;k<window.winHop;k++){
             window.sliding_window.pop(&discard); 
         }
-        // dont think i need get count cuz pressure is handled intrinsically in ring buff
-        /*
-        // after the first time, we increment by hop size rather than window size (as long as we have hop size available in array, we can pull a window)
-        while(rb.get_count() < window.winHop){
-            continue;
-        }
-        */
+
+	   // somehow need to stash hop amount 
         // we have enough to make a window from head by adding the hop amount 
         // keep the tail of the sliding window, overwrite the head (older) 
-        for(size_t j=0;j<window.winHop;j++){
-            if(!rb.pop(&temp)){
-                break; // throw error
+        while(window.sliding_window.get_count()<window.winLen){
+			std::size_t amnt_left_to_add = window.winLen - window.sliding_window.get_count();
+			// if there is something nonzero in stash, we should take it and clear stash
+			// drain stash if any
+            if (window.stash_len > 0) {
+                const std::size_t take = (window.stash_len < amnt_left_to_add) ? window.stash_len : amnt_left_to_add;
+                for (std::size_t i = 0; i < take; ++i){
+                    window.sliding_window.push(window.stash[i]);
+				}
+                if (take < window.stash_len) {
+                    std::memmove(window.stash.data(),
+                                 window.stash.data() + take,
+                                 (window.stash_len - take) * sizeof(float));
+                }
+                window.stash_len -= take;
+
+                // window filled just from stash this loop
+                if (take == amnt_left_to_add) continue; // go check while-condition again
             }
-            else {
-                // pop successful -> push into sliding window
-                window.sliding_window.push(temp);
-                // each successful pop is something we've acquired from rb
+			if(!rb.pop(&temp)){
+				break;
+			} else {
+				// pop successful -> push into sliding window
+				if(amnt_left_to_add >= NUM_SAMPLES_CHUNK){
+					// drain whole thing
+				}
+				else {
+					// take what we need and stash the rest for next window
+					for(int j=0;j<NUM_SAMPLES_CHUNK;j++){
+						if(j<amnt_left_to_add){
+							window.sliding_window.push(temp.data[j]);
+						} else {
+							window.stash.push_back(temp.data[j]);
+						}
+						
+					}
+				}
+			}
+		}
+
 #if CALIBRATION_MODE
                 if((tick_count%120)==0){
                     LOG_ALWAYS(std::to_string(temp.tick) + " " + std::to_string(temp.x) + " " + std::to_string(temp.y) + " " + std::to_string(temp.z) + " " + std::to_string(temp.active_label) + "\n");
@@ -163,9 +187,8 @@ void consumer_thread_fn(ringBuffer_C<accel_burst_t>& rb){
                 rows_written++;
                 if(rows_written % 500 == 0) { csv.flush(); } // flush every 500 rows for speed 
 #endif
-            }
-        }
-    }
+    
+	}
     // exiting due to producer exiting means we need to close window rb
     window.sliding_window.close();
     rb.close();
@@ -185,7 +208,7 @@ void stimulus_thread_fn(){
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");
 
-    ringBuffer_C<bufferChunk_S> ringBuf(RING_BUFFER_CAPACITY);
+    RingBuffer_C<bufferChunk_S> ringBuf(ACQ_RING_BUFFER_CAPACITY);
 
     // interrupt caused by SIGINT -> 'handle_singint' acts like ISR (callback handle)
     std::signal(SIGINT, handle_sigint);

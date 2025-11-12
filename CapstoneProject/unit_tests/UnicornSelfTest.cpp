@@ -99,6 +99,17 @@ int main() {
   // 4) Start acquisition in measurement mode (FALSE = not dummy test signal)
   UCHECK(UNICORN_StartAcquisition(handle, FALSE));
   LOG_ALWAYS("Acquisition started (measurement mode).");
+  
+  // Inspect (make sure) we're running EEG channels
+  UNICORN_AMPLIFIER_CONFIGURATION cfg{};
+  UCHECK(UNICORN_GetConfiguration(handle, &cfg));
+  for (uint32_t i = 0; i < UNICORN_TOTAL_CHANNELS_COUNT; ++i) {
+    if (cfg.Channels[i].enabled) {
+        LOG_ALWAYS("ENABLED: " << cfg.Channels[i].name
+                   << " [" << cfg.Channels[i].unit << "] "
+                   << "range=[" << cfg.Channels[i].range[0] << "," << cfg.Channels[i].range[1] << "]");
+    }
+  }
 
   // 5) Grab a small chunk of data
 /* GETDATA()

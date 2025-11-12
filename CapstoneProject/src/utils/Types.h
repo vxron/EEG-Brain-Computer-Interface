@@ -28,9 +28,9 @@ using time_point_T = std::chrono::time_point<clock_T>;
 // convert to ms later so we don't bake in truncation errors for now
 
 // CHUNKING POLICY
-constexpr std::size_t NUM_CH_CHUNK = 8; // Unicorn EEG has 8 channels (EEG1...EEG8)
-constexpr std::size_t NUM_SCANS_CHUNK = 32; // ~128ms latency @ 250Hz
-constexpr std::size_t NUM_SAMPLES_CHUNK = NUM_CH_CHUNK * NUM_SCANS_CHUNK;
+inline constexpr std::size_t NUM_CH_CHUNK = 8; // Unicorn EEG has 8 channels (EEG1...EEG8)
+inline constexpr std::size_t NUM_SCANS_CHUNK = 32; // ~128ms latency @ 250Hz
+inline constexpr std::size_t NUM_SAMPLES_CHUNK = NUM_CH_CHUNK * NUM_SCANS_CHUNK;
 
 /* START ENUMS */
 
@@ -112,9 +112,12 @@ struct bufferChunk_S {
 }; // bufferChunk_S
 
 struct sliding_window_t {
-    size_t const winLen = WINDOW_SAMPLES; // period of about 200*8ms = 1.6s
-    size_t const winHop = WINDOW_HOP; // amount to jump for next window
-    RingBuffer_C<float> sliding_window{WINDOW_SAMPLES}; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
+    size_t const winLen = WINDOW_SCANS*NUM_CH_CHUNK; // period of about 200*8ms = 1.6s
+    size_t const winHop = WINDOW_HOP_SCANS*NUM_CH_CHUNK; // amount to jump for next window
+    RingBuffer_C<float> sliding_window{WINDOW_SCANS*NUM_CH_CHUNK}; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
+	std::array<float, NUM_SAMPLES_CHUNK> stash{}; // overflow storage
+	std::size_t stash_len = 0; // how many floats in stash are valid
+	// then each % somthn in this sliding_window RingBuf will correspond to a particular channel ! (can export to csv)
 };
 
 // send to stimulus module directly from timing manager

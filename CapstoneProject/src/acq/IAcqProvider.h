@@ -16,11 +16,9 @@
 struct IAcqProvider_S {
 	// Virtual function interface for acquisition providers
 	// **need to make sure the providers are derived from this**
-	virtual bool getData(std::size_t const numberOfScans, float* dest, uint32_t destLen) = 0; // pure virtual function = 0
+	virtual bool getData(std::size_t const numberOfScans, float* dest) = 0; // pure virtual function = 0
 	virtual ~IAcqProvider_S() = default; // virtual destructor for proper cleanup of derived classes
-	virtual bool start() = 0; // initialize selected backend
-	virtual void stop() = 0;  // shutdown selected backend
-
-	bool provider_read_one_chunk(bufferChunk_S* dest); // uses provider's getdata call to read one chunk into dest (ring buffer)
+	virtual bool unicorn_init() = 0; // establishes unicorn session; sets configuration
+	virtual bool unicorn_start_acq() = 0; // start acquisition
+	virtual bool unicorn_stop_and_close() = 0;
 }; // IAcqProvider_S
-
