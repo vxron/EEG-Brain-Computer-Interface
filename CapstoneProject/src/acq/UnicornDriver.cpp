@@ -17,7 +17,7 @@ UnicornDriver_C::~UnicornDriver_C() {
     }
     if (handle) {
         UNICORN_CloseDevice(&handle);
-        handle = 0;
+        handle = 0; // makes invalid handle
     }
 }
 

@@ -126,42 +126,40 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
 	}
 
     while(!g_stop.load(std::memory_order_relaxed)){
-        // emit window to feature extractor (DEEEP COPY)
-        //featureExtractor.readin(window);
-        // pop out half of window for 50% hop
-        float discard;
+        // emit window to feature extractor
+        
+        float discard; // first pop
         for(size_t k=0;k<window.winHop;k++){
             window.sliding_window.pop(&discard); 
         }
 
-	   // somehow need to stash hop amount 
-        // we have enough to make a window from head by adding the hop amount 
-        // keep the tail of the sliding window, overwrite the head (older) 
-        while(window.sliding_window.get_count()<window.winLen){
-			std::size_t amnt_left_to_add = window.winLen - window.sliding_window.get_count();
-			// if there is something nonzero in stash, we should take it and clear stash
-			// drain stash if any
+        while(window.sliding_window.get_count()<window.winLen){ // now push
+			std::size_t amnt_left_to_add = window.winLen - window.sliding_window.get_count(); // in samples
+			// if there is previous 'len' in stash, we should take it and decrement len
             if (window.stash_len > 0) {
-                const std::size_t take = (window.stash_len < amnt_left_to_add) ? window.stash_len : amnt_left_to_add;
+                // take full amnt_left_to_add from stash if it's available, otherwise take window.stash_len
+                const std::size_t take = (window.stash_len > amnt_left_to_add) ? amnt_left_to_add : window.stash_len;
                 for (std::size_t i = 0; i < take; ++i){
                     window.sliding_window.push(window.stash[i]);
 				}
+                // move leftover stash to front of array for next round
                 if (take < window.stash_len) {
-                    std::memmove(window.stash.data(),
-                                 window.stash.data() + take,
-                                 (window.stash_len - take) * sizeof(float));
+                    std::memmove(window.stash.data(), // start of stash array (dest)
+                                 window.stash.data() + take, // ptr to where remaining data starts (src)
+                                 (window.stash_len - take) * sizeof(float)); // number of bytes to move
                 }
-                window.stash_len -= take;
+                window.stash_len -= take; // how much we lost for next time; will never be <0
 
-                // window filled just from stash this loop
-                if (take == amnt_left_to_add) continue; // go check while-condition again
+                continue; // go check while-condition again
             }
 			if(!rb.pop(&temp)){
 				break;
 			} else {
 				// pop successful -> push into sliding window
 				if(amnt_left_to_add >= NUM_SAMPLES_CHUNK){
-					// drain whole thing
+                    for(int j=0;j<NUM_SAMPLES_CHUNK;j++){
+                        window.sliding_window.push(temp.data[j]);
+                    } // goes back to check while
 				}
 				else {
 					// take what we need and stash the rest for next window
@@ -169,9 +167,8 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
 						if(j<amnt_left_to_add){
 							window.sliding_window.push(temp.data[j]);
 						} else {
-							window.stash.push_back(temp.data[j]);
+							window.stash[j-amnt_left_to_add]=temp.data[j];
 						}
-						
 					}
 				}
 			}

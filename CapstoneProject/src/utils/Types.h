@@ -27,10 +27,19 @@ using time_point_T = std::chrono::time_point<clock_T>;
 //using time_point_ms_T = std::chrono::time_point<clock_T, ms_T>;
 // convert to ms later so we don't bake in truncation errors for now
 
+/* START CONFIGS */
+
 // CHUNKING POLICY
 inline constexpr std::size_t NUM_CH_CHUNK = 8; // Unicorn EEG has 8 channels (EEG1...EEG8)
 inline constexpr std::size_t NUM_SCANS_CHUNK = 32; // ~128ms latency @ 250Hz
 inline constexpr std::size_t NUM_SAMPLES_CHUNK = NUM_CH_CHUNK * NUM_SCANS_CHUNK;
+
+// unicorn sampling rate of 250 Hz means 1 scan is about 4ms (or, 32 scans per getData() call is about 128ms)
+// for 1.2s windows -> we need 300 individual scans with hop 38 (every 0.152s)
+inline constexpr std::size_t WINDOW_SCANS         = NUM_SCANS_CHUNK*10;     // 320 samples @250Hz (sampling period 4ms), this is 1.28s
+inline constexpr std::size_t WINDOW_HOP_SCANS     = 40;      // every 0.16s (~87% overlap)  
+
+/* END CONFIGS */
 
 /* START ENUMS */
 
@@ -117,6 +126,7 @@ struct sliding_window_t {
     RingBuffer_C<float> sliding_window{WINDOW_SCANS*NUM_CH_CHUNK}; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
 	std::array<float, NUM_SAMPLES_CHUNK> stash{}; // overflow storage
 	std::size_t stash_len = 0; // how many floats in stash are valid
+	std::size_t tick = 0;
 	// then each % somthn in this sliding_window RingBuf will correspond to a particular channel ! (can export to csv)
 };
 
