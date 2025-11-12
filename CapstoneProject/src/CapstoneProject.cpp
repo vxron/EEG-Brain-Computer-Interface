@@ -9,7 +9,8 @@
 #include <iostream>
 #include "utils/RingBuffer.hpp"
 #include "utils/Types.h"
-#include "acq/WindowConfigs.hpp"
+#include "stimulus/StateStore.hpp"
+#include "stimulus/HttpServer.hpp"
 #include <atomic>
 #include "utils/Logger.hpp"
 #include <csignal>
@@ -126,7 +127,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
 	}
 
     while(!g_stop.load(std::memory_order_relaxed)){
-        // emit window to feature extractor
+        // (1) emit window to feature extractor
         
         float discard; // first pop
         for(size_t k=0;k<window.winHop;k++){
@@ -152,26 +153,34 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
 
                 continue; // go check while-condition again
             }
+            // stash is empty
 			if(!rb.pop(&temp)){
 				break;
 			} else {
 				// pop successful -> push into sliding window
 				if(amnt_left_to_add >= NUM_SAMPLES_CHUNK){
-                    for(int j=0;j<NUM_SAMPLES_CHUNK;j++){
+                    for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
                         window.sliding_window.push(temp.data[j]);
                     } // goes back to check while
 				}
 				else {
 					// take what we need and stash the rest for next window
-					for(int j=0;j<NUM_SAMPLES_CHUNK;j++){
+					for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
 						if(j<amnt_left_to_add){
 							window.sliding_window.push(temp.data[j]);
-						} else {
+						} else { // we know stash should be empty if we made it here
+                            if(window.stash_len != 0){
+                                LOG_ALWAYS("There's an issue with sliding window stash.");
+                                break;
+                            }
 							window.stash[j-amnt_left_to_add]=temp.data[j];
+                            window.stash_len++; // increasing slots to add from stash for next time
 						}
 					}
 				}
 			}
+            ++tick_count;
+            window.tick=tick_count;
 		}
 
 #if CALIBRATION_MODE
@@ -199,13 +208,16 @@ void stimulus_thread_fn(){
 	// runs protocols in calib mode (handle timing & keep track of state in g_record)
 	// should toggle g_record on stimulus switch
 	// in calib mode producer should wait for g_record to toggle? or it can just always check state for data ya thats better 0s and 1s in known fixed order...
-
+    
 }
 
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");
 
+    // Shared singletons/objects
     RingBuffer_C<bufferChunk_S> ringBuf(ACQ_RING_BUFFER_CAPACITY);
+    StateStore_s stateStore;
+    HttpServer_C server(stateStore);
 
     // interrupt caused by SIGINT -> 'handle_singint' acts like ISR (callback handle)
     std::signal(SIGINT, handle_sigint);

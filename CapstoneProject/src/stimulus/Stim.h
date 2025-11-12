@@ -13,11 +13,17 @@
 #include <optional>
 
 
+
+
+
 class Stim_C {
 public:
 	// Gets called from TM
 	bool run_training_protocol(const trainingProto_S& trainingProto);
 	bool drain_labels_to_tm(std::vector<LabelSource_S>& dest);
+#if CALIB_MODE
+	bool stimIsActiveBlock;
+#endif
 private:
 	// comes from app settings ideally; for now we can change in code
 	struct stimConfig_S {
@@ -30,7 +36,7 @@ private:
 		int windowWidth = 800;      // width of stimulus window in pixels
 		int windowHeight = 600;     // height of stimulus window in pixels
 	}; // stimConfig_S
-	
+
 	bool blockOpen_ = false; // true if a calibration block is currently open (waiting for close)
 
 	// the following would get called from run_training_protocol()

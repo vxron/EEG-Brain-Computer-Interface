@@ -16,7 +16,6 @@
 #include <cstddef>
 #include <string>
 #include <chrono>
-#include "../acq/WindowConfigs.hpp"
 #include "RingBuffer.hpp"
 
 // _T for type
@@ -45,11 +44,11 @@ inline constexpr std::size_t WINDOW_HOP_SCANS     = 40;      // every 0.16s (~87
 
 // use enum CLASS to avoid name collisions & strongly typed (no implicit conversion to/from int)
 enum AppState_E {
-	appState_Calibrate,
-	appState_Idle,
-	appState_Run,
-	appState_Shutdown,
-	appState_Error
+	AppState_Calibrate,
+	AppState_Idle,
+	AppState_Run,
+	AppState_Shutdown,
+	AppState_Error
 }; // AppMode_E
 
 enum SSVEPState_E {
@@ -59,8 +58,26 @@ enum SSVEPState_E {
 	SSVEP_Unknown,
 }; // SSVEPState_E
 
-enum StimulusState_E {
+enum TestFreq_E {
+	TestFreq_None,
+	TestFreq_8_Hz,
+	TestFreq_9_Hz,
+	TestFreq_10_Hz,
+	TestFreq_11_Hz,
+	TestFreq_12_Hz
+}
 
+enum ActuatorState_E {
+	ActuatorState_Fwd,
+	ActuatorState_Bcwd,
+	ActuatorState_None,
+};
+
+enum StimulusState_E {
+	StimState_Active_Run,
+	StimState_Active_Calib,
+	StimState_Instructions,
+	StimState_None,
 };
 
 enum ProtocolPattern_E {
@@ -68,19 +85,6 @@ enum ProtocolPattern_E {
 	Pattern_Blocked,      // L L L ... R R R ... (half time left, half time right)
 	Pattern_Random,       // random sequence of L and R
 }; // ProtocolPattern_E
-
-enum TrainingBlocks_E {
-	TrainingBlock_ActiveLeft,
-	TrainingBlock_Instructions,
-	TrainingBlock_ActiveRight,
-	TrainingBlock_None
-}; // TrainingBlocks_E
-
-enum StimulusWindows_E {
-	StimWindow_Arrows,
-	StimWindow_Instructions,
-	StimWindow_None
-}; // StimulusWindows_E
 
 enum BitOperation_E {
 	BitOp_Toggle,
