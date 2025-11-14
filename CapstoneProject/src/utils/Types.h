@@ -73,11 +73,22 @@ enum ActuatorState_E {
 	ActuatorState_None,
 };
 
-enum StimulusState_E {
-	StimState_Active_Run,
-	StimState_Active_Calib,
-	StimState_Instructions,
-	StimState_None,
+enum UIState_E {
+	UIState_Active_Run,
+	UIState_Active_Calib,
+	UIState_Instructions, // also for calib
+	UIState_Home,
+	UIState_None,
+};
+
+enum UIStateEvent_E {
+	UIStateEvent_StimControllerTimeout, // switch btwn instructions/active during calib
+	UIStateEvent_StimControllerTimeoutEndCalib,
+	UIStateEvent_UserPushesStartRun,
+	UIStateEvent_UserPushesStartCalib,
+	UIStateEvent_LostConnection,
+	UIStateEvent_UserPushesExit,
+	UIStateEvent_ConnectionSuccessful,
 };
 
 enum ProtocolPattern_E {

@@ -55,13 +55,13 @@ function intToLabel(enumType, integer) {
     case "stim_window":
       switch (integer) {
         case 0:
-          return "StimState_Active_Run";
+          return "UIState_Active_Run";
         case 1:
-          return "StimState_Active_Calib";
+          return "UIState_Active_Calib";
         case 2:
-          return "StimState_Instructions";
+          return "UIState_Instructions";
         case 3:
-          return "StimState_None";
+          return "UIState_None";
       }
     case "freq_hz_e":
       switch (integer) {
