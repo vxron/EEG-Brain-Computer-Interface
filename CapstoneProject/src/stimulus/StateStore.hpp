@@ -1,3 +1,4 @@
+#pragma once
 #include "../utils/Types.h"
 #include <atomic>
 /* STATESTORE
@@ -13,6 +14,7 @@ struct StateStore_s{
     std::atomic<int> g_freq_hz{0};
 #endif
     std::atomic<int> g_ui_seq{0}; // increment each time a new state is published by server so html can detect quickly
+    std::atomic<int> g_refresh_hz{0}; // monitor screen's refresh rate
 };
 
 

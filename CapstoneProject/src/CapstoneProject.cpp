@@ -211,13 +211,18 @@ void stimulus_thread_fn(){
     
 }
 
+void http_thread_fn(HttpServer_C& http){
+    http.http_listen_for_poll_requests();   // blocks here
+}
+
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");
 
     // Shared singletons/objects
     RingBuffer_C<bufferChunk_S> ringBuf(ACQ_RING_BUFFER_CAPACITY);
     StateStore_s stateStore;
-    HttpServer_C server(stateStore);
+    HttpServer_C server(stateStore, 7777);
+    server.http_start_server();
 
     // interrupt caused by SIGINT -> 'handle_singint' acts like ISR (callback handle)
     std::signal(SIGINT, handle_sigint);
@@ -226,6 +231,7 @@ int main() {
     // This builds a new thread that starts executing immediately, running producer_thread_rn in parallel with the main thread (same for cons)
     std::thread prod(producer_thread_fn,std::ref(ringBuf));
     std::thread cons(consumer_thread_fn,std::ref(ringBuf));
+    std::thread http(http_thread_fn, server);
     std::thread stim(stimulus_thread_fn);
 
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
@@ -236,8 +242,10 @@ int main() {
     // on system shutdown:
     // ctrl+c called...
     ringBuf.close();
+    server.http_close_server();
     prod.join();
     cons.join(); // close "join" individual threads
+    http.join();
 #if CALIBRATION_MODE
     stim.join();
 #endif

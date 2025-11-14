@@ -19,9 +19,23 @@ HTTP SERVER : READER
 // should see var/www/html# --> root of site you're serving
 // https://www.youtube.com/watch?v=RzdM54i7buY
 
+/*
+Agreed upon JSON schema for GET /state:
+
+{
+  "seq": int,              // monotonic counter, increments when StimulusController publishes new state
+  "stim_window": int,      // cast of StimulusState_E (instructions, active, none, run_mode)
+  "block_id": int,         // current training block index (0 if none or not calibratio)
+  "freq_hz": int,          // stimulus frequency in Hz (e.g., 12)
+  "freq_code": int         // cast of TestFreq_E (e.g., 0=7.5Hz,1=10Hz,...)
+}
+*/
+
+
 class HttpServer_C {
 public: // API
     explicit HttpServer_C(StateStore_s& stateStoreRef, int port=7777);
+    ~HttpServer_C();
     bool http_start_server(); // constructs httplib::server
     bool http_listen_for_poll_requests(); // blocking .listen()
     bool http_close_server(); // calls server's stop hook so .listen() returns
@@ -32,9 +46,9 @@ private:
     int port_;
     std::atomic<bool> is_running_ = false;
     // Handlers
-    void handle_get_state(const httplib::Request&, httplib::Response&); // return current c++ statestore snapshot (JSON)
-    void handle_post_event(const httplib::Request&, httplib::Response&); // accept small UI cmds (JSON)
-    void handle_post_ready(const httplib::Request&, httplib::Response&); // accept page telemetry (refresh Hz)
-    void handle_options_and_set(const httplib::Request&, httplib::Response& res); // CORS preflight
+    void handle_get_state(const httplib::Request& req, httplib::Response& res); // return current c++ statestore snapshot (JSON)
+    void handle_post_event(const httplib::Request& req, httplib::Response& res); // accept small UI cmds (JSON)
+    void handle_post_ready(const httplib::Request& req, httplib::Response& res); // accept page telemetry (refresh Hz)
+    void handle_options_and_set(const httplib::Request& req, httplib::Response& res); // CORS preflight
     void write_json(httplib::Response& res, std::string_view json_body) const;
 }; // HttpServer_C
