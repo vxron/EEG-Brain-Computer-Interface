@@ -12,7 +12,7 @@
 #include <cctype>
 
 // Constructor
-HttpServer_C::HttpServer_C(StateStore_s& stateStoreRef, int port=7777) : stateStoreRef_(stateStoreRef), liveServerRef_(nullptr), port_(port) {
+HttpServer_C::HttpServer_C(StateStore_s& stateStoreRef, int port) : stateStoreRef_(stateStoreRef), liveServerRef_(nullptr), port_(port) {
 }
 
 // Destructor 
@@ -72,7 +72,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
         << "\"stim_window\":"  << stim_window << ","
         << "\"block_id\":"     << block_id    << ","
         << "\"freq_hz\":"      << freq_hz     << ","
-        << "\"freq_code\":"    << freq_hz_e
+        << "\"freq_hz_e\":"    << freq_hz_e
         << "}";
 
     std::string json_snapshot = oss.str();
@@ -131,11 +131,8 @@ bool HttpServer_C::http_start_server(){
 
     liveServerRef_ = new httplib::Server(); // listens for requests from HTML/JS
 
-    // Default headers (we also put CORS per response)
     liveServerRef_->set_default_headers({
-        {"Access-Control-Allow-Origin","*"},
-        {"Access-Control-Allow-Methods","GET, POST, OPTIONS"},
-        {"Access-Control-Allow-Headers","Content-Type"}
+    // no Access-Control-* here; CORS handled per-response
     });
 
     // Route bindings
@@ -155,7 +152,7 @@ bool HttpServer_C::http_start_server(){
     liveServerRef_->Options("/ready",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_options_and_set(rq, rs); });
 
-    LOG_ALWAYS("HTTP Server successfully closed");
+    LOG_ALWAYS("HTTP Server successfully opened");
     return true;
 }
 
@@ -170,7 +167,7 @@ bool HttpServer_C::http_listen_for_poll_requests(){
     return false;
    }
    is_running_.store(true, std::memory_order_release);
-   LOG_ALWAYS("HTTP listening on 127.0.0.1" << port_);
+   LOG_ALWAYS("HTTP listening on 127.0.0.1: " << port_);
 
    // 2) start listening to browser (blocking)
    bool ok = liveServerRef_->listen("127.0.0.1", port_);

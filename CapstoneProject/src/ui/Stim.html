@@ -1,111 +1,94 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <title>SSVEP Stimulus</title>
-    <style>
-      html,
-      body {
-        margin: 0;
-        height: 100%;
-        background: #111;
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        grid-template-rows: 1fr 1fr;
-        gap: 40px;
-        height: 100%;
-        padding: 40px;
-        box-sizing: border-box;
-      }
-      .cell {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .target {
-        width: 25vmin;
-        height: 25vmin;
-        background: #eee;
-        border-radius: 10px;
-      }
-      .label {
-        position: fixed;
-        left: 10px;
-        top: 10px;
-        color: #bbb;
-        font: 14px/1.2 system-ui, sans-serif;
-        white-space: pre;
-      }
-    </style>
+    <meta charset="UTF-8" />
+    <title>BCI Control Panel</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
   </head>
   <body>
-    <div class="label" id="label">Detecting refresh...</div>
-    <div class="grid">
-      <div class="cell"><div class="target" id="t0"></div></div>
-      <div class="cell"><div class="target" id="t1"></div></div>
-      <div class="cell"><div class="target" id="t2"></div></div>
-      <div class="cell"><div class="target" id="t3"></div></div>
+    <div class="shell">
+      <header class="header">
+        <div class="title-block">
+          <div class="title-main">
+            <span>EEG BCI Page-Turner System</span>
+            <span class="title-pill">Local UI</span>
+          </div>
+          <p class="title-sub">
+            Polls the C++ state store and reflects the current stimulus window,
+            block, and frequency.
+          </p>
+        </div>
+
+        <div id="connection-status" class="status-pill">
+          <span class="status-dot"></span>
+          <span id="connection-label">Disconnected</span>
+        </div>
+      </header>
+
+      <section class="grid">
+        <article class="card">
+          <div class="card-label">Sequence</div>
+          <div id="seq-value" class="card-value">—</div>
+          <div class="card-caption">
+            Monotonic state version from StimulusController
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-label">Stimulus Window</div>
+          <div id="stim-window-value" class="card-value">—</div>
+          <div id="stim-window-caption" class="card-caption">
+            Awaiting data…
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-label">Block</div>
+          <div id="block-value" class="card-value">—</div>
+          <div class="card-caption">
+            Calibration block index (0 if not in calibration)
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-label">Frequency</div>
+          <div class="card-value">
+            <span id="freq-hz-value">—</span>
+            <span style="font-size: 0.8rem; margin-left: 4px">Hz</span>
+          </div>
+          <div class="card-caption">
+            Code:
+            <span id="freq-code-pill" class="card-pill">—</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="controls">
+        <div class="controls-left">
+          <div>
+            <span class="badge">
+              <span>Display</span>
+              <span class="badge-code">refresh_hz</span>
+            </span>
+          </div>
+          <div id="refresh-label">Measuring monitor refresh rate…</div>
+        </div>
+
+        <div class="controls-buttons">
+          <button id="btn-calib" type="button">
+            <span>Start Calibration Session</span>
+          </button>
+          <button id="btn-run" type="button">
+            <span>Start Run Mode</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="log" id="log">
+        <!-- TODO: JS to append log lines here -->
+      </section>
     </div>
-    <script>
-      (() => {
-        // EDIT these to match your protocol (frame-friendly frequencies recommended):
-        const freqsHz = [7.5, 10, 12, 15]; // 60 Hz screen: 8, 6, 5, 4 frames per cycle
-        const duty = 0.5; // 50% duty (frames ON per cycle = round(periodFrames*duty))
 
-        const label = document.getElementById("label");
-        const targets = [0, 1, 2, 3].map((i) =>
-          document.getElementById("t" + i)
-        );
-
-        // Quick refresh estimation
-        let lastT = performance.now(),
-          acc = 0,
-          frames = 0,
-          estimateHz = 60;
-        function measureRefresh(t) {
-          const dt = t - lastT;
-          lastT = t;
-          acc += dt;
-          frames++;
-          if (acc >= 500) {
-            // ms
-            estimateHz = Math.round((1000 * frames) / acc);
-            label.textContent = `Refresh ~ ${estimateHz} Hz\nFreqs: ${freqsHz.join(
-              ", "
-            )} Hz  | duty ${Math.round(duty * 100)}%`;
-            // after first estimate, switch to driving loop
-            requestAnimationFrame(loop);
-            return;
-          }
-          requestAnimationFrame(measureRefresh);
-        }
-
-        // Precompute per-target frame periods
-        const targetsCfg = freqsHz.map((f) => {
-          const periodFrames = Math.max(1, Math.round(estimateHz / f));
-          const onFrames = Math.max(1, Math.round(periodFrames * duty));
-          return { periodFrames, onFrames, frameIdx: 0, visible: true };
-        });
-
-        function loop() {
-          // On each frame, toggle visibility per target based on frame-index within period
-          for (let i = 0; i < targets.length; i++) {
-            const cfg = targetsCfg[i];
-            const k = cfg.frameIdx % cfg.periodFrames;
-            const on = k < cfg.onFrames;
-            if (on !== cfg.visible) {
-              cfg.visible = on;
-              targets[i].style.visibility = on ? "visible" : "hidden";
-            }
-            cfg.frameIdx++;
-          }
-          requestAnimationFrame(loop);
-        }
-
-        requestAnimationFrame(measureRefresh);
-      })();
-    </script>
+    <script src="Stim.js"></script>
   </body>
 </html>

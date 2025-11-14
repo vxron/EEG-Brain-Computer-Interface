@@ -27,7 +27,7 @@ Agreed upon JSON schema for GET /state:
   "stim_window": int,      // cast of StimulusState_E (instructions, active, none, run_mode)
   "block_id": int,         // current training block index (0 if none or not calibratio)
   "freq_hz": int,          // stimulus frequency in Hz (e.g., 12)
-  "freq_code": int         // cast of TestFreq_E (e.g., 0=7.5Hz,1=10Hz,...)
+  "freq_hz_e": int         // cast of TestFreq_E (e.g., 0=7.5Hz,1=10Hz,...)
 }
 */
 

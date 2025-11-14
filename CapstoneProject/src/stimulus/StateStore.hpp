@@ -5,7 +5,6 @@
 --> A single place where host (server)/client (html/js) read/write stimulus information 
 */
 
-
 struct StateStore_s{
     std::atomic<StimulusState_E> g_stim_window{StimState_None}; // which "screen" should showing
 #if CALIB_MODE

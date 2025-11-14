@@ -65,7 +65,7 @@ enum TestFreq_E {
 	TestFreq_10_Hz,
 	TestFreq_11_Hz,
 	TestFreq_12_Hz
-}
+};
 
 enum ActuatorState_E {
 	ActuatorState_Fwd,
@@ -147,7 +147,7 @@ struct LabelSource_S {
 	time_point_T blockEndTime;   // timestamp for when display completes the block and sends ack
 	SSVEPState_E label = SSVEP_None;         // right, left, none (if no ssvep task, e.g. idle, setup, instructions, rest)
 	uint32_t blockId = 0;       // number of blocks seen so far in the protocol (seq 0,1, 2... unless missing data)
-	TrainingBlocks_E blockType = TrainingBlock_None; // type of block (rest, instructions, active)
+	//TrainingBlocks_E blockType = TrainingBlock_None; // type of block (rest, instructions, active)
 };
 
 

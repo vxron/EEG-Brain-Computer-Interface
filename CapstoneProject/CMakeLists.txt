@@ -33,7 +33,16 @@ target_sources(CapstoneProject
       src/stimulus/Stim.h
       src/acq/IAcqProvider.h
       src/acq/FakeAcquisition.h
-      src/acq/WindowConfigs.hpp
+)
+
+# Simple HTTP server self-test (does not depend on Unicorn)
+add_executable(HttpServerSelfTest
+  unit_tests/HttpServerSelfTest.cpp
+  src/utils/Logger.cpp
+  src/stimulus/HttpServer.cpp
+)
+target_include_directories(HttpServerSelfTest PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # Choose backend at build time (option defined in the ROOT CMakeLists.txt)
