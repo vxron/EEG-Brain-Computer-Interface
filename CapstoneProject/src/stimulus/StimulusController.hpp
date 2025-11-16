@@ -8,23 +8,39 @@ STIMULUS CONTROLLER : writer
 #pragma once
 #include "../utils/Types.h"
 #include "../utils/SWTimer.hpp"
+#include <optional>
+#include "StateStore.hpp"
+#include <deque>
 
 // SINGLETON
 class StimulusController_C{
 public:
+    explicit StimulusController_C(StateStore_s* stateStoreRef, std::optional<trainingProto_S> trainingProtocol);
     UIState_E getUIState() const {return state_;};
     void runUIStateMachine();
 private:
+    StateStore_s* stateStoreRef_;
     UIState_E state_;
-    UIState_E nextState_;
-    SW_Timer_C currentBlockTimer;
-    
+    UIState_E prevState_;
+    trainingProto_S trainingProtocol_; // requires a default upon construction
+
+    std::deque<TestFreq_E> activeBlockQueue_;
+    std::size_t activeQueueIdx_ = 0;
+    SW_Timer_C currentWindowTimer_;
+    std::chrono::milliseconds activeBlockDur_ms_{0};
+    std::chrono::milliseconds restBlockDur_ms_{0};
+
+    std::optional<UIStateEvent_E> detectEvent();
+    void processEvent(UIStateEvent_E ev);
+    void onStateEnter(UIState_E prevState, UIState_E newState);
+    void onStateExit(UIState_E state);
     void runHomeWindow();
     void runActiveCalibWindow();
     void runInstructionsCalibWindow();
     void runModeWindow();
     void transitionBetweenWindows(); // maybe this should be handled on UI client side
-    void manageTrainingProtocol(); // uses currentBlockTimer to control calib blocks, trigger timeout events for state machine
+    void manageTrainingProtocol(); // uses currentWindowTimer to control calib blocks, trigger timeout events for state machine
     void process_inputs();
     void process_events();
-}
+};
+

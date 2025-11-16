@@ -6,14 +6,13 @@
 */
 
 struct StateStore_s{
-    std::atomic<StimulusState_E> g_stim_window{StimState_None}; // which "screen" should showing
-#if CALIB_MODE
+    std::atomic<UIState_E> g_stim_window{UIState_None}; // which "screen" should showing
     std::atomic<int> g_block_id{0}; // block index in protocol
     std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None};
     std::atomic<int> g_freq_hz{0};
-#endif
     std::atomic<int> g_ui_seq{0}; // increment each time a new state is published by server so html can detect quickly
-    std::atomic<int> g_refresh_hz{0}; // monitor screen's refresh rate
+    std::atomic<int> g_refresh_hz{0}; // monitor screen's refresh rate 
+    // ^WHEN THIS IS SET -> we know UI has successfully connected (use this to determine start state)
 };
 
 
