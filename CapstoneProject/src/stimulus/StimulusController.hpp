@@ -15,8 +15,9 @@ STIMULUS CONTROLLER : writer
 // SINGLETON
 class StimulusController_C{
 public:
-    explicit StimulusController_C(StateStore_s* stateStoreRef, std::optional<trainingProto_S> trainingProtocol);
+    explicit StimulusController_C(StateStore_s* stateStoreRef, std::optional<trainingProto_S> trainingProtocol = std::nullopt);
     UIState_E getUIState() const {return state_;};
+    std::chrono::milliseconds getCurrentBlockTime() const;
     void runUIStateMachine();
 private:
     StateStore_s* stateStoreRef_;
@@ -43,4 +44,13 @@ private:
     void process_inputs();
     void process_events();
 };
+
+std::chrono::milliseconds StimulusController_C::getCurrentBlockTime() const {
+    if (currentWindowTimer_.is_started() == false) {
+        auto time = std::chrono::milliseconds{0};
+        return time;
+    }
+    auto time = currentWindowTimer_.get_timer_value_ms();
+    return time;
+}
 

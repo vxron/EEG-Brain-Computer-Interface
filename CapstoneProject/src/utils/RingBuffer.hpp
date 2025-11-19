@@ -59,6 +59,7 @@ public:
     bool push(const T& data);
     size_t drain(T *dest);
     void close();
+    int trim_ends(size_t guard_samples);
     size_t get_count() const { return count_.load(std::memory_order_acquire); }; 
 
 private:

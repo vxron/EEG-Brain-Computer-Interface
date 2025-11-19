@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include "stimulus/StimulusController.hpp"
 #include "acq/UnicornDriver.h"
 #if CALIB_MODE
 #include <fstream>
@@ -28,10 +29,6 @@
 
 // Global "please stop" flag set by Ctrl+C (SIGINT) to shut down cleanly
 static std::atomic<bool> g_stop{false};
-
-#if CALIB_MODE
-static std::atomic<bool> g_record{false}; // toggled by stimulus changes during protocol (active vs rest)
-#endif
 
 // Interrupt signal sent when ctrl+c is pressed
 void handle_sigint(int) {
@@ -76,11 +73,6 @@ void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
         UnicornDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
         tick_count++;
         chunk.tick = tick_count;
-#if CALIBRATION_MODE
-// does this need a mutex guard or is atomic sufficient?
-        chunk.active_label = g_record.load(std::memory_order_acquire); // reader = acquire
-
-#endif // CALIBRATION_MODE
 #endif // I2C_MOCK
         
         // blocking push function... will always (eventually) run and return true, 
@@ -93,7 +85,7 @@ void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
     rb.close();
 }
 
-void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
+void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStoreRef){
     using namespace std::chrono_literals;
     logger::tlabel = "consumer";
     LOG_ALWAYS("consumer start");
@@ -102,6 +94,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
     sliding_window_t window; // should acquire the data for 1 window with that many pops n then increment by hop... 
     bufferChunk_S temp; // placeholder
 
+// eventually all of these calibration mode build time flags will become ui state checks..
 #if CALIBRATION_MODE
     std::ofstream csv("eeg_calib_data.csv");
     // write first 8 EEG channels of first scan per chunk
@@ -125,16 +118,31 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
 			}
 		}
 	}
+    
+    UIState_E currState  = UIState_None;
+    UIState_E prevState = UIState_None;
 
     while(!g_stop.load(std::memory_order_relaxed)){
-        // (1) emit window to feature extractor
+        // 1) ========= before we slide/build new window: read snapshot of ui_state and freq ============
+        currState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+        if((currState == UIState_Instructions || currState == UIState_Home || currState == UIState_None)){
+            // don't build window (this is an acceptable latency)
+            continue; //back to top while loop
+        }
+        // save this as prev state to check after window is built to make sure UI state hasn't changed in between
+        prevState = currState;
         
+        // 2) ============================= build the new window =============================
         float discard; // first pop
         for(size_t k=0;k<window.winHop;k++){
             window.sliding_window.pop(&discard); 
         }
 
         while(window.sliding_window.get_count()<window.winLen){ // now push
+            UIState_E intState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+            if(intState != prevState){
+                break; // change in UI; not a good window
+            }
 			std::size_t amnt_left_to_add = window.winLen - window.sliding_window.get_count(); // in samples
 			// if there is previous 'len' in stash, we should take it and decrement len
             if (window.stash_len > 0) {
@@ -183,17 +191,29 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
             window.tick=tick_count;
 		}
 
-#if CALIBRATION_MODE
-                if((tick_count%120)==0){
-                    LOG_ALWAYS(std::to_string(temp.tick) + " " + std::to_string(temp.x) + " " + std::to_string(temp.y) + " " + std::to_string(temp.z) + " " + std::to_string(temp.active_label) + "\n");
-                }
-                
-                csv << temp.tick << ',' << temp.x << ',' << temp.y << ',' << temp.z << ','
-                    << (temp.active_label ? 1 : 0) << '\n';
-                rows_written++;
-                if(rows_written % 500 == 0) { csv.flush(); } // flush every 500 rows for speed 
-#endif
-    
+        // 3) once window is full, read ui_state/freq again and decide if window is "valid" to emit based on comparison with initial ui_state and freq
+        // -> if the two snapshots disagree, ui changed mid-window: drop this window 
+        currState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+        if(currState != prevState){
+            // changed halfway through -> not a valid window for processing
+            window.decision = SSVEP_Unknown;
+            window.has_label = false;
+        }
+
+        else if(currState == UIState_Active_Calib ) {
+            // trim window ends if its calibration mode (GUARD)
+            window.sliding_window.trim_ends(40); // new function in ring buffer class
+
+            // we should be attaching a label to our windows for calibration data
+            TestFreq_E currTestFreq = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
+            window.testFreq = currTestFreq;
+        }
+
+        else if(currState == UIState_Active_Run){
+            // run ftr extraction + classifier pipeline to get decision
+            // TODO WHEN READY: add ftr vector + make decision here for run mode
+        }
+        
 	}
     // exiting due to producer exiting means we need to close window rb
     window.sliding_window.close();
@@ -204,11 +224,12 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
 #endif
 }
 
-void stimulus_thread_fn(){
+void stimulus_thread_fn(StateStore_s& stateStoreRef){
 	// runs protocols in calib mode (handle timing & keep track of state in g_record)
 	// should toggle g_record on stimulus switch
 	// in calib mode producer should wait for g_record to toggle? or it can just always check state for data ya thats better 0s and 1s in known fixed order...
-    
+    StimulusController_C stimController(&stateStoreRef);
+    stimController.runUIStateMachine();
 }
 
 void http_thread_fn(HttpServer_C& http){
@@ -230,9 +251,9 @@ int main() {
     // START THREADS. We pass the ring buffer by reference (std::ref) becauase each thread needs the actual shared 'ringBuf' instance, not just a copy...
     // This builds a new thread that starts executing immediately, running producer_thread_rn in parallel with the main thread (same for cons)
     std::thread prod(producer_thread_fn,std::ref(ringBuf));
-    std::thread cons(consumer_thread_fn,std::ref(ringBuf));
-    std::thread http(http_thread_fn, server);
-    std::thread stim(stimulus_thread_fn);
+    std::thread cons(consumer_thread_fn,std::ref(ringBuf), std::ref(stateStore));
+    std::thread http(http_thread_fn, std::ref(server));
+    std::thread stim(stimulus_thread_fn, std::ref(stateStore));
 
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
     while(g_stop.load(std::memory_order_acquire) == 0){

@@ -53,7 +53,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     // 1) "snapshot" read of current statestore_s
     int seq = stateStoreRef_.g_ui_seq.load(std::memory_order_acquire); // stimcontroller is only one who touches this
     // cast enum -> int
-    int stim_window = static_cast<int>(stateStoreRef_.g_stim_window.load(std::memory_order_acquire));
+    int stim_window = static_cast<int>(stateStoreRef_.g_ui_state.load(std::memory_order_acquire));
 #if CALIB_MODE
     int block_id = stateStoreRef_.g_block_id.load(std::memory_order_acquire);
     int freq_hz_e = static_cast<int>(stateStoreRef_.g_freq_hz_e.load(std::memory_order_acquire));

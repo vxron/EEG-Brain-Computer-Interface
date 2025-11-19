@@ -46,6 +46,15 @@ StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::opt
 
 }
 
+std::chrono::milliseconds StimulusController_C::getCurrentBlockTime() const {
+    if (currentWindowTimer_.is_started() == false) {
+        auto time = std::chrono::milliseconds{0};
+        return time;
+    }
+    auto time = currentWindowTimer_.get_timer_value_ms();
+    return time;
+}
+
 void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState){
     switch(newState){
         case UIState_Active_Calib:
@@ -53,7 +62,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             int currSeq = stateStoreRef_->g_ui_seq.load(std::memory_order_acquire);
             stateStoreRef_->g_ui_seq.store(currSeq + 1,std::memory_order_release);
             // stim window
-            stateStoreRef_->g_stim_window.store(UIState_Active_Calib, std::memory_order_release);
+            stateStoreRef_->g_ui_state.store(UIState_Active_Calib, std::memory_order_release);
             // first read block_id atomically then increment
             int currId = stateStoreRef_->g_block_id.load(std::memory_order_acquire);
             stateStoreRef_->g_block_id.store(currId + 1,std::memory_order_release);
@@ -63,6 +72,8 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             // use helper
             int freq =  TestFreqEnumToInt(freqToTest);
             stateStoreRef_->g_freq_hz.store(freq,std::memory_order_acquire);
+            // iscalib helper
+            stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
             // increment queue idx so we move to next test freq on next block
             activeQueueIdx_++;
@@ -76,12 +87,14 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             int currSeq = stateStoreRef_->g_ui_seq.load(std::memory_order_acquire);
             stateStoreRef_->g_ui_seq.store(currSeq + 1,std::memory_order_release);
             // stim window
-            stateStoreRef_->g_stim_window.store(UIState_Instructions, std::memory_order_release);
+            stateStoreRef_->g_ui_state.store(UIState_Instructions, std::memory_order_release);
             // instruction windows still get freq info for next active block cuz UI will tell user what freq they'll be seeing next
             TestFreq_E freqToTest = activeBlockQueue_[activeQueueIdx_];
             stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_acquire);
             int freq =  TestFreqEnumToInt(freqToTest);
             stateStoreRef_->g_freq_hz.store(freq,std::memory_order_acquire);
+            // iscalib helper
+            stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
             // start timer
             currentWindowTimer_.start_timer(restBlockDur_ms_);
@@ -119,6 +132,7 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
     return;
 }
 
+// LATER NEED TO ADD EVENT BASED EVENT DETECTION FOR USER EVENTS
 std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     // responsible for detecting three internal events
     // (1) check if window timer is exceeded and we've reached the end of a training bout

@@ -90,6 +90,31 @@ size_t RingBuffer_C<T>::drain(T* dest) {
     return i;
 }
 
+// special function for labelling in calib mode only
+template<typename T>
+int RingBuffer_C<T>::trim_ends(size_t guard_samples){
+    // if it's not a full window -> forget it
+    if(count_ < capacity_){
+        return -1;
+    }
+    // from head (front) remove guard_samples
+    for(size_t i=0;i<guard_samples;i++){
+        // we won't actually delete the data; we'll just shift head and tail and take the indices in between there for feature extraction in calib mode
+        headIdx_++;
+        if(headIdx_ == capacity_){
+            headIdx_ = 0; //wraparound
+        }
+        tailIdx_--;
+        if(tailIdx_ == 0){ //wraparound
+            tailIdx_ = capacity_ - 1;
+        }
+    }
+
+    // from tail (back) remove guard_samples
+
+    ringBufferArr.
+}
+
 template<typename T>
 void RingBuffer_C<T>::close() {
     isClosed_.store(true, std::memory_order_release);
