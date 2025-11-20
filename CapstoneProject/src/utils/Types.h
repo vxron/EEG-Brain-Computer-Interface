@@ -87,6 +87,7 @@ enum UIStateEvent_E {
 	UIStateEvent_LostConnection,
 	UIStateEvent_UserPushesExit,
 	UIStateEvent_ConnectionSuccessful,
+	UIStateEvent_None,
 };
 
 enum BitOperation_E {

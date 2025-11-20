@@ -1,5 +1,6 @@
 #include "StimulusController.hpp"
 #include <thread>
+#include "../utils/Logger.hpp"
 
 static struct state_transition{
     UIState_E from;
@@ -61,11 +62,26 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
     int currId = 0;
     int freq = 0;
     TestFreq_E freqToTest = TestFreq_None;
+    // first read seq atomically then increment (common to all state enters)
+    currSeq = stateStoreRef_->g_ui_seq.load(std::memory_order_acquire);
+    stateStoreRef_->g_ui_seq.store(currSeq + 1, std::memory_order_release);
     switch(newState){
+        case UIState_Active_Run:
+            stateStoreRef_->g_ui_state.store(UIState_Active_Run, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+            // later: write left/right freqs here
+            break;
+        
+        case UIState_Home:
+            stateStoreRef_->g_ui_state.store(UIState_Home, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+            // reset block/freq for clean home:
+            stateStoreRef_->g_block_id.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
+            break;
+        
         case UIState_Active_Calib:
-            // first read seq atomically then increment
-            currSeq = stateStoreRef_->g_ui_seq.load(std::memory_order_acquire);
-            stateStoreRef_->g_ui_seq.store(currSeq + 1,std::memory_order_release);
             // stim window
             stateStoreRef_->g_ui_state.store(UIState_Active_Calib, std::memory_order_release);
             // first read block_id atomically then increment
@@ -88,9 +104,6 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             break;
 
         case UIState_Instructions:
-            // first read seq atomically then increment
-            currSeq = stateStoreRef_->g_ui_seq.load(std::memory_order_acquire);
-            stateStoreRef_->g_ui_seq.store(currSeq + 1,std::memory_order_release);
             // stim window
             stateStoreRef_->g_ui_state.store(UIState_Instructions, std::memory_order_release);
             // instruction windows still get freq info for next active block cuz UI will tell user what freq they'll be seeing next
@@ -104,6 +117,13 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             // start timer
             currentWindowTimer_.start_timer(restBlockDur_ms_);
             break;
+
+        case UIState_None:
+            // “offline” / not connected / shut down
+            stateStoreRef_->g_ui_state.store(UIState_None, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+            break;
+        
         default:
             break;
     }
@@ -137,21 +157,33 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
     return;
 }
 
-// LATER NEED TO ADD EVENT BASED EVENT DETECTION FOR USER EVENTS
 std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
-    // responsible for detecting three internal events
-    // (1) check if window timer is exceeded and we've reached the end of a training bout
+    // the following are in order of priority 
+    // (1) UI events sent in by POST (EXTERNAL):
+    UIStateEvent_E currEvent = stateStoreRef_->g_ui_event.load(std::memory_order_acquire);
+    if(currEvent != UIStateEvent_None){
+        LOG_ALWAYS("SC: detected UI event=" << static_cast<int>(currEvent));
+        // a new event hasn't been detected yet !
+        // reset g_ui_event to NONE for next event
+        stateStoreRef_->g_ui_event.store(UIStateEvent_None, std::memory_order_release);
+        // return
+        return currEvent;
+    }
+
+    // responsible for detecting three INTERNAL events:
+    // (2) check if window timer is exceeded and we've reached the end of a training bout
     if ((activeQueueIdx_ >= trainingProtocol_.numActiveBlocks) && 
         (currentWindowTimer_.check_timer_expired()))
     {
+        LOG_ALWAYS("SC: detected end event=" << static_cast<int>(currEvent));
         return UIStateEvent_StimControllerTimeoutEndCalib;
     }
-    // (2) check window timer exceeded
+    // (3) check window timer exceeded
     if(currentWindowTimer_.check_timer_expired())
     {
         return UIStateEvent_StimControllerTimeout;
     }
-    // (3) check if refresh rate has been written to if were in NONE state
+    // (4) check if refresh rate has been written to if were in NONE state
     // read atomically
     int refresh_val = stateStoreRef_->g_refresh_hz.load(std::memory_order_acquire);
     if (state_==UIState_None && refresh_val > 0)
@@ -163,12 +195,21 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
 }
 
 void StimulusController_C::runUIStateMachine(){
-    while(1){
+    logger::tlabel = "StimulusController";
+    LOG_ALWAYS("SC: starting in state=" << static_cast<int>(state_));
+    // Optional: publish initial state
+    onStateEnter(UIState_None, state_);
+
+    // is_stopped_ lets us cleanly exit loop operation
+    while(!is_stopped_){
         // detect internal events that happened since last loop (polling)
         // external (browser) events will use event-based handling
         std::optional<UIStateEvent_E> ev = detectEvent();
         if(ev.has_value()){
+            LOG_ALWAYS("SC: event " << static_cast<int>(*ev)
+                     << " in state " << static_cast<int>(state_));
             processEvent(ev.value());
+            LOG_ALWAYS("SC: now in state " << static_cast<int>(state_));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
 

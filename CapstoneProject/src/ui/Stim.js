@@ -141,7 +141,7 @@ function updateUiFromState(data) {
 
   // 2) Labels for enums
   const stimLabel = intToLabel("stim_window", data.stim_window);
-  const freqCodeLbl = intToLabel("freq_hz_e", data.freq_code);
+  const freqCodeLbl = intToLabel("freq_hz_e", data.freq_hz_e);
   elStimWin.textContent = stimLabel ?? "—";
   elFreqCodePill.textContent = freqCodeLbl ?? "—";
 
@@ -274,13 +274,42 @@ function stopRunFlicker() {
   /* TODO */
 }
 
-// ================== 10) INIT ON PAGE LOAD ===================
+// =============== 10) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
+// Helper to send a session event to C++
+async function sendSessionEvent(kind) {
+  // IMPORTANT: kind is "start_calib" or "start_run" for now
+  const payload = { action: kind };
+
+  try {
+    const res = await fetch(`${API_BASE}/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      logLine(`POST /event failed (${res.status}) for action=${kind}`);
+      return;
+    }
+    logLine(`POST /event ok (action=${kind})`);
+  } catch (err) {
+    logLine(`POST /event error for action=${kind}: ${err}`);
+  }
+}
+
+// ================== 11) INIT ON PAGE LOAD ===================
 async function init() {
   logLine("Initializing UI…");
   const estimated_refresh = await estimateRefreshHz();
   await sendRefresh(estimated_refresh);
   startPolling();
-  // setupButtons() (TODO)
+  // Add button event listeners
+  btnStartCalib.addEventListener("click", () => {
+    sendSessionEvent("start_calib");
+  });
+  btnStartRun.addEventListener("click", () => {
+    sendSessionEvent("start_run");
+  });
 }
 // Init as soon as page loads
 window.addEventListener("DOMContentLoaded", () => {

@@ -76,11 +76,14 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
         << "}";
 
     std::string json_snapshot = oss.str();
+
+    LOG_ALWAYS("HTTP /state snapshot: " << json_snapshot);
     
     // 3) send json back to client through res
     write_json(res, json_snapshot);
 }
 
+// handle ui state transition events written by JS
 void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Response& res){
     // Basic content-type check
     auto it = req.headers.find("Content-Type");
@@ -90,7 +93,31 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
         res.set_content("{\"error\":\"content_type\"}", "application/json");
         return;
     }
-    // no handling of POST events (e.g. pause, button) on client side yet
+    
+    const std::string& body = req.body;
+    UIStateEvent_E ev = UIStateEvent_None;
+
+    auto p = body.find("\"action\"");
+    if (p != std::string::npos) {
+        p = body.find(':', p);
+        if (p != std::string::npos) {
+            p = body.find('"', p);       // opening quote
+            auto q = body.find('"', p+1); // closing quote
+            if (p != std::string::npos && q != std::string::npos && q > p+1) {
+                std::string action = body.substr(p+1, q - (p+1));
+                if (action == "start_calib") {
+                    ev = UIStateEvent_UserPushesStartCalib;
+                } else if (action == "start_run") {
+                    ev = UIStateEvent_UserPushesStartRun;
+                }
+            }
+        }
+    }
+    // only stim controller should be able to write None to shared state when it's finished processing an event
+    if (ev != UIStateEvent_None) {
+        stateStoreRef_.g_ui_event.store(ev, std::memory_order_release);
+    }
+
     write_json(res, "{\"ok\":true}");
 }
 
