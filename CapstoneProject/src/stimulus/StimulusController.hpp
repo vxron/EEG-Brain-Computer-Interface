@@ -19,7 +19,9 @@ public:
     UIState_E getUIState() const {return state_;};
     std::chrono::milliseconds getCurrentBlockTime() const;
     void runUIStateMachine();
+    void stopStateMachine();
 private:
+    bool is_stopped_ = false;
     StateStore_s* stateStoreRef_;
     UIState_E state_;
     UIState_E prevState_;
@@ -45,12 +47,5 @@ private:
     void process_events();
 };
 
-std::chrono::milliseconds StimulusController_C::getCurrentBlockTime() const {
-    if (currentWindowTimer_.is_started() == false) {
-        auto time = std::chrono::milliseconds{0};
-        return time;
-    }
-    auto time = currentWindowTimer_.get_timer_value_ms();
-    return time;
-}
+
 

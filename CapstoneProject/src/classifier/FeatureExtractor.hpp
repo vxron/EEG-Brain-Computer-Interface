@@ -2,6 +2,8 @@
 #include <vector>
 #include "../utils/Types.h"
 #include "ONNXClassifier.hpp"
+#include "../acq/UnicornCheck.h"
+#include "../acq/WindowConfigs.hpp"
 
 enum class FeatureKind_E {
     // TODO
@@ -19,7 +21,7 @@ struct FeatureCache_S {
     std::vector<float> ch6;
     std::vector<float> ch7;
     std::vector<float> ch8;
-    std::size_t fs = UNICORN_SAMPLING_FREQUENCY_HZ;
+    std::size_t fs = UNICORN_SAMPLING_RATE_HZ;
 
     // TODO: Cache for expensive features so we dont reconstruct objects every window (fourier/AR)
     bool mag_computed_this_window = false;

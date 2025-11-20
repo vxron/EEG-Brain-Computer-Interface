@@ -11,6 +11,7 @@
 #include "utils/Types.h"
 #include "stimulus/StateStore.hpp"
 #include "stimulus/HttpServer.hpp"
+#include "acq/WindowConfigs.hpp"
 #include <atomic>
 #include "utils/Logger.hpp"
 #include <csignal>

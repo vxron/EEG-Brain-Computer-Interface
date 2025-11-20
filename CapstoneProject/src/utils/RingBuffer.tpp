@@ -109,10 +109,7 @@ int RingBuffer_C<T>::trim_ends(size_t guard_samples){
             tailIdx_ = capacity_ - 1;
         }
     }
-
-    // from tail (back) remove guard_samples
-
-    ringBufferArr.
+    return 0;
 }
 
 template<typename T>

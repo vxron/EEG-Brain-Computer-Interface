@@ -6,9 +6,9 @@
 #include <sstream>
 #include "../utils/Logger.hpp"
 
-extern "C" {
-  #include "unicorn.h"
-}
+#include "../../unicorn/include/unicorn.h"
+
+int UNICORN_SAMPLING_RATE_HZ = UNICORN_SAMPLING_RATE;
 
 // Simple exception type for hard failures
 struct unicorn_error : std::runtime_error {

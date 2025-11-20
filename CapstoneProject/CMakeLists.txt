@@ -29,12 +29,11 @@ target_sources(CapstoneProject
       src/utils/RingBuffer.hpp
       src/utils/RingBuffer.tpp   # fine; it’s header-only
       src/utils/ModelStore.h
-      src/utils/TimingManager.h
-      src/stimulus/Stim.h
       src/acq/IAcqProvider.h
       src/acq/FakeAcquisition.h
 )
 
+# ==================== UI UNIT TESTS ==========================
 # Simple HTTP server self-test (does not depend on Unicorn)
 add_executable(HttpServerSelfTest
   unit_tests/HttpServerSelfTest.cpp
@@ -44,6 +43,19 @@ add_executable(HttpServerSelfTest
 target_include_directories(HttpServerSelfTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+# UI State machine self-test
+add_executable(UIStateMachineSelfTest
+  unit_tests/UIStateMachineSelfTest.cpp
+  src/stimulus/HttpServer.cpp
+  src/stimulus/StimulusController.cpp
+  src/utils/Logger.cpp
+)
+target_include_directories(UIStateMachineSelfTest PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_property(TARGET UIStateMachineSelfTest PROPERTY CXX_STANDARD 20)
+# ==========================================================
 
 # Choose backend at build time (option defined in the ROOT CMakeLists.txt)
 if(USE_FAKE_ACQ)

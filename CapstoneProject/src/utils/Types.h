@@ -18,7 +18,6 @@
 #include <chrono>
 #include "RingBuffer.hpp"
 #include <deque>
-#include "../classifier/FeatureExtractor.hpp"
 #include "../classifier/ONNXClassifier.hpp"
 #include "SWTimer.hpp"
 
@@ -36,13 +35,6 @@ using time_point_T = std::chrono::time_point<clock_T>;
 inline constexpr std::size_t NUM_CH_CHUNK = 8; // Unicorn EEG has 8 channels (EEG1...EEG8)
 inline constexpr std::size_t NUM_SCANS_CHUNK = 32; // ~128ms latency @ 250Hz
 inline constexpr std::size_t NUM_SAMPLES_CHUNK = NUM_CH_CHUNK * NUM_SCANS_CHUNK;
-
-// unicorn sampling rate of 250 Hz means 1 scan is about 4ms (or, 32 scans per getData() call is about 128ms)
-// for 1.2s windows -> we need 300 individual scans with hop 38 (every 0.152s)
-inline constexpr std::size_t WINDOW_SCANS         = NUM_SCANS_CHUNK*10;     // 320 samples @250Hz (sampling period 4ms), this is 1.28s
-inline constexpr std::size_t WINDOW_HOP_SCANS     = 40;      // every 0.16s (~87% overlap) 
-
-inline constexpr std::size_t UNICORN_SAMPLING_FREQUENCY_HZ = 250;
 
 /* END CONFIGS */
 
@@ -110,7 +102,7 @@ enum BitOperation_E {
 
 /* START HELPERS */
 
-int TestFreqEnumToInt(TestFreq_E enumVal){
+inline int TestFreqEnumToInt(TestFreq_E enumVal){
 	switch (enumVal) {
 		case TestFreq_8_Hz:
 			return 8;
@@ -158,25 +150,6 @@ struct bufferChunk_S {
 #endif 
 }; // bufferChunk_S
 
-struct sliding_window_t {
-    size_t const winLen = WINDOW_SCANS*NUM_CH_CHUNK; // period of about 200*8ms = 1.6s
-    size_t const winHop = WINDOW_HOP_SCANS*NUM_CH_CHUNK; // amount to jump for next window
-    std::size_t tick = 0; // contains number of bufferchunk samples in window
-	
-	RingBuffer_C<float> sliding_window{WINDOW_SCANS*NUM_CH_CHUNK}; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
-	
-	std::array<float, NUM_SAMPLES_CHUNK> stash{}; // overflow storage
-	std::size_t stash_len = 0; // how many floats in stash are valid
-	
-	// labelling attributes (calib mode)
-	bool has_label = false; 
-	TestFreq_E testFreq = TestFreq_None; // from statestore
-	TestFreq_E testFreq_other = TestFreq_None; // if we have two stims at a time on the screen... (isPaired = true)
-	
-	// associated feature vector/classification output for run mode
-	SSVEPState_E decision = SSVEP_None;
-	FeatureVector_C featureVector{};
-};
 struct trainingProto_S {
 	std::size_t numActiveBlocks; // number of blocks in this trial (1..N), assumes same number of L/R
 	std::size_t activeBlockDuration_s; // duration of each active block in s

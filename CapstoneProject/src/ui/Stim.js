@@ -1,28 +1,42 @@
-// 1) CONSTANTS + DOM REFS
+// ================ 1) CONSTANTS + DOM REFS =================================
 const API_BASE = "http://127.0.0.1:7777";
 // Log object <section id="log"> in which we can write msgs
 const elLog = document.getElementById("log");
+
 // Requests for POST
 const elConnection = document.getElementById("connection-status");
 const elConnectionLabel = document.getElementById("connection-label");
 const elRefreshLabel = document.getElementById("refresh-label");
+
 // State store
 const elSeq = document.getElementById("seq-value");
 const elStimWin = document.getElementById("stim-window-value");
-const elStimCaption = document.getElementById("stim-window-caption");
 const elBlock = document.getElementById("block-value");
 const elFreqHz = document.getElementById("freq-hz-value");
+
 // UI Pills (rounded elements that show short pieces of info like labels/statuses)
 const elFreqCodePill = document.getElementById("freq-code-pill");
-// Buttons
-const btnRefresh = document.getElementById("btn-refresh");
-const btnTogglePoll = document.getElementById("btn-toggle-poll");
+
+// VIEW CONTAINERS FOR DIFF WINDOWS
+const viewHome = document.getElementById("view-home");
+const viewInstructions = document.getElementById("view-instructions");
+const viewActiveCalib = document.getElementById("view-active-calib");
+const viewActiveRun = document.getElementById("view-active-run");
+
+// Instructions specific fields for instruction windows
+const elInstrBlockId = document.getElementById("instr-block-id");
+const elInstrFreqHz = document.getElementById("instr-freq-hz");
+const elInstructionsText = document.getElementById("instructions-text");
+
+// Session control buttons (TODO -> FOR LATER /event HOOKUP to tell c++)
+const btnStartCalib = document.getElementById("btn-start-calib");
+const btnStartRun = document.getElementById("btn-start-run");
 
 // Timer for browser requests to server
 let pollInterval = null;
 let pollActive = true;
 
-// 2) LOGGING HELPER
+// ==================== 2) LOGGING HELPER =============================
 function logLine(msg) {
   const time = new Date().toLocaleTimeString();
   const line = document.createElement("div");
@@ -32,7 +46,35 @@ function logLine(msg) {
   elLog.scrollTop = elLog.scrollHeight;
 }
 
-// 3) CONNECTION STATUS HELPER
+// ======================== 3) SHOWVIEW HELPER =========================
+// show the correct stim window when it's time by removing it from 'hidden' css class
+function showView(name) {
+  const allViews = [viewHome, viewInstructions, viewActiveCalib, viewActiveRun];
+
+  for (const v of allViews) {
+    v.classList.add("hidden");
+  }
+
+  switch (name) {
+    case "home":
+      viewHome.classList.remove("hidden");
+      break;
+    case "instructions":
+      viewInstructions.classList.remove("hidden");
+      break;
+    case "active_calib":
+      viewActiveCalib.classList.remove("hidden");
+      break;
+    case "active_run":
+      viewActiveRun.classList.remove("hidden");
+      break;
+    default:
+      viewHome.classList.remove("hidden");
+      break;
+  }
+}
+
+// ==================== 4) CONNECTION STATUS HELPER =====================
 // UI should show red/green based on C++ server connection status
 function setConnectionStatus(ok) {
   if (ok) {
@@ -44,8 +86,8 @@ function setConnectionStatus(ok) {
   }
 }
 
+// ============= 5) INT <-> ENUM HELPER FOR STIM WINDOWS ===============
 const allowed_enums = ["stim_window", "freq_hz_e"];
-// 4) INT <-> ENUM HELPER
 // Must match enums in types.h
 function intToLabel(enumType, integer) {
   if (!allowed_enums.includes(enumType)) {
@@ -61,7 +103,11 @@ function intToLabel(enumType, integer) {
         case 2:
           return "UIState_Instructions";
         case 3:
+          return "UIState_Home";
+        case 4:
           return "UIState_None";
+        default:
+          return `Unknown (${integer})`;
       }
     case "freq_hz_e":
       switch (integer) {
@@ -77,14 +123,49 @@ function intToLabel(enumType, integer) {
           return "TestFreq_11_Hz";
         case 5:
           return "TestFreq_12_Hz";
+        default:
+          return `Unknown (${integer})`;
       }
     default:
       // handle bad entries
-      return `Unknown (${integer})`;
+      return `Unknown (${enumType})`;
   }
 }
 
-// 5) START POLLING (GET /state)
+// ============= 6) MAP STIM_WINDOW FROM STATESTORE-> view + labels in UI ===============
+function updateUiFromState(data) {
+  // 1) Basic sidebar fields
+  elSeq.textContent = data.seq ?? "—";
+  elBlock.textContent = data.block_id ?? "0";
+  elFreqHz.textContent = data.freq_hz ?? "—";
+
+  // 2) Labels for enums
+  const stimLabel = intToLabel("stim_window", data.stim_window);
+  const freqCodeLbl = intToLabel("freq_hz_e", data.freq_code);
+  elStimWin.textContent = stimLabel ?? "—";
+  elFreqCodePill.textContent = freqCodeLbl ?? "—";
+
+  // 3) View routing based on stim_window value
+  const stimState = data.stim_window;
+  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = None
+  if (stimState === 3 /* Home */ || stimState === 4 /* None */) {
+    showView("home");
+  } else if (stimState === 2 /* Instructions */) {
+    showView("instructions");
+    // Update text based on block and freq
+    elInstrBlockId.textContent = data.block_id ?? "—";
+    elInstrFreqHz.textContent = (data.freq_hz ?? "—") + " Hz";
+    // TODO: customize elInstructionsText based on block / upcoming freq
+  } else if (stimState === 1 /* Active_Calib */) {
+    showView("active_calib");
+    // TODO: call flicker animation for single block
+  } else if (stimState === 0 /* Active_Run */) {
+    showView("active_run");
+    // TODO: call into dual arrow flicker animation
+  }
+}
+
+// ============= 6) START POLLING FOR GET/STATE ===============
 async function pollStateOnce() {
   let res;
   try {
@@ -98,14 +179,7 @@ async function pollStateOnce() {
     }
     // 5.3.) parse json & update dom
     const data = await res.json();
-    elSeq.textContent = data.seq ?? "—";
-    elBlock.textContent = data.block_id ?? "0";
-    elFreqHz.textContent = data.freq_hz ?? "—";
-    // Enum mappings
-    stim_window_label = intToLabel("stim_window", data.stim_window);
-    freq_hz_label = intToLabel("freq_hz_e", data.freq_hz_e);
-    elStimWin.textContent = stim_window_label ?? "—";
-    elFreqCodePill.textContent = freq_hz_label ?? "—";
+    updateUiFromState(data);
     console.log("STATE:", data);
   } catch (err) {
     logLine("GET /state error: " + err);
@@ -113,6 +187,7 @@ async function pollStateOnce() {
 }
 
 function startPolling() {
+  console.log("entered startPolling");
   const polling_period_ms = 100;
   if (pollInterval != null) {
     return false;
@@ -129,7 +204,7 @@ function stopPolling() {
   pollInterval = null;
 }
 
-// 6) MONITOR REFRESH MEASUREMENT (POST /ready)
+// =========== 7) MONITOR REFRESH MEASUREMENT (POST /ready) ==========================
 // Avg durationMs takes in period which will be used to measure refresh freq
 // returned as a promise (from callback -> outer fn)
 function estimateRefreshHz(durationMs = 1000) {
@@ -183,10 +258,25 @@ async function sendRefresh(refreshHz) {
   }
 }
 
-// 6) WINDOWS
+// ================== 9) Flicker helpers ==========================
 
-// 7) INIT ON PAGE LOAD
+function startCalibFlicker(freqHz) {
+  /* TODO */
+}
+function stopCalibFlicker() {
+  /* TODO */
+}
+
+function startRunFlicker(leftFreqHz, rightFreqHz) {
+  /* TODO */
+}
+function stopRunFlicker() {
+  /* TODO */
+}
+
+// ================== 10) INIT ON PAGE LOAD ===================
 async function init() {
+  logLine("Initializing UI…");
   const estimated_refresh = await estimateRefreshHz();
   await sendRefresh(estimated_refresh);
   startPolling();
