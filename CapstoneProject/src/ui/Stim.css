@@ -155,19 +155,38 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Make the right side fill the viewport height minus padding so we can have huge display window lol */
+  min-height: calc(100vh - 48px);
 }
 
 .view {
+  position: absolute;
+  inset: 0; /* fill the view-stack */
   background: var(--bg-elevated);
   border-radius: var(--radius-lg);
   padding: 18px 20px;
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-soft);
+  opacity: 1;
+
+  /*TRANSITION*/
+  pointer-events: auto;
+  transform: translateY(0);
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
 }
 
-/* HIDE INACTIVE STIM WINDOWS */
+/*fill available space !*/
+.view-stack {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* HIDE INACTIVE STIM WINDOWS w FADEOUT */
 .view.hidden {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px); /* subtle slide down */
 }
 
 .view h2 {
@@ -249,21 +268,22 @@ body {
   border-radius: 12px;
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
-  flex: 1 1 auto;
+
+  flex: 0 0 auto; /* do NOT grow; just size to content */
   display: flex;
   flex-direction: column;
+}
+
+.log-body {
+  flex: 0 1 auto; /* small scrollable area */
+  max-height: 110px;
+  overflow-y: auto;
+  font-size: 0.75rem;
 }
 
 .log-panel h3 {
   margin: 0 0 6px;
   font-size: 0.85rem;
-}
-
-.log-body {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  max-height: 180px;
-  font-size: 0.75rem;
 }
 
 .log-entry {

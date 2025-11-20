@@ -64,64 +64,67 @@
 
       <!-- Right: main view area -->
       <main class="main-panel">
-        <!-- HOME VIEW -->
-        <section id="view-home" class="view">
-          <h2>Home</h2>
-          <p class="view-lead">
-            Connect the C++ backend and choose a session type to begin.
-          </p>
-          <ul class="bullets">
-            <li>
-              Calibration: single-frequency blocks to train the SSVEP
-              classifier.
-            </li>
-            <li>Run Mode: dual-frequency arrows for page turning.</li>
-          </ul>
-        </section>
+        <!-- VIEW STACK (fills most of the right side) -->
+        <div class="view-stack">
+          <!-- HOME VIEW -->
+          <section id="view-home" class="view">
+            <h2>Home</h2>
+            <p class="view-lead">
+              Connect the C++ backend and choose a session type to begin.
+            </p>
+            <ul class="bullets">
+              <li>
+                Calibration: single-frequency blocks to train the SSVEP
+                classifier.
+              </li>
+              <li>Run Mode: dual-frequency arrows for page turning.</li>
+            </ul>
+          </section>
 
-        <!-- INSTRUCTIONS VIEW -->
-        <section id="view-instructions" class="view hidden">
-          <h2>Instructions</h2>
-          <p id="instructions-text" class="view-lead">
-            Rest for a few seconds, then focus on the indicated flicker block.
-          </p>
-          <div class="inline-stats">
-            <div>
-              <span class="label">Block</span>
-              <span id="instr-block-id" class="value">—</span>
+          <!-- INSTRUCTIONS VIEW -->
+          <section id="view-instructions" class="view hidden">
+            <h2>Instructions</h2>
+            <p id="instructions-text" class="view-lead">
+              Rest for a few seconds, then focus on the indicated flicker block.
+            </p>
+            <div class="inline-stats">
+              <div>
+                <span class="label">Block</span>
+                <span id="instr-block-id" class="value">—</span>
+              </div>
+              <div>
+                <span class="label">Upcoming frequency</span>
+                <span id="instr-freq-hz" class="value">— Hz</span>
+              </div>
             </div>
-            <div>
-              <span class="label">Upcoming frequency</span>
-              <span id="instr-freq-hz" class="value">— Hz</span>
+          </section>
+
+          <!-- ACTIVE CALIBRATION VIEW -->
+          <section id="view-active-calib" class="view hidden">
+            <h2>Calibration Block</h2>
+            <p class="view-lead">
+              Focus your gaze on the flickering square to record your SSVEP
+              responses.
+            </p>
+            <div class="flicker-stage">
+              <div id="calib-block" class="flicker-block"></div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- ACTIVE CALIBRATION VIEW -->
-        <section id="view-active-calib" class="view hidden">
-          <h2>Calibration Block</h2>
-          <p class="view-lead">
-            Focus your gaze on the flickering square to record your SSVEP
-            responses.
-          </p>
-          <div class="flicker-stage">
-            <div id="calib-block" class="flicker-block"></div>
-          </div>
-        </section>
+          <!-- ACTIVE RUN VIEW -->
+          <section id="view-active-run" class="view hidden">
+            <h2>Page Turning</h2>
+            <p class="view-lead">
+              Look at the left or right arrow to turn pages backward or forward.
+            </p>
+            <div class="flicker-stage dual">
+              <div id="left-arrow" class="flicker-block arrow-left">←</div>
+              <div id="right-arrow" class="flicker-block arrow-right">→</div>
+            </div>
+          </section>
+        </div>
 
-        <!-- ACTIVE RUN VIEW -->
-        <section id="view-active-run" class="view hidden">
-          <h2>Page Turning</h2>
-          <p class="view-lead">
-            Look at the left or right arrow to turn pages backward or forward.
-          </p>
-          <div class="flicker-stage dual">
-            <div id="left-arrow" class="flicker-block arrow-left">←</div>
-            <div id="right-arrow" class="flicker-block arrow-right">→</div>
-          </div>
-        </section>
-
-        <!-- LOG PANEL -->
+        <!-- LOG PANEL (small strip at the bottom) -->
         <section class="log-panel">
           <h3>Event Log</h3>
           <div id="log" class="log-body"></div>
@@ -129,6 +132,6 @@
       </main>
     </div>
 
-    <script src="Stim.js?v=20251119-3"></script>
+    <script src="Stim.js?v=20251119-4"></script>
   </body>
 </html>
