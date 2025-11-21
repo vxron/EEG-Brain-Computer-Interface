@@ -108,9 +108,24 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_ui_state.store(UIState_Instructions, std::memory_order_release);
             // instruction windows still get freq info for next active block cuz UI will tell user what freq they'll be seeing next
             freqToTest = activeBlockQueue_[activeQueueIdx_];
-            stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_acquire);
             freq =  TestFreqEnumToInt(freqToTest);
+            
+            // check next planned frequency is an int divisor of refresh
+            int refresh = stateStoreRef_->g_refresh_hz.load(std::memory_order_acquire);
+            int result = checkStimFreqIsIntDivisorOfRefresh(true, freq); 
+            // if bad result
+            while(result == -1 && has_divisor_6_to_20(refresh)){
+                // reasonably drop since we have other divisors
+                activeQueueIdx_++;
+                freqToTest = activeBlockQueue_[activeQueueIdx_];
+                freq =  TestFreqEnumToInt(freqToTest);
+                result = checkStimFreqIsIntDivisorOfRefresh(true, freq);
+            } // otherwise accept "bad" test freq vis a vis refresh
+    
+            // storing
+            stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_acquire);
             stateStoreRef_->g_freq_hz.store(freq,std::memory_order_acquire);
+
             // iscalib helper
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
@@ -193,6 +208,45 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
 
     return std::nullopt;  // no event this iteration
 }
+
+// if it's calib -> return -1 if the freq doesn't match and just skip that freq in training protocol. 
+int StimulusController_C::checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int desiredTestFreq){
+    int flag = 0;
+    // require state to be transitional (don't want to be checking in middle of active mode) but connection must be established
+    if(state_ == UIState_Active_Calib || state_ == UIState_Active_Run || state_ == UIState_None){
+        return;
+    }
+    int refresh = stateStoreRef_->g_refresh_hz.load(std::memory_order_acquire);
+    while(refresh % desiredTestFreq != 0){
+        // not an int divisor of refresh; increase until we find
+        desiredTestFreq ++;
+        flag = 1;
+    }
+    if (!isCalib){
+        return desiredTestFreq; // in run mode return correct freq
+    }
+    else if(isCalib && flag == 1) {
+        // the original freq is not what an int divisor of the refresh
+        return -1;
+    } 
+    else {
+        return 0; // original freq is int divisor of refresh, all g
+    }
+   
+}
+
+// helper to see if our refresh rate is simply just cooked and we must accept non int divisors :,)
+static bool has_divisor_6_to_20(int n) {
+    if (n == 0) return true;  // everything divides 0
+
+    for (int d = 6; d <= 20; ++d) {
+        if (d != 0 && n % d == 0) {
+            return true;     // found a divisor in [6, 20]
+        }
+    }
+    return false;            // no divisors in that range
+}
+
 
 void StimulusController_C::runUIStateMachine(){
     logger::tlabel = "StimulusController";

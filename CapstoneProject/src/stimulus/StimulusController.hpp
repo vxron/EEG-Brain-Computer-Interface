@@ -45,6 +45,8 @@ private:
     void manageTrainingProtocol(); // uses currentWindowTimer to control calib blocks, trigger timeout events for state machine
     void process_inputs();
     void process_events();
+    int checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int desiredTestFreq); // returns freq to use; require the flicker frequency to be an integer divisor of the refresh rate; else bump to next closest integer divisor
+
 };
 
 
