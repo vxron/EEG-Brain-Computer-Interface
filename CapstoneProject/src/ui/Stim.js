@@ -8,6 +8,11 @@ const elConnection = document.getElementById("connection-status");
 const elConnectionLabel = document.getElementById("connection-label");
 const elRefreshLabel = document.getElementById("refresh-label");
 
+// Flicker animation DOM elements
+const elCalibBlock = document.getElementById("calib-block");
+const elLeftArrow = document.getElementById("left-arrow");
+const elRightArrow = document.getElementById("right-arrow");
+
 // State store
 const elSeq = document.getElementById("seq-value");
 const elStimWin = document.getElementById("stim-window-value");
@@ -35,6 +40,12 @@ const btnStartRun = document.getElementById("btn-start-run");
 // Timer for browser requests to server
 let pollInterval = null;
 let pollActive = true;
+
+// FlickerStimulus instances
+let calibStimulus = null;
+let leftStimulus = null;
+let rightStimulus = null;
+let stimAnimId = null;
 
 // ==================== 2) LOGGING HELPER =============================
 function logLine(msg) {
@@ -132,6 +143,24 @@ function intToLabel(enumType, integer) {
   }
 }
 
+// lil helpers to make zeros from statestore show as dashes :,)
+function fmtFreqHz(val) {
+  // treat <=0 as "no frequency"
+  if (val == null || val <= 0) return "—";
+  return String(val);
+}
+
+function fmtFreqEnumLabel(enumType, intVal) {
+  if (intVal == null) return "—";
+  // for enum "None" / code 0, show dash instead of the literal label
+  if (enumType === "freq_hz_e" && intVal === 0) {
+    return "—";
+  }
+  const label = intToLabel(enumType, intVal);
+  if (!label || label.startsWith("Unknown")) return "—";
+  return label;
+}
+
 // ============= 6) MAP STIM_WINDOW FROM STATESTORE-> view + labels in UI ===============
 function updateUiFromState(data) {
   // 1) Basic sidebar fields
@@ -147,21 +176,34 @@ function updateUiFromState(data) {
 
   // 3) View routing based on stim_window value
   const stimState = data.stim_window;
+  // populate sidebar fields
+  elSeq.textContent = data.seq ?? "-";
+  elBlock.textContent = data.block_id ?? "-";
+  elFreqHz.textContent = fmtFreqHz(data.freq_hz);
+  elStimWin.textContent = fmtFreqEnumLabel("stim_window", data.stim_window);
+  elFreqCodePill.textContent = fmtFreqEnumLabel("freq_hz_e", data.freq_hz_e);
   // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = None
   if (stimState === 3 /* Home */ || stimState === 4 /* None */) {
+    stopCalibFlicker();
+    stopRunFlicker();
     showView("home");
   } else if (stimState === 2 /* Instructions */) {
+    stopCalibFlicker();
     showView("instructions");
     // Update text based on block and freq
-    elInstrBlockId.textContent = data.block_id ?? "—";
-    elInstrFreqHz.textContent = (data.freq_hz ?? "—") + " Hz";
+    elInstrBlockId.textContent = data.block_id ?? "-";
+    elInstrFreqHz.textContent = fmtFreqHz(data.freq_hz) + " Hz";
     // TODO: customize elInstructionsText based on block / upcoming freq
   } else if (stimState === 1 /* Active_Calib */) {
     showView("active_calib");
-    // TODO: call flicker animation for single block
+    const calibFreqHz = data.freq_hz ?? 0;
+    startCalibFlicker(calibFreqHz);
   } else if (stimState === 0 /* Active_Run */) {
     showView("active_run");
-    // TODO: call into dual arrow flicker animation
+    // default to freq_hz if undef right/left
+    const runLeftHz = data.freq_right_hz ?? data.freq_hz ?? 0;
+    const runRightHz = data.freq_left_hz ?? data.freq_hz ?? 0;
+    startRunFlicker(runLeftHz, runRightHz);
   }
 }
 
@@ -258,23 +300,122 @@ async function sendRefresh(refreshHz) {
   }
 }
 
-// ================== 9) Flicker helpers ==========================
+// ===================== 9) FLICKER STIMULUS CLASS ===================================
+let measuredRefreshHz = 60; // will be overwritten by estimateRefreshHz() in init
+
+class FlickerStimulus {
+  constructor(el, refreshHz) {
+    // el = dom element
+    this.el = el;
+    this.refreshHz = refreshHz;
+    this.targetHz = 0;
+    this.enabled = false;
+    this.frameIdx = 0;
+    this.framesPerCycle = 1;
+    // base styles declarations so we can modulate later via filter
+    if (this.el) {
+      this.el.style.transition = "filter 0.0s";
+    }
+  }
+
+  // methods
+  setRefreshHz(refreshHz) {
+    this.refreshHz = refreshHz;
+    this._recomputeFramesPerCycle();
+  }
+  setFrequency(hz) {
+    this.targetHz = hz || 0;
+    this._recomputeFramesPerCycle();
+  }
+  _recomputeFramesPerCycle() {
+    /* 
+    to get flicker at f Hz: choose framesPerCycle = refreshHz / f
+    */
+    if (this.targetHz > 0 && this.refreshHz > 0) {
+      const raw = this.refreshHz / this.targetHz;
+      // minimum 2 phases per cycle (pure on/off)
+      this.framesPerCycle = Math.max(2, Math.round(raw));
+    } else {
+      // no flicker
+      this.framesPerCycle = 1;
+    }
+  }
+  start() {
+    this.enabled = true;
+    this.frameIdx = 0;
+    if (this.el) {
+      this.el.style.visibility = "visible";
+      this.el.style.filter = "brightness(1.0)";
+    }
+  }
+  stop() {
+    this.enabled = false;
+    this.frameIdx = 0;
+    if (this.el) {
+      // Reset to neutral appearance when not flickering
+      this.el.style.filter = "brightness(1.0)";
+    }
+  }
+  // frequencymodulator
+  onePeriod() {
+    if (!this.enabled || !this.el || this.targetHz <= 0) return;
+    this.frameIdx = (this.frameIdx + 1) % this.framesPerCycle;
+
+    const half = this.framesPerCycle / 2;
+    const on = this.frameIdx < half;
+
+    // square wave: ON = bright, OFF = dim
+    if (on) {
+      this.el.style.filter = "brightness(1.6)";
+    } else {
+      this.el.style.filter = "brightness(0.2)";
+    }
+  }
+}
+
+// ================== 10) Flicker animation starters/stoppers ==========================
+
+function stimAnimationLoop() {
+  if (calibStimulus) calibStimulus.tick();
+  if (leftStimulus) leftStimulus.tick();
+  if (rightStimulus) rightStimulus.tick();
+
+  stimAnimId = requestAnimationFrame(stimAnimationLoop);
+}
 
 function startCalibFlicker(freqHz) {
-  /* TODO */
+  if (!calibStimulus) return;
+  calibStimulus.setRefreshHz(measuredRefreshHz);
+  calibStimulus.setFrequency(freqHz);
+  calibStimulus.start();
+
+  // Make sure run-mode stimuli are off
+  if (leftStimulus) leftStimulus.stop();
+  if (rightStimulus) rightStimulus.stop();
 }
 function stopCalibFlicker() {
-  /* TODO */
+  if (calibStimulus) calibStimulus.stop();
 }
 
 function startRunFlicker(leftFreqHz, rightFreqHz) {
-  /* TODO */
+  if (leftStimulus) {
+    leftStimulus.setRefreshHz(measuredRefreshHz);
+    leftStimulus.setFrequency(leftFreqHz);
+    leftStimulus.start();
+  }
+  if (rightStimulus) {
+    rightStimulus.setRefreshHz(measuredRefreshHz);
+    rightStimulus.setFrequency(rightFreqHz);
+    rightStimulus.start();
+  }
+  if (calibStimulus) calibStimulus.stop();
 }
 function stopRunFlicker() {
-  /* TODO */
+  if (leftStimulus) leftStimulus.stop();
+  if (rightStimulus) rightStimulus.stop();
 }
 
-// =============== 10) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
+// =============== 11) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
 // Helper to send a session event to C++
 async function sendSessionEvent(kind) {
   // IMPORTANT: kind is "start_calib" or "start_run" for now
@@ -297,12 +438,21 @@ async function sendSessionEvent(kind) {
   }
 }
 
-// ================== 11) INIT ON PAGE LOAD ===================
+// ================== 12) INIT ON PAGE LOAD ===================
 async function init() {
   logLine("Initializing UI…");
   const estimated_refresh = await estimateRefreshHz();
+  measuredRefreshHz = estimated_refresh; // global write
   await sendRefresh(estimated_refresh);
+
+  // create stimulus objects now that we know refresh
+  calibStimulus = new FlickerStimulus(elCalibBlock, measuredRefreshHz);
+  leftStimulus = new FlickerStimulus(elLeftArrow, measuredRefreshHz);
+  rightStimulus = new FlickerStimulus(elRightArrow, measuredRefreshHz);
+
+  stimAnimationLoop();
   startPolling();
+
   // Add button event listeners
   btnStartCalib.addEventListener("click", () => {
     sendSessionEvent("start_calib");

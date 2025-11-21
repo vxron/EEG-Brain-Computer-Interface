@@ -65,14 +65,24 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_hz_e = 0;
 #endif // CALIB_MODE 
 
+    // Run-mode pair 
+    int freq_left_hz   = stateStoreRef_.g_freq_left_hz.load(std::memory_order_acquire);
+    int freq_right_hz  = stateStoreRef_.g_freq_right_hz.load(std::memory_order_acquire);
+    int freq_left_hz_e = static_cast<int>(stateStoreRef_.g_freq_left_hz_e.load(std::memory_order_acquire));
+    int freq_right_hz_e= static_cast<int>(stateStoreRef_.g_freq_right_hz_e.load(std::memory_order_acquire));
+
     // 2) build json string manually
     std::ostringstream oss;
     oss << "{"
-        << "\"seq\":"          << seq         << ","
-        << "\"stim_window\":"  << stim_window << ","
-        << "\"block_id\":"     << block_id    << ","
-        << "\"freq_hz\":"      << freq_hz     << ","
-        << "\"freq_hz_e\":"    << freq_hz_e
+        << "\"seq\":"            << seq             << ","
+        << "\"stim_window\":"    << stim_window     << ","
+        << "\"block_id\":"       << block_id        << ","
+        << "\"freq_hz\":"        << freq_hz         << ","
+        << "\"freq_hz_e\":"      << freq_hz_e       << ","
+        << "\"freq_left_hz\":"   << freq_left_hz    << ","
+        << "\"freq_right_hz\":"  << freq_right_hz   << ","
+        << "\"freq_left_hz_e\":" << freq_left_hz_e  << ","
+        << "\"freq_right_hz_e\":"<< freq_right_hz_e
         << "}";
 
     std::string json_snapshot = oss.str();

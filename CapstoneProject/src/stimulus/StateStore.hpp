@@ -23,6 +23,12 @@ struct StateStore_s{
 
     // So that UI can POST events to stimulus controller state machine:
     std::atomic<UIStateEvent_E> g_ui_event{UIStateEvent_None};
+
+    // run mode frequency pair to be sent to ui
+    std::atomic<TestFreq_E> g_freq_left_hz_e{TestFreq_None};
+    std::atomic<TestFreq_E> g_freq_right_hz_e{TestFreq_None};
+    std::atomic<int> g_freq_right_hz{0};
+    std::atomic<int> g_freq_left_hz{0};
 };
 
 
