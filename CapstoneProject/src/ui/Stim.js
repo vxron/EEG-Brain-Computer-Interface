@@ -33,9 +33,10 @@ const elInstrBlockId = document.getElementById("instr-block-id");
 const elInstrFreqHz = document.getElementById("instr-freq-hz");
 const elInstructionsText = document.getElementById("instructions-text");
 
-// Session control buttons (TODO -> FOR LATER /event HOOKUP to tell c++)
+// Session control buttons (UI /event HOOKUP to tell c++)
 const btnStartCalib = document.getElementById("btn-start-calib");
 const btnStartRun = document.getElementById("btn-start-run");
+const btnExit = document.getElementById("btn-exit");
 
 // Timer for browser requests to server
 let pollInterval = null;
@@ -57,8 +58,8 @@ function logLine(msg) {
   elLog.scrollTop = elLog.scrollHeight;
 }
 
-// ======================== 3) SHOWVIEW HELPER =========================
-// show the correct stim window when it's time by removing it from 'hidden' css class
+// ======================== 3) VIEW HELPERS =========================
+// (1) show the correct stim window when it's time by removing it from 'hidden' css class
 function showView(name) {
   const allViews = [viewHome, viewInstructions, viewActiveCalib, viewActiveRun];
 
@@ -82,6 +83,20 @@ function showView(name) {
     default:
       viewHome.classList.remove("hidden");
       break;
+  }
+}
+
+// (2) set full screen in calib/run modes (hide side bar & log panel)
+function setFullScreenMode(enabled) {
+  // Toggle a class on <body> so CSS can handle layout
+  document.body.classList.toggle("fullscreen-mode", enabled);
+
+  if (btnExit) {
+    if (enabled) {
+      btnExit.classList.remove("hidden");
+    } else {
+      btnExit.classList.add("hidden");
+    }
   }
 }
 
@@ -182,24 +197,34 @@ function updateUiFromState(data) {
   elFreqHz.textContent = fmtFreqHz(data.freq_hz);
   elStimWin.textContent = fmtFreqEnumLabel("stim_window", data.stim_window);
   elFreqCodePill.textContent = fmtFreqEnumLabel("freq_hz_e", data.freq_hz_e);
+
+  // run mode flag cleared by default
+  document.body.classList.remove("run-mode");
+
   // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = None
   if (stimState === 3 /* Home */ || stimState === 4 /* None */) {
     stopCalibFlicker();
     stopRunFlicker();
+    setFullScreenMode(false);
     showView("home");
   } else if (stimState === 2 /* Instructions */) {
     stopCalibFlicker();
+    setFullScreenMode(true);
     showView("instructions");
     // Update text based on block and freq
     elInstrBlockId.textContent = data.block_id ?? "-";
     elInstrFreqHz.textContent = fmtFreqHz(data.freq_hz) + " Hz";
     // TODO: customize elInstructionsText based on block / upcoming freq
   } else if (stimState === 1 /* Active_Calib */) {
+    setFullScreenMode(true);
     showView("active_calib");
     const calibFreqHz = data.freq_hz ?? 0;
     startCalibFlicker(calibFreqHz);
   } else if (stimState === 0 /* Active_Run */) {
+    setFullScreenMode(true);
     showView("active_run");
+    // set run mode flag for css to max separability btwn stimuli blocks :)
+    document.body.classList.add("run-mode");
     // default to freq_hz if undef right/left
     const runLeftHz = data.freq_right_hz ?? data.freq_hz ?? 0;
     const runRightHz = data.freq_left_hz ?? data.freq_hz ?? 0;
@@ -376,9 +401,9 @@ class FlickerStimulus {
 // ================== 10) Flicker animation starters/stoppers ==========================
 
 function stimAnimationLoop() {
-  if (calibStimulus) calibStimulus.tick();
-  if (leftStimulus) leftStimulus.tick();
-  if (rightStimulus) rightStimulus.tick();
+  if (calibStimulus) calibStimulus.onePeriod();
+  if (leftStimulus) leftStimulus.onePeriod();
+  if (rightStimulus) rightStimulus.onePeriod();
 
   stimAnimId = requestAnimationFrame(stimAnimationLoop);
 }
@@ -418,7 +443,7 @@ function stopRunFlicker() {
 // =============== 11) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
 // Helper to send a session event to C++
 async function sendSessionEvent(kind) {
-  // IMPORTANT: kind is "start_calib" or "start_run" for now
+  // IMPORTANT: kind is "start_calib" or "start_run" or "exit" for now
   const payload = { action: kind };
 
   try {
@@ -459,6 +484,9 @@ async function init() {
   });
   btnStartRun.addEventListener("click", () => {
     sendSessionEvent("start_run");
+  });
+  btnExit.addEventListener("click", () => {
+    sendSessionEvent("exit");
   });
 }
 // Init as soon as page loads

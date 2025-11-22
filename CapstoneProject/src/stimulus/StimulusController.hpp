@@ -46,6 +46,7 @@ private:
     void process_inputs();
     void process_events();
     int checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int desiredTestFreq); // returns freq to use; require the flicker frequency to be an integer divisor of the refresh rate; else bump to next closest integer divisor
+    static bool has_divisor_6_to_20(int n);
 
 };
 

@@ -10,17 +10,24 @@ static struct state_transition{
 
 static const state_transition state_transition_table[] = {
     // from                           event                                     to
-    {UIState_Active_Calib,  UIStateEvent_StimControllerTimeout,          UIState_Instructions},
-    {UIState_Active_Calib,  UIStateEvent_StimControllerTimeoutEndCalib,  UIState_Home},
-    {UIState_Instructions,  UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
-    {UIState_None,          UIStateEvent_ConnectionSuccessful,           UIState_Home},
-    {UIState_Home,          UIStateEvent_UserPushesStartCalib,           UIState_Instructions},
-    {UIState_Home,          UIStateEvent_UserPushesStartRun,             UIState_Active_Run},
-    {UIState_Home,          UIStateEvent_UserPushesExit,                 UIState_None},
-    {UIState_Active_Calib,  UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Instructions,  UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Active_Run,    UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Active_Calib,    UIStateEvent_StimControllerTimeout,          UIState_Instructions},
+    {UIState_Active_Calib,    UIStateEvent_StimControllerTimeoutEndCalib,  UIState_Home},
+    {UIState_Instructions,    UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
+      
+    {UIState_None,            UIStateEvent_ConnectionSuccessful,           UIState_Home},
+      
+    {UIState_Home,            UIStateEvent_UserPushesStartCalib,           UIState_Instructions},
+    {UIState_Home,            UIStateEvent_UserPushesStartRun,             UIState_Active_Run},
+      
+    {UIState_Active_Calib,    UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Instructions,    UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Active_Run,      UIStateEvent_UserPushesExit,                 UIState_Home},
+  
+    // To implement later:  
+    {UIState_Saved_Sessions,  UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Home,            UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
 };
+// ^todo: add popup if switching btwn run <-> calib: r u sure u want to exit???
 
 // process_inputs to determine event
 
@@ -66,13 +73,18 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
     currSeq = stateStoreRef_->g_ui_seq.load(std::memory_order_acquire);
     stateStoreRef_->g_ui_seq.store(currSeq + 1, std::memory_order_release);
     switch(newState){
-        case UIState_Active_Run:
+        case UIState_Active_Run: {
             stateStoreRef_->g_ui_state.store(UIState_Active_Run, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
-            // later: write left/right freqs here
+            // TODO: make these per person based on saved sessions (see struct in types.h)
+            stateStoreRef_->g_freq_left_hz.store(10, std::memory_order_release);
+            stateStoreRef_->g_freq_right_hz.store(12, std::memory_order_release);
+            stateStoreRef_->g_freq_left_hz_e.store(TestFreq_10_Hz, std::memory_order_release);
+            stateStoreRef_->g_freq_right_hz_e.store(TestFreq_12_Hz, std::memory_order_release);
             break;
+        }
         
-        case UIState_Home:
+        case UIState_Home: {
             stateStoreRef_->g_ui_state.store(UIState_Home, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             // reset block/freq for clean home:
@@ -80,8 +92,9 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
             break;
+        }
         
-        case UIState_Active_Calib:
+        case UIState_Active_Calib: {
             // stim window
             stateStoreRef_->g_ui_state.store(UIState_Active_Calib, std::memory_order_release);
             // first read block_id atomically then increment
@@ -102,8 +115,9 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             // start timer
             currentWindowTimer_.start_timer(activeBlockDur_ms_);
             break;
+        }
 
-        case UIState_Instructions:
+        case UIState_Instructions: {
             // stim window
             stateStoreRef_->g_ui_state.store(UIState_Instructions, std::memory_order_release);
             // instruction windows still get freq info for next active block cuz UI will tell user what freq they'll be seeing next
@@ -115,6 +129,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             int result = checkStimFreqIsIntDivisorOfRefresh(true, freq); 
             // if bad result
             while(result == -1 && has_divisor_6_to_20(refresh)){
+                LOG_ALWAYS("SC: dropped testcase=" << static_cast<int>(freq));
                 // reasonably drop since we have other divisors
                 activeQueueIdx_++;
                 freqToTest = activeBlockQueue_[activeQueueIdx_];
@@ -124,7 +139,8 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
     
             // storing
             stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_acquire);
-            stateStoreRef_->g_freq_hz.store(freq,std::memory_order_acquire);
+            stateStoreRef_->g_freq_hz.store(freq, std::memory_order_acquire);
+            LOG_ALWAYS("SC: stored a freq=" << static_cast<int>(freq));
 
             // iscalib helper
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
@@ -132,12 +148,14 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             // start timer
             currentWindowTimer_.start_timer(restBlockDur_ms_);
             break;
+        }
 
-        case UIState_None:
+        case UIState_None: {
             // “offline” / not connected / shut down
             stateStoreRef_->g_ui_state.store(UIState_None, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             break;
+        }
         
         default:
             break;
@@ -149,6 +167,13 @@ void StimulusController_C::onStateExit(UIState_E state){
         case UIState_Active_Calib:
         case UIState_Instructions:
             currentWindowTimer_.stop_timer();
+            break;
+        case UIState_Active_Run:
+        // idk yet whether or not we want to be clearing here !
+            stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
+            stateStoreRef_->g_freq_left_hz.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_right_hz.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_right_hz_e.store(TestFreq_None, std::memory_order_release);
             break;
         default:
             break;
@@ -174,7 +199,7 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
 
 std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     // the following are in order of priority 
-    // (1) UI events sent in by POST (EXTERNAL):
+    // (1) UI events sent in by POST (EXTERNAL): user presses exit, user presses start calib, user presses start run
     UIStateEvent_E currEvent = stateStoreRef_->g_ui_event.load(std::memory_order_acquire);
     if(currEvent != UIStateEvent_None){
         LOG_ALWAYS("SC: detected UI event=" << static_cast<int>(currEvent));
@@ -214,7 +239,7 @@ int StimulusController_C::checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int d
     int flag = 0;
     // require state to be transitional (don't want to be checking in middle of active mode) but connection must be established
     if(state_ == UIState_Active_Calib || state_ == UIState_Active_Run || state_ == UIState_None){
-        return;
+        return -1;
     }
     int refresh = stateStoreRef_->g_refresh_hz.load(std::memory_order_acquire);
     while(refresh % desiredTestFreq != 0){
@@ -236,7 +261,7 @@ int StimulusController_C::checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int d
 }
 
 // helper to see if our refresh rate is simply just cooked and we must accept non int divisors :,)
-static bool has_divisor_6_to_20(int n) {
+bool StimulusController_C::has_divisor_6_to_20(int n) {
     if (n == 0) return true;  // everything divides 0
 
     for (int d = 6; d <= 20; ++d) {

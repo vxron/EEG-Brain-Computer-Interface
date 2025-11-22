@@ -122,7 +122,7 @@ body {
 }
 
 .btn {
-  flex: 1 1 auto;
+  /*flex: 1 1 auto;*/
   font-size: 0.8rem;
   border-radius: 999px;
   border: 1px solid transparent;
@@ -132,6 +132,11 @@ body {
   color: var(--text-main);
   transition: background 0.15s ease, border-color 0.15s ease,
     transform 0.08s ease;
+}
+
+/* Make generic buttons flex *only* inside button rows */
+.button-row .btn {
+  flex: 1 1 auto;
 }
 
 .btn.primary {
@@ -147,6 +152,52 @@ body {
 .btn:hover {
   transform: translateY(-1px);
   filter: brightness(1.05);
+}
+
+/* Exit button styling */
+
+.exit-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  opacity: 1;
+}
+
+.exit-btn:active {
+  transform: translateY(1px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Ensure the Exit button is sized just to its content */
+.exit-btn {
+  position: fixed;
+  top: 1.5rem;
+  right: 1.5rem;
+  z-index: 1000;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  flex: 0 0 auto; /* override .btn flex */
+  padding: 0.6rem 1.4rem;
+  border-radius: 999px;
+  border: none;
+
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+
+  background: linear-gradient(135deg, #f973b7, #8b5cf6);
+  color: #ffffff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+
+  cursor: pointer;
+  opacity: 0.95;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }
 
 /* MAIN PANEL */
@@ -288,4 +339,60 @@ body {
 
 .log-entry {
   color: var(--text-muted);
+}
+
+/* FULLSCREEN MODE (CALIB & RUN) */
+
+/* When in fullscreen, hide sidebar + log panel, let main panel fill */
+.fullscreen-mode .sidebar {
+  display: none;
+}
+
+.fullscreen-mode .main-panel {
+  min-height: 100vh;
+}
+
+/* Hide the log panel in full-screen stim mode */
+.fullscreen-mode .log-panel {
+  display: none;
+}
+
+body.fullscreen-mode .app-shell {
+  grid-template-columns: minmax(0, 1fr); /* single column */
+  padding: 0; /* no outer margin */
+}
+
+/* Remove inner padding/borders for the run view in fullscreen so it truly spans edge to edge */
+body.fullscreen-mode.run-mode #view-active-run {
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+
+  /* keep nice padding like other views */
+  padding: 18px 24px 24px;
+
+  /* let header sit on top, flicker area grow below */
+  display: flex;
+  flex-direction: column;
+}
+
+/* Title + lead text: natural size at top */
+body.fullscreen-mode.run-mode #view-active-run h2,
+body.fullscreen-mode.run-mode #view-active-run .view-lead {
+  flex: 0 0 auto;
+}
+
+/* Flicker stage fills the remaining area and pushes blocks apart */
+body.fullscreen-mode.run-mode .flicker-stage.dual {
+  flex: 1 1 auto;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8vw; /* horizontal margin; tweak if needed */
+}
+
+/* Keep blocks large but responsive */
+body.fullscreen-mode.run-mode .flicker-block {
+  width: min(20vw, 220px);
+  height: min(20vw, 220px);
 }

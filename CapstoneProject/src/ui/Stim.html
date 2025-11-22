@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-4" />
   </head>
   <body>
     <div class="app-shell">
@@ -64,7 +64,11 @@
 
       <!-- Right: main view area -->
       <main class="main-panel">
-        <!-- VIEW STACK (fills most of the right side) -->
+        <!-- Full-screen exit button (shown in calib/run) -->
+        <button id="btn-exit" class="btn exit-btn hidden" type="button">
+          Exit Session
+        </button>
+        <!-- main VIEW STACK (fills most of the right side) -->
         <div class="view-stack">
           <!-- HOME VIEW -->
           <section id="view-home" class="view">
@@ -132,6 +136,6 @@
       </main>
     </div>
 
-    <script src="Stim.js?v=20251119-4"></script>
+    <script src="Stim.js?v=20251119-5"></script>
   </body>
 </html>

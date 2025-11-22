@@ -54,17 +54,9 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int seq = stateStoreRef_.g_ui_seq.load(std::memory_order_acquire); // stimcontroller is only one who touches this
     // cast enum -> int
     int stim_window = static_cast<int>(stateStoreRef_.g_ui_state.load(std::memory_order_acquire));
-#if CALIB_MODE
     int block_id = stateStoreRef_.g_block_id.load(std::memory_order_acquire);
     int freq_hz_e = static_cast<int>(stateStoreRef_.g_freq_hz_e.load(std::memory_order_acquire));
     int freq_hz = stateStoreRef_.g_freq_hz.load(std::memory_order_acquire);
-#else 
-    // Defaults (if CALIB_MODE is off)
-    int block_id  = 0;
-    int freq_hz   = 0;
-    int freq_hz_e = 0;
-#endif // CALIB_MODE 
-
     // Run-mode pair 
     int freq_left_hz   = stateStoreRef_.g_freq_left_hz.load(std::memory_order_acquire);
     int freq_right_hz  = stateStoreRef_.g_freq_right_hz.load(std::memory_order_acquire);
@@ -87,7 +79,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
 
     std::string json_snapshot = oss.str();
 
-    LOG_ALWAYS("HTTP /state snapshot: " << json_snapshot);
+    //LOG_ALWAYS("HTTP /state snapshot: " << json_snapshot);
     
     // 3) send json back to client through res
     write_json(res, json_snapshot);
@@ -119,6 +111,8 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserPushesStartCalib;
                 } else if (action == "start_run") {
                     ev = UIStateEvent_UserPushesStartRun;
+                } else if (action == "exit"){
+                    ev = UIStateEvent_UserPushesExit;
                 }
             }
         }

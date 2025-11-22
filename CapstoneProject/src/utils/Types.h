@@ -76,7 +76,14 @@ enum UIState_E {
 	UIState_Active_Calib,
 	UIState_Instructions, // also for calib
 	UIState_Home,
+	UIState_Saved_Sessions, // saves a state store cfgs (protocol) based on training + an onnx classifier path
 	UIState_None,
+};
+
+enum StimShapes_E {
+	StimShape_Circle,
+	StimShape_Square,
+	StimShape_Arrow,
 };
 
 enum UIStateEvent_E {
@@ -87,6 +94,7 @@ enum UIStateEvent_E {
 	UIStateEvent_LostConnection,
 	UIStateEvent_UserPushesExit,
 	UIStateEvent_ConnectionSuccessful,
+	UIStateEvent_UserPushesSessions,
 	UIStateEvent_None,
 };
 
@@ -156,15 +164,36 @@ struct trainingProto_S {
 	std::size_t activeBlockDuration_s; // duration of each active block in s
 	std::size_t restDuration_s;  // rest duration between blocks in s
 	bool displayInPairs; // whether or not the stimuli under test should be displayed in pairs or alone for 1 window
-	std::deque<TestFreq_E> freqsToTest;
+	std::deque<TestFreq_E> freqsToTest;  // TODO: make this stimulus_s instead of testFreq_E
+
 }; // trainingProto_S
 
-struct LabelSource_S {
-	time_point_T blockStartTime; // timestamp for when new instruction block is sent to display thread
-	time_point_T blockEndTime;   // timestamp for when display completes the block and sends ack
-	SSVEPState_E label = SSVEP_None;         // right, left, none (if no ssvep task, e.g. idle, setup, instructions, rest)
-	uint32_t blockId = 0;       // number of blocks seen so far in the protocol (seq 0,1, 2... unless missing data)
-	//TrainingBlocks_E blockType = TrainingBlock_None; // type of block (rest, instructions, active)
+// STIMULUS OBJECT FACTORY
+struct color_s {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+
+    color_s(uint8_t r_, uint8_t g_, uint8_t b_)
+        : r(r_), g(g_), b(b_) {}
 };
+
+struct stimulus_s {
+
+	stimulus_s(int freq, TestFreq_E freq_e, color_s color, StimShapes_E shape)
+		: freq_hz_(freq), freq_hz_e_(freq_e), color_(color), shape_(shape) {}
+
+	int freq_hz_;
+	TestFreq_E freq_hz_e_;
+	color_s color_{255, 255, 255};  // default white; use Color struct above
+	StimShapes_E shape_;
+};
+
+// individual person run mode setup that gets formed after calibration
+struct sessionConfigs_S {
+	stimulus_s left_stimulus;
+	stimulus_s right_stimulus;
+};
+
 
 /* END STRUCTS */
