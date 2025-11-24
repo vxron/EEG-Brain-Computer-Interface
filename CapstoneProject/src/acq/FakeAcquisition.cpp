@@ -63,18 +63,13 @@ void FakeAcquisition_C::setActiveStimulus(double fStimHz) {
 	activeStimulusHz_ = fStimHz;
 }
 
-bool FakeAcquisition_C::getData(std::size_t numberOfScans, float* dest, std::uint32_t destLen) {
+bool FakeAcquisition_C::getData(std::size_t const numberOfScans, float* dest) {
 	// validate arguments
 	if (dest == NULL || numberOfScans <= 0) {
 		return 0;
 	}
-
 	// work in std::size_t for math, upcast uint32_t --> size_t (64 bits) is safe (no truncation)
 	const std::size_t requiredLen = numberOfScans * NUM_CH_CHUNK;
-	if (static_cast<std::size_t>(destLen) < requiredLen) {
-		return 0;
-	}
-
 	synthesize_data_stream(dest, numberOfScans);
 	return 1;
 }

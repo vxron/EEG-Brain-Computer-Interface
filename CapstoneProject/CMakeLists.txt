@@ -1,20 +1,23 @@
-﻿# Unicorn SDK paths (relative to this CapstoneProject/ folder)
+﻿# ================== Unicorn SDK paths (REAL backend only) ==================
 set(UNICORN_ROOT     "${CMAKE_CURRENT_SOURCE_DIR}/unicorn")
 set(UNICORN_INCLUDE  "${UNICORN_ROOT}/include")
 set(UNICORN_LIB_DIR  "${UNICORN_ROOT}/lib/x64")
 set(UNICORN_BIN_DIR  "${UNICORN_ROOT}/bin/x64")
 
-# Create an imported target for the import lib
+# Imported Unicorn library (safe even if not used when USE_FAKE_ACQ=ON)
 add_library(unicorn::unicorn STATIC IMPORTED)
 set_target_properties(unicorn::unicorn PROPERTIES
   IMPORTED_LOCATION             "${UNICORN_LIB_DIR}/Unicorn.lib"
   INTERFACE_INCLUDE_DIRECTORIES "${UNICORN_INCLUDE}"
 )
 
+# ========================== MAIN EXEC =========================
 add_executable(CapstoneProject
   src/CapstoneProject.cpp
   src/acq/FakeAcquisition.cpp
   src/utils/Logger.cpp
+  src/stimulus/HttpServer.cpp
+  src/stimulus/StimulusController.cpp
 )
 
 # expose headers to IDEs (no compilation)
@@ -31,6 +34,7 @@ target_sources(CapstoneProject
       src/utils/ModelStore.h
       src/acq/IAcqProvider.h
       src/acq/FakeAcquisition.h
+      src/acq/UnicornDriver.h
 )
 
 # ==================== UI UNIT TESTS ==========================
@@ -57,10 +61,15 @@ target_include_directories(UIStateMachineSelfTest PRIVATE
 set_property(TARGET UIStateMachineSelfTest PROPERTY CXX_STANDARD 20)
 # ==========================================================
 
+# ==================== ACQ BACKEND SELECTION ===================
 # Choose backend at build time (option defined in the ROOT CMakeLists.txt)
 if(USE_FAKE_ACQ)
   message(STATUS "Building with FAKE acquisition backend")
   target_compile_definitions(CapstoneProject PRIVATE ACQ_BACKEND_FAKE)
+  target_sources(CapstoneProject PRIVATE
+    src/acq/FakeAcquisition.cpp
+  )
+
 else()
   add_executable(UnicornSelfTest
   unit_tests/UnicornSelfTest.cpp
@@ -92,6 +101,7 @@ else()
           "$<TARGET_FILE_DIR:UnicornSelfTest>/Unicorn.dll")
 endif()
 
+# ==================== CALIB MODE SELECTION ==================
 if(CALIBRATION_MODE)
   message(STATUS "Building for Calibration mode")
   target_compile_definitions(CapstoneProject PRIVATE CALIB_MODE)

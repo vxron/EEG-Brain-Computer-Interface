@@ -138,9 +138,7 @@ inline int TestFreqEnumToInt(TestFreq_E enumVal){
 struct eeg_sample_t {
 	std::vector<float> per_channel_values{}; // value for each of the 8 channels **could consider making this an array
 	uint32_t tick;                           // monotonic sample index
-#if CALIB_MODE
 	bool active_label;                       // obtained from stimulus global state 
-#endif 
 };
 
 /*
@@ -154,9 +152,7 @@ struct bufferChunk_S {
 	std::size_t numCh = NUM_CH_CHUNK; 		     // number of enabled channels
 	std::size_t numScans = NUM_SCANS_CHUNK;      // number of scans (time steps) in this chunk (32)
 	std::array<float, NUM_SAMPLES_CHUNK> data{}; // interleaved samples: [ch0s0, ch1s0, ch2s0, ..., chN-1s0, ch0s1, ch1s1, ..., chN-1sM-1]
-#if CALIB_MODE
 	bool active_label;                       // obtained from stimulus global state 
-#endif 
 }; // bufferChunk_S
 
 struct trainingProto_S {

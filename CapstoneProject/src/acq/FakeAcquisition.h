@@ -50,10 +50,11 @@ public:
 	~FakeAcquisition_C() = default;
 
 	// Lifecycle methods to match IAcqProvider_S interface
-	bool start() override { return true; } // nothing to init
-	void stop() override {} // nothing to cleanup
+	bool unicorn_init() override { return true; } // nothing to init
+	bool unicorn_start_acq() override { return true; }
+	bool unicorn_stop_and_close() override {return true; } // nothing to cleanup
 
-	bool getData(std::size_t numberOfScans, float* dest, std::uint32_t destLen) override; // mirrors Unicorn C API GetData()
+	bool getData(std::size_t const numberOfScans, float* dest) override; // mirrors Unicorn C API GetData()
 	void setActiveStimulus(double fStimHz); // sets the active stimulus frequency (0 = none)
 
 private:

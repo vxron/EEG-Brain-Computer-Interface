@@ -1,10 +1,4 @@
-﻿// Needs three threads:
-// 1- Consumer: main processing pipeline (pulls from ring buffer, and pushes into sliding window) 
-// *Consumer should also then process SW by passing it to another function call (window_processor)
-// 2 - Producer: main data acquisition pipeline (acquires data from raw api calls and pushes to ring buffer)
-// 3 - Stimulus: shows the visual stimuli based on protocol with fsm (calib mode) or just constant (run mode)
-
-#include <thread>
+﻿#include <thread>
 #include <chrono>
 #include <iostream>
 #include "utils/RingBuffer.hpp"
@@ -24,8 +18,10 @@
 #include <cstring>
 #include "stimulus/StimulusController.hpp"
 #include "acq/UnicornDriver.h"
-#if CALIB_MODE
 #include <fstream>
+
+#ifdef ACQ_BACKEND_FAKE
+#include "acq/FakeAcquisition.h"
 #endif
 
 // Global "please stop" flag set by Ctrl+C (SIGINT) to shut down cleanly
@@ -39,51 +35,69 @@ void handle_sigint(int) {
 void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
+try {
     LOG_ALWAYS("producer start");
-#if ACQ_BACKEND_FAKE
+
+#ifdef ACQ_BACKEND_FAKE
     LOG_ALWAYS("PATH=MOCK");
+    FakeAcquisition_C::stimConfigs_S fakeCfg{};
+    // Default Values:
+    // fakeCfg.ssvepAmplitude_uV = 20.0;
+    // fakeCfg.noiseSigma_uV     = 5.0;
+    // fakeCfg.leftStimFreq      = 15.0;
+    // fakeCfg.rightStimFreq     = 10.0;
+
+    FakeAcquisition_C acqDriver(fakeCfg);
+
 #else
     LOG_ALWAYS("PATH=HARDWARE");
+    UnicornDriver_C acqDriver{};
+
 #endif
 
-	UnicornDriver_C UnicornDriver{};
-    if (UnicornDriver.unicorn_init() == false || UnicornDriver.unicorn_start_acq() == false){
+    // somthn to use iacqprovider_s instead of unicorndriver_c directly
+    // then we can choose based on acq_backend_fake which provider btwn unicorn and fake to set th eobjec too?
+    // also need to updat csv so it logs appropraite measures (all eeg channels) in the acq_bavkend_fake path
+
+	
+    if (acqDriver.unicorn_init() == false || acqDriver.unicorn_start_acq() == false){
         LOG_ALWAYS("unicorn_init failed; exiting producer");
         rb.close();
         return;
     };
 
     size_t tick_count = 0;
-    // ctrl+c check
+    
+    // MAIN ACQUISITION LOOP
     while(!g_stop.load(std::memory_order_relaxed)){
         bufferChunk_S chunk{};
         
-#if I2C_MOCK
-        // simulated sample stream 
-        static int16_t i = 0;
-        accel_burst_sample.x = i;
-        accel_burst_sample.y = i;
-        accel_burst_sample.z = i; 
-        i++;
-        tick_count++;
-        accel_burst_sample.tick = tick_count;
-        // mimick 119 Hz operation to match accelerometer sampling rate
-        // 119Hz = 0.008s period -> PER BURST
-        std::this_thread::sleep_for(8ms);
-#else
-        UnicornDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
+        acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
         tick_count++;
         chunk.tick = tick_count;
-#endif // I2C_MOCK
         
         // blocking push function... will always (eventually) run and return true, 
         // unless queue is closed, in which case we want out
         if(!rb.push(chunk)){
+            LOG_ALWAYS("RingBuffer closed while pushing; stopping producer");
             break;
         } 
     }
     // on thread shutdown, close queue to call release n unblock any consumer waiting for acquire
+    LOG_ALWAYS("producer shutting down; stopping acquisition backend...");
+    acqDriver.unicorn_stop_and_close();
     rb.close();
+}
+catch (const std::exception& e) {
+    LOG_ALWAYS("producer: FATAL unhandled exception: " << e.what());
+    rb.close();
+    g_stop.store(true, std::memory_order_relaxed);
+}
+catch (...) {
+    LOG_ALWAYS("producer: FATAL unknown exception");
+    rb.close();
+    g_stop.store(true, std::memory_order_relaxed);
+}
 }
 
 void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStoreRef){
@@ -92,18 +106,60 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     LOG_ALWAYS("consumer start");
     size_t tick_count = 0;
 
+try{
     sliding_window_t window; // should acquire the data for 1 window with that many pops n then increment by hop... 
     bufferChunk_S temp; // placeholder
 
-// eventually all of these calibration mode build time flags will become ui state checks..
-#if CALIBRATION_MODE
-    std::ofstream csv("eeg_calib_data.csv");
-    // write first 8 EEG channels of first scan per chunk
-    csv << "tick";
-    for (std::size_t ch=0; ch<NUM_CH_CHUNK; ++ch) csv << ",eeg" << (ch+1);
-    csv << ",active\n";
+    // init csv: only need to produce csv in calibration mode for model training (training dataset)
+    std::ofstream csv;
+    bool csv_opened = false;
     size_t rows_written = 0;
-#endif
+    // lambda helper for ensuring csv is open when trying to log
+    auto ensure_csv_open = [&]() {
+        if (csv_opened) return true;
+        csv.open("eeg_calib_data.csv", std::ios::out | std::ios::trunc);
+        if (!csv.is_open()) {
+            LOG_ALWAYS("ERROR: failed to open eeg_calib_data.csv");
+            return false;
+        }
+        csv << "chunk_tick,sample_idx";
+        for (std::size_t ch = 0; ch < NUM_CH_CHUNK; ++ch) {
+            csv << ",eeg" << (ch + 1);
+        }
+        csv << ",testfreq_e,testfreq_hz\n";
+        csv_opened = true;
+        return true;
+    };
+    // lambda helper for logging by chunk (when we pop out a new temp chunk from rb, we log it)
+    auto log_chunk_if_calib = [&](const bufferChunk_S& chunk) {
+        // Check UI state + label at time of logging
+        UIState_E logState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+        TestFreq_E logFreq = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
+
+        if (logState != UIState_Active_Calib || logFreq == TestFreq_None) {
+            return; // not in calib or no label - don't log
+        }
+
+        if (!ensure_csv_open()) {
+            return;
+        }
+
+        const int labelHz = TestFreqEnumToInt(logFreq);
+        // temp.data is time-major: [s0_ch0..ch7, s1_ch0..ch7, ...]
+        constexpr std::size_t nSamples = NUM_SAMPLES_CHUNK / NUM_CH_CHUNK;
+
+        for (std::size_t s = 0; s < nSamples; ++s) {
+            csv << chunk.tick << "," << s;
+            for (std::size_t ch = 0; ch < NUM_CH_CHUNK; ++ch) {
+                const std::size_t idx = s * NUM_CH_CHUNK + ch;
+                csv << "," << chunk.data[idx];
+            }
+            csv << "," << static_cast<int>(logFreq)
+                << "," << labelHz
+                << "\n";
+            ++rows_written;
+        }
+    };
 
 	// build first window
 	while(window.sliding_window.get_count()<window.winLen){
@@ -112,6 +168,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
 			break;
 		} 
 		else { 
+            log_chunk_if_calib(temp);
 			// this will fit fine because winLen is a multiple of number of scans per channel = 32
 			// pop sucessful -> push into sliding window
 			for(int i = 0; i<NUM_SAMPLES_CHUNK;i++){
@@ -163,25 +220,26 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
                 continue; // go check while-condition again
             }
             // stash is empty
+            if(window.stash_len != 0){
+                LOG_ALWAYS("There's an issue with sliding window stash.");
+                break;
+            }
 			if(!rb.pop(&temp)){
 				break;
 			} else {
+                log_chunk_if_calib(temp);
 				// pop successful -> push into sliding window
 				if(amnt_left_to_add >= NUM_SAMPLES_CHUNK){
                     for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
                         window.sliding_window.push(temp.data[j]);
-                    } // goes back to check while
+                    } // goes back to check while for next chunk
 				}
 				else {
 					// take what we need and stash the rest for next window
 					for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
 						if(j<amnt_left_to_add){
 							window.sliding_window.push(temp.data[j]);
-						} else { // we know stash should be empty if we made it here
-                            if(window.stash_len != 0){
-                                LOG_ALWAYS("There's an issue with sliding window stash.");
-                                break;
-                            }
+						} else {
 							window.stash[j-amnt_left_to_add]=temp.data[j];
                             window.stash_len++; // increasing slots to add from stash for next time
 						}
@@ -199,6 +257,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
             // changed halfway through -> not a valid window for processing
             window.decision = SSVEP_Unknown;
             window.has_label = false;
+            continue; // go build next window
         }
 
         else if(currState == UIState_Active_Calib ) {
@@ -208,8 +267,9 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
             // we should be attaching a label to our windows for calibration data
             TestFreq_E currTestFreq = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
             window.testFreq = currTestFreq;
+            window.has_label = (currTestFreq != TestFreq_None);
         }
-
+        
         else if(currState == UIState_Active_Run){
             // run ftr extraction + classifier pipeline to get decision
             // TODO WHEN READY: add ftr vector + make decision here for run mode
@@ -219,22 +279,58 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     // exiting due to producer exiting means we need to close window rb
     window.sliding_window.close();
     rb.close();
-#if CALIBRATION_MODE
-    csv.flush();
-    csv.close();
-#endif
+    if(csv_opened){ // calib sess
+        csv.flush();
+        csv.close();
+    }
+}
+catch (const std::exception& e) {
+        LOG_ALWAYS("consumer: FATAL unhandled exception: " << e.what());
+        rb.close();
+        g_stop.store(true, std::memory_order_relaxed);
+    }
+catch (...) {
+        LOG_ALWAYS("consumer: FATAL unknown exception");
+        rb.close();
+        g_stop.store(true, std::memory_order_relaxed);
+    }
 }
 
 void stimulus_thread_fn(StateStore_s& stateStoreRef){
 	// runs protocols in calib mode (handle timing & keep track of state in g_record)
 	// should toggle g_record on stimulus switch
 	// in calib mode producer should wait for g_record to toggle? or it can just always check state for data ya thats better 0s and 1s in known fixed order...
-    StimulusController_C stimController(&stateStoreRef);
-    stimController.runUIStateMachine();
+    try {
+        LOG_ALWAYS("stim: start");
+        StimulusController_C stimController(&stateStoreRef);
+        stimController.runUIStateMachine();
+        LOG_ALWAYS("stim: exit");
+    }
+    catch (const std::exception& e) {
+        LOG_ALWAYS("stim: FATAL unhandled exception: " << e.what());
+        g_stop.store(true, std::memory_order_relaxed);
+    }
+    catch (...) {
+        LOG_ALWAYS("stim: FATAL unknown exception");
+        g_stop.store(true, std::memory_order_relaxed);
+    }
 }
 
 void http_thread_fn(HttpServer_C& http){
-    http.http_listen_for_poll_requests();   // blocks here
+    logger::tlabel = "http";
+    try {
+        LOG_ALWAYS("http: listen thread start");
+        http.http_listen_for_poll_requests();   // blocks here
+        LOG_ALWAYS("http: listen thread exit");
+    }
+    catch (const std::exception& e) {
+        LOG_ALWAYS("http: FATAL unhandled exception: " << e.what());
+        g_stop.store(true, std::memory_order_relaxed);
+    }
+    catch (...) {
+        LOG_ALWAYS("http: FATAL unknown exception");
+        g_stop.store(true, std::memory_order_relaxed);
+    }
 }
 
 int main() {
@@ -268,8 +364,6 @@ int main() {
     prod.join();
     cons.join(); // close "join" individual threads
     http.join();
-#if CALIBRATION_MODE
     stim.join();
-#endif
-    return 0;
+    return 0; 
 }

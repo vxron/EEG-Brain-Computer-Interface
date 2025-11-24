@@ -38,8 +38,8 @@ notes:
 #include <atomic>
 
 // semaphore template parameter type is ptrdiff_t (type for the update param in the release() function)
-// setting its max to 250 means we're saying, 250 is the max we can release at once (really we'll keep it at 1 for this)
-static constexpr std::ptrdiff_t SEM_BUFFER_CAPACITY = 250;
+// setting its max to 250 means we're saying, 10000 is the max we can release at once (really we'll keep it at 1 for this)
+static constexpr std::ptrdiff_t SEM_BUFFER_CAPACITY = 10000;
 inline constexpr std::size_t ACQ_RING_BUFFER_CAPACITY = 50;    // ring buffer holds scans (added in bouts of 128ms)
 
 // "T" will be eeg sample reads for this application (defined in types.h)
