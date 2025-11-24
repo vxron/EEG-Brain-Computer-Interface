@@ -31,8 +31,6 @@ static const state_transition state_transition_table[] = {
 
 // process_inputs to determine event
 
-// 
-
 StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::optional<trainingProto_S> trainingProtocol) : state_(UIState_None), stateStoreRef_(stateStoreRef) {
     if (trainingProtocol.has_value()){
         trainingProto_S trainingProtocol_value = trainingProtocol.value();
@@ -44,7 +42,7 @@ StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::opt
         trainingProtocol_.displayInPairs = false;
         trainingProtocol_.freqsToTest = {TestFreq_8_Hz, TestFreq_9_Hz, TestFreq_10_Hz, TestFreq_11_Hz, TestFreq_12_Hz};
         trainingProtocol_.numActiveBlocks = trainingProtocol_.freqsToTest.size();
-        trainingProtocol_.restDuration_s = 15;
+        trainingProtocol_.restDuration_s = 10;
     }
      activeBlockQueue_ = trainingProtocol_.freqsToTest;
      activeBlockDur_ms_ = std::chrono::milliseconds{

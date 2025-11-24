@@ -14,7 +14,6 @@ set_target_properties(unicorn::unicorn PROPERTIES
 # ========================== MAIN EXEC =========================
 add_executable(CapstoneProject
   src/CapstoneProject.cpp
-  src/acq/FakeAcquisition.cpp
   src/utils/Logger.cpp
   src/stimulus/HttpServer.cpp
   src/stimulus/StimulusController.cpp
@@ -35,6 +34,7 @@ target_sources(CapstoneProject
       src/acq/IAcqProvider.h
       src/acq/FakeAcquisition.h
       src/acq/UnicornDriver.h
+      src/utils/Filters.hpp
 )
 
 # ==================== UI UNIT TESTS ==========================
@@ -120,3 +120,13 @@ set_property(TARGET CapstoneProject PROPERTY CXX_STANDARD 20)
 # Treat tpp as header-only
 set_source_files_properties(src/utils/RingBuffer.tpp
   PROPERTIES LANGUAGE CXX HEADER_FILE_ONLY TRUE)
+
+# ======================= EEG FILTERS ===========================
+if(USE_EEG_FILTERS)
+  message(STATUS "Building with EEG filters")
+  target_compile_definitions(CapstoneProject PRIVATE USE_EEG_FILTERS)
+  target_sources(CapstoneProject PRIVATE
+    src/utils/Filters.cpp
+  )
+endif()
+

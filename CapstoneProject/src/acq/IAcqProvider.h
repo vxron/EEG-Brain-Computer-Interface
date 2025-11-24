@@ -21,4 +21,5 @@ struct IAcqProvider_S {
 	virtual bool unicorn_init() = 0; // establishes unicorn session; sets configuration
 	virtual bool unicorn_start_acq() = 0; // start acquisition
 	virtual bool unicorn_stop_and_close() = 0;
+	virtual void setActiveStimulus(double fStimHz) { }; // default no-op
 }; // IAcqProvider_S

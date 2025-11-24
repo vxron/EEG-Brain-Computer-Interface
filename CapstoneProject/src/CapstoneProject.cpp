@@ -20,6 +20,10 @@
 #include "acq/UnicornDriver.h"
 #include <fstream>
 
+#ifdef USE_EEG_FILTERS
+#include "utils/Filters.hpp"
+#endif
+
 #ifdef ACQ_BACKEND_FAKE
 #include "acq/FakeAcquisition.h"
 #endif
@@ -32,7 +36,11 @@ void handle_sigint(int) {
     g_stop.store(true,std::memory_order_relaxed);
 }
 
+#ifdef ACQ_BACKEND_FAKE
+void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStoreRef){
+#else
 void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
+#endif
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
 try {
@@ -41,11 +49,12 @@ try {
 #ifdef ACQ_BACKEND_FAKE
     LOG_ALWAYS("PATH=MOCK");
     FakeAcquisition_C::stimConfigs_S fakeCfg{};
-    // Default Values:
-    // fakeCfg.ssvepAmplitude_uV = 20.0;
-    // fakeCfg.noiseSigma_uV     = 5.0;
-    // fakeCfg.leftStimFreq      = 15.0;
-    // fakeCfg.rightStimFreq     = 10.0;
+    // Check FakeAcquisition.h for defaults...
+    fakeCfg.dcDrift.enabled = true;
+    fakeCfg.lineNoise.enabled = true;
+    fakeCfg.alpha.enabled = true;
+    fakeCfg.beta.enabled = true;
+    // random artifacts, alpha and beta sources off for now
 
     FakeAcquisition_C acqDriver(fakeCfg);
 
@@ -55,11 +64,14 @@ try {
 
 #endif
 
+#ifdef USE_EEG_FILTERS
+    EegFilterBank_C filterBank;
+#endif
+
     // somthn to use iacqprovider_s instead of unicorndriver_c directly
     // then we can choose based on acq_backend_fake which provider btwn unicorn and fake to set th eobjec too?
     // also need to updat csv so it logs appropraite measures (all eeg channels) in the acq_bavkend_fake path
 
-	
     if (acqDriver.unicorn_init() == false || acqDriver.unicorn_start_acq() == false){
         LOG_ALWAYS("unicorn_init failed; exiting producer");
         rb.close();
@@ -71,10 +83,20 @@ try {
     // MAIN ACQUISITION LOOP
     while(!g_stop.load(std::memory_order_relaxed)){
         bufferChunk_S chunk{};
+
+#ifdef ACQ_BACKEND_FAKE
+	int currSimFreq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+    acqDriver.setActiveStimulus(static_cast<double>(currSimFreq)); // if 0, backend won't produce sinusoid
+#endif
         
         acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
         tick_count++;
         chunk.tick = tick_count;
+
+#ifdef USE_EEG_FILTERS
+        // before we create window: PREPROCESS CHUNK
+        filterBank.process_chunk(chunk);
+#endif
         
         // blocking push function... will always (eventually) run and return true, 
         // unless queue is closed, in which case we want out
@@ -347,7 +369,11 @@ int main() {
 
     // START THREADS. We pass the ring buffer by reference (std::ref) becauase each thread needs the actual shared 'ringBuf' instance, not just a copy...
     // This builds a new thread that starts executing immediately, running producer_thread_rn in parallel with the main thread (same for cons)
+#ifdef ACQ_BACKEND_FAKE
+    std::thread prod(producer_thread_fn,std::ref(ringBuf), std::ref(stateStore));
+#else
     std::thread prod(producer_thread_fn,std::ref(ringBuf));
+#endif
     std::thread cons(consumer_thread_fn,std::ref(ringBuf), std::ref(stateStore));
     std::thread http(http_thread_fn, std::ref(server));
     std::thread stim(stimulus_thread_fn, std::ref(stateStore));

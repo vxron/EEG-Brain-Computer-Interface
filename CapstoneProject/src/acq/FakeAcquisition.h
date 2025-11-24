@@ -7,13 +7,16 @@
 	The UNICORN_GetData() returns digitized, scaled EEG values in microvolts, so
 	this is the unit used here, representing typical values.
 
-	This header is used by:
-  - Acquisition: reads in chunks and pushes them to the ring buffer.
-
 	Layout contract for dest buffer (matches bufferChunk_S):
   - Time-major interleaved scans:
 	  idx = scan * nCh + ch
   - Units: microvolts (uV)
+
+  NOTE: This sims calib mode only (one specific frequency we're testing based on 
+  state store, see producer thread in main)
+
+  NOTE: Not designed to be used across multiple threads (no atomics)
+  (Should be used in 'producer' only, otherwise race conds could arise)
 
 ==============================================================================
 */
@@ -28,15 +31,24 @@
 class FakeAcquisition_C : public IAcqProvider_S {
 public:
 	// Configs Object (must be declared before in-class usage/declarations)
-	// NOTE: Uses NUM_CH_CHUNK and NUM_SCANS_CHUNK from Types.h for layout
-	// TODO: knobs for signal/noise variation
-	// TODO: on/off for 2nd harmonic
-	// TODO: enable/disable real-time sleeping/timing jitter
+	struct waveComponent_S {
+		double freqHz   = 0.0; // 0 = off, or use enabled flag
+		double amp_uV   = 0.0;
+    	bool   enabled  = false;
+	};
 	struct stimConfigs_S {
+
 		double ssvepAmplitude_uV = 20.0;
 		double noiseSigma_uV = 5.0;
-		double leftStimFreq = 15.0; // Hz
-		double rightStimFreq = 10.0; // Hz
+
+		// Background components (freq, amp (uV), enabled)
+		waveComponent_S dcDrift   { 0.1,  3.0,  false };  // "drift" at 0.1 Hz
+    	waveComponent_S alpha     { 10.0, 4.0,  false };  // 8–12 Hz band
+    	waveComponent_S beta      { 20.0, 3.0,  false };  // 12–30 Hz band
+    	waveComponent_S lineNoise { 60.0, 5.0,  false };  // 60hz noise
+
+		bool occasionalArtifactsEnabled = 0;
+
 	}; // stimConfigs_S
 	
 	// Constructors/Destructors
@@ -59,13 +71,36 @@ public:
 
 private:
 	const double fs = 250.0;
+	stimConfigs_S configs_{}; // default initiliazer _{}
+	
 	double phaseOffset_ = 0; // persistent variable to keep track of phase offset between synthesize_data_stream function calls for continuity
-	void synthesize_data_stream(float* dest, std::size_t numberOfScans); // used by mock_GetData
 	std::size_t sampleCount_ = 0; // running sample counter to stamp each chunk's starting sample index
 	double activeStimulusHz_ = 0.0; // current active stimulus frequency (0 = none)
-	stimConfigs_S configs_{}; // default initiliazer _{}
 
-	// Noise generator state
+	// Random sources for noise gen
 	std::mt19937 rng_;
 	std::normal_distribution<double> noiseNorm_{ 0.0, 1.0 }; // std=1; scaled later
-}; // FakeAcquisition_C
+	std::uniform_real_distribution<double> uni01_{0.0, 1.0};
+
+	// Phase offsets for the superimposed signals
+	double driftPhase_   = 0.0;
+	double alphaPhase_   = 0.0;
+	double betaPhase_   = 0.0;
+	double linePhase_    = 0.0;
+
+	// Artifact generation (blinks, muscle motions, etc)
+	std::size_t artifactSamplesLeft_   = 0;
+	std::size_t samplesToNextArtifact_ = 0;
+
+	// Helpers
+	void synthesize_data_stream(float* dest, std::size_t numberOfScans); // used by mock_GetData
+
+	inline double background_noise_signal(double noise_uV){
+		// per channel Gaussian noise
+		return noise_uV * noiseNorm_(rng_);
+	}
+	inline double stimulus_signal(double sigAmp_uV, double phase){
+		return sigAmp_uV * std::sin(phase);
+	}
+
+};

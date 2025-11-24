@@ -12,6 +12,7 @@ message(STATUS ">>> CMAKE_TOOLCHAIN_FILE='${CMAKE_TOOLCHAIN_FILE}'")
 
 option(USE_FAKE_ACQ "Use fake acquisition backend" ON)
 option(CALIBRATION_MODE "Calibrate Mode to Train Model" ON)
+option(USE_EEG_FILTERS "Use EEG filters for preprocessing" ON)
 
 # Build the subdir that defines the executable
 add_subdirectory(CapstoneProject)
