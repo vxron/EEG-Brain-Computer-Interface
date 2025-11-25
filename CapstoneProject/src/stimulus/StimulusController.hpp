@@ -9,7 +9,7 @@ STIMULUS CONTROLLER : writer
 #include "../utils/Types.h"
 #include "../utils/SWTimer.hpp"
 #include <optional>
-#include "StateStore.hpp"
+#include "../shared/StateStore.hpp"
 #include <deque>
 
 // SINGLETON

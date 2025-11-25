@@ -27,16 +27,29 @@ const viewHome = document.getElementById("view-home");
 const viewInstructions = document.getElementById("view-instructions");
 const viewActiveCalib = document.getElementById("view-active-calib");
 const viewActiveRun = document.getElementById("view-active-run");
+const viewRunOptions = document.getElementById("view-run-options");
+const viewSavedSessions = document.getElementById("view-saved-sessions");
 
-// Instructions specific fields for instruction windows
+// Instructions specific fields for instruction windows (fillable by state store info)
 const elInstrBlockId = document.getElementById("instr-block-id");
 const elInstrFreqHz = document.getElementById("instr-freq-hz");
 const elInstructionsText = document.getElementById("instructions-text");
+
+// Run options-specific fields (fillable by state store info)
+const elRunWelcomeName = document.getElementById("run-welcome-name");
+const elRunLastSubject = document.getElementById("run-last-subject");
+const elRunModelStatus = document.getElementById("run-model-status");
+const elSessionsEmpty = document.getElementById("sessions-empty");
+const elSessionsList = document.getElementById("sessions-list");
 
 // Session control buttons (UI /event HOOKUP to tell c++)
 const btnStartCalib = document.getElementById("btn-start-calib");
 const btnStartRun = document.getElementById("btn-start-run");
 const btnExit = document.getElementById("btn-exit");
+const btnRunStartDefault = document.getElementById("btn-run-start-default");
+const btnRunSavedSessions = document.getElementById("btn-run-saved-sessions");
+const btnSessionsNew = document.getElementById("btn-sessions-new");
+const btnSessionsBack = document.getElementById("btn-sessions-back");
 
 // Timer for browser requests to server
 let pollInterval = null;
@@ -61,7 +74,14 @@ function logLine(msg) {
 // ======================== 3) VIEW HELPERS =========================
 // (1) show the correct stim window when it's time by removing it from 'hidden' css class
 function showView(name) {
-  const allViews = [viewHome, viewInstructions, viewActiveCalib, viewActiveRun];
+  const allViews = [
+    viewHome,
+    viewInstructions,
+    viewActiveCalib,
+    viewActiveRun,
+    viewRunOptions,
+    viewSavedSessions,
+  ];
 
   for (const v of allViews) {
     v.classList.add("hidden");
@@ -79,6 +99,12 @@ function showView(name) {
       break;
     case "active_run":
       viewActiveRun.classList.remove("hidden");
+      break;
+    case "run_options":
+      viewRunOptions.classList.remove("hidden");
+      break;
+    case "saved_sessions":
+      viewSavedSessions.classList.remove("hidden");
       break;
     default:
       viewHome.classList.remove("hidden");
@@ -131,6 +157,12 @@ function intToLabel(enumType, integer) {
         case 3:
           return "UIState_Home";
         case 4:
+          return "UIState_Saved_Sessions";
+        case 5:
+          return "UIState_Run_Options";
+        case 6:
+          return "UIState_Hardware_Checks";
+        case 7:
           return "UIState_None";
         default:
           return `Unknown (${integer})`;
@@ -201,8 +233,8 @@ function updateUiFromState(data) {
   // run mode flag cleared by default
   document.body.classList.remove("run-mode");
 
-  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = None
-  if (stimState === 3 /* Home */ || stimState === 4 /* None */) {
+  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 7 = None
+  if (stimState === 3 /* Home */ || stimState === 7 /* None */) {
     stopCalibFlicker();
     stopRunFlicker();
     setFullScreenMode(false);
@@ -229,6 +261,27 @@ function updateUiFromState(data) {
     const runLeftHz = data.freq_right_hz ?? data.freq_hz ?? 0;
     const runRightHz = data.freq_left_hz ?? data.freq_hz ?? 0;
     startRunFlicker(runLeftHz, runRightHz);
+  } else if (stimState === 4 /* Saved Sessions */) {
+    stopCalibFlicker();
+    stopRunFlicker();
+    setFullScreenMode(false);
+    showView("saved_sessions");
+
+    // TODO: render session list from backend
+  } else if (stimState === 5 /* Run Options */) {
+    stopCalibFlicker();
+    stopRunFlicker();
+    setFullScreenMode(false);
+    showView("run_options");
+
+    // TODO: SET THIS UP (populating welcome info from state store)
+    const subj = data.active_subject_id || "friend";
+    elRunWelcomeName.textContent = subj;
+    elRunLastSubject.textContent = subj;
+    const modelReady = data.is_model_ready;
+    elRunModelStatus.textContent = modelReady
+      ? "Model ready"
+      : "No trained model yet, please run calibration";
   }
 }
 
@@ -443,7 +496,7 @@ function stopRunFlicker() {
 // =============== 11) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
 // Helper to send a session event to C++
 async function sendSessionEvent(kind) {
-  // IMPORTANT: kind is "start_calib" or "start_run" or "exit" for now
+  // IMPORTANT: kind is defined sporadically in init(), e.g. "start_calib", "start_run"
   const payload = { action: kind };
 
   try {
@@ -482,11 +535,32 @@ async function init() {
   btnStartCalib.addEventListener("click", () => {
     sendSessionEvent("start_calib");
   });
+
   btnStartRun.addEventListener("click", () => {
     sendSessionEvent("start_run");
   });
+
   btnExit.addEventListener("click", () => {
     sendSessionEvent("exit");
+  });
+
+  btnRunStartDefault.addEventListener("click", () => {
+    // maps to UIStateEvent_UserPushesStartDefault
+    sendSessionEvent("start_default");
+  });
+
+  btnRunSavedSessions.addEventListener("click", () => {
+    // maps to UIStateEvent_UserPushesSessions
+    sendSessionEvent("show_sessions");
+  });
+
+  btnSessionsNew.addEventListener("click", () => {
+    // maps to UIStateEvent_UserSelectsNewSession
+    sendSessionEvent("new_session");
+  });
+
+  btnSessionsBack.addEventListener("click", () => {
+    sendSessionEvent("back_to_run_options");
   });
 }
 // Init as soon as page loads

@@ -341,6 +341,44 @@ body {
   color: var(--text-muted);
 }
 
+/* SESSIONS LIST (CLICKABLE SAVED SESSIONS) */
+
+.sessions-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.sessions-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+
+.sessions-list li:hover {
+  background: rgba(30, 64, 175, 0.65);
+  transform: translateY(-1px);
+}
+
+.sessions-list .session-name {
+  font-weight: 500;
+}
+
+.sessions-list .session-meta {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
 /* FULLSCREEN MODE (CALIB & RUN) */
 
 /* When in fullscreen, hide sidebar + log panel, let main panel fill */

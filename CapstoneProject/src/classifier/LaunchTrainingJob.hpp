@@ -8,7 +8,7 @@
 #pragma once
 #include <string>
 #include <filesystem>
-#include "../stimulus/StateStore.hpp"
+#include "../shared/StateStore.hpp"
 
 class TrainingJob_C {
 public:

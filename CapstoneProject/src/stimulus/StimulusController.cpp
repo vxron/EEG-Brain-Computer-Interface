@@ -11,25 +11,29 @@ static struct state_transition{
 
 static const state_transition state_transition_table[] = {
     // from                           event                                     to
+    {UIState_None,            UIStateEvent_ConnectionSuccessful,           UIState_Home},
+
+    {UIState_Home,            UIStateEvent_UserPushesStartCalib,           UIState_Instructions},
+    {UIState_Home,            UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Home,            UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    
     {UIState_Active_Calib,    UIStateEvent_StimControllerTimeout,          UIState_Instructions},
     {UIState_Active_Calib,    UIStateEvent_StimControllerTimeoutEndCalib,  UIState_Home},
     {UIState_Instructions,    UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
-      
-    {UIState_None,            UIStateEvent_ConnectionSuccessful,           UIState_Home},
-      
-    {UIState_Home,            UIStateEvent_UserPushesStartCalib,           UIState_Instructions},
-    {UIState_Home,            UIStateEvent_UserPushesStartRun,             UIState_Active_Run},
       
     {UIState_Active_Calib,    UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Instructions,    UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Active_Run,      UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Saved_Sessions,  UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Run_Options,     UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Hardware_Checks, UIStateEvent_UserPushesExit,                 UIState_Home},
 
     {UIState_Run_Options,     UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
     {UIState_Saved_Sessions,  UIStateEvent_UserSelectsSession,             UIState_Active_Run},
     {UIState_Saved_Sessions,  UIStateEvent_UserSelectsNewSession,          UIState_Instructions},
-    {UIState_Run_Options,     UIStateEvent_UserPushesStartDefault,         UIState_Active_Run}
+    {UIState_Saved_Sessions,  UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Run_Options,     UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
+    
 };
 // ^todo: add popup if switching btwn run <-> calib: r u sure u want to exit???
 
@@ -170,7 +174,7 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             currentWindowTimer_.stop_timer();
             if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
                 // calib over... need to save csv and trigger python training script
-                TrainingJob_C job(); // need info from somewhere
+                TrainingJob_C job(); // need info from somewhere (TODO -> saved sessions in state store)
             }
             break;
         

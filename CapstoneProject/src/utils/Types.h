@@ -78,6 +78,7 @@ enum UIState_E {
 	UIState_Home,
 	UIState_Saved_Sessions, // from run mode -> can press another button to select saved session 
 	UIState_Run_Options,
+	UIState_Hardware_Checks, // Hadeel this is ur state
 	UIState_None,
 };
 
@@ -99,6 +100,7 @@ enum UIStateEvent_E {
 	UIStateEvent_UserSelectsSession,
 	UIStateEvent_UserSelectsNewSession,
 	UIStateEvent_UserPushesStartDefault,
+	UIStateEvent_UserPushesHardwareChecks, // Hadeel this is ur state transition
 	UIStateEvent_None,
 };
 

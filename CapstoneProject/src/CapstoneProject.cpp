@@ -3,7 +3,7 @@
 #include <iostream>
 #include "utils/RingBuffer.hpp"
 #include "utils/Types.h"
-#include "stimulus/StateStore.hpp"
+#include "shared/StateStore.hpp"
 #include "stimulus/HttpServer.hpp"
 #include "acq/WindowConfigs.hpp"
 #include <atomic>

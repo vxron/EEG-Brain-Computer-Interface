@@ -38,9 +38,37 @@ struct StateStore_s{
         std::atomic<std::string> g_active_subject_id{""};
         std::atomic<std::string> g_active_session_id{""};
     };
-    
     sessionInfo_s sessionInfo{};
 
+    // LIST OF SAVED SESSIONS
+    struct SavedSession_s {
+        std::string id;          // unique ID (e.g. "veronica_2025-11-25T14-20")
+        std::string label;       // human label for UI list ("Nov 25, 14:20 (Veronica)")
+        std::string subject;     // subject_id
+        std::string session;     // session_id
+        std::string created_at;  // ISO time string
+        std::string model_dir;   // model dir/path to load from
+    };
+
+    // vector of all saved sessions for storage, guarded with blocking mutex (fine since infrequent updates)
+    mutable std::mutex saved_sessions_mutex;
+    std::vector<SavedSession_s> saved_sessions;
+
+    // Helper: add a new saved session (called from StimulusController / training success)
+    void add_saved_session(const SavedSession_s& s) {
+        // blocks until mutex is available for acquiring
+        std::lock_guard<std::mutex> lock(saved_sessions_mutex);
+        saved_sessions.push_back(s);
+    } // <-- lock goes out of scope here, mutex is automatically released
+
+    // Helper: snapshot the list for HTTP /state (for display on sessions page)
+    std::vector<SavedSession_s> snapshot_saved_sessions() const {
+        // blocks until mutex is available for acquiring
+        std::lock_guard<std::mutex> lock(saved_sessions_mutex);
+        return saved_sessions;
+    }
+
 };
+
 
 

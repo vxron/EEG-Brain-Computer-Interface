@@ -12,7 +12,7 @@ HTTP SERVER : READER
 #pragma once
 #include "../../cpp-httplib/httplib.h"
 #include "../utils/Logger.hpp"
-#include "StateStore.hpp"
+#include "../shared/StateStore.hpp"
 
 // LEARN HOW TO SSH INTO SERVER FROM VS CODE
 // then install apt install nginx (preferred web server)

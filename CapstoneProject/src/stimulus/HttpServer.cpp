@@ -62,19 +62,24 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_right_hz  = stateStoreRef_.g_freq_right_hz.load(std::memory_order_acquire);
     int freq_left_hz_e = static_cast<int>(stateStoreRef_.g_freq_left_hz_e.load(std::memory_order_acquire));
     int freq_right_hz_e= static_cast<int>(stateStoreRef_.g_freq_right_hz_e.load(std::memory_order_acquire));
+    // Active session info
+    bool is_model_ready = stateStoreRef_.sessionInfo.g_isModelReady.load(std::memory_order_acquire);
+    std::string active_subject_id = stateStoreRef_.sessionInfo.g_active_subject_id.load(std::memory_order_acquire);
 
     // 2) build json string manually
     std::ostringstream oss;
     oss << "{"
-        << "\"seq\":"            << seq             << ","
-        << "\"stim_window\":"    << stim_window     << ","
-        << "\"block_id\":"       << block_id        << ","
-        << "\"freq_hz\":"        << freq_hz         << ","
-        << "\"freq_hz_e\":"      << freq_hz_e       << ","
-        << "\"freq_left_hz\":"   << freq_left_hz    << ","
-        << "\"freq_right_hz\":"  << freq_right_hz   << ","
-        << "\"freq_left_hz_e\":" << freq_left_hz_e  << ","
-        << "\"freq_right_hz_e\":"<< freq_right_hz_e
+        << "\"seq\":"                 << seq                                 << ","
+        << "\"stim_window\":"         << stim_window                         << ","
+        << "\"block_id\":"            << block_id                            << ","
+        << "\"freq_hz\":"             << freq_hz                             << ","
+        << "\"freq_hz_e\":"           << freq_hz_e                           << ","
+        << "\"freq_left_hz\":"        << freq_left_hz                        << ","
+        << "\"freq_right_hz\":"       << freq_right_hz                       << ","
+        << "\"freq_left_hz_e\":"      << freq_left_hz_e                      << ","
+        << "\"freq_right_hz_e\":"     << freq_right_hz_e                     << ","
+        << "\"is_model_ready\":"      << (is_model_ready ? "true" : "false") << ","
+        << "\"active_subject_id\":\"" << active_subject_id                   << "\""
         << "}";
 
     std::string json_snapshot = oss.str();
@@ -113,6 +118,14 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserPushesStartRun;
                 } else if (action == "exit"){
                     ev = UIStateEvent_UserPushesExit;
+                } else if (action == "start_default"){
+                    ev = UIStateEvent_UserPushesStartDefault;
+                } else if (action == "show_sessions"){
+                    ev = UIStateEvent_UserPushesSessions;
+                } else if (action == "new_session"){
+                    ev = UIStateEvent_UserSelectsNewSession;
+                } else if (action == "back_to_run_options"){
+                    ev = UIStateEvent_UserPushesStartRun;
                 }
             }
         }

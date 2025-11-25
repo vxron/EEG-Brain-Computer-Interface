@@ -1,5 +1,5 @@
 #include "../src/stimulus/HttpServer.hpp"
-#include "../src/stimulus/StateStore.hpp"
+#include "../src/shared/StateStore.hpp"
 #include "../src/utils/Types.h"
 #include "../src/stimulus/StimulusController.hpp"
 #include "../src/utils/Logger.hpp"
