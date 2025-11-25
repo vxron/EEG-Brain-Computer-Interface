@@ -2,10 +2,11 @@
 #include "../utils/Types.h"
 #include <atomic>
 /* STATESTORE
---> A single source of truth for all main c++ threads + client (js) to read:
+--> A single source of truth for all main c++ threads + client (js) to read things like:
     1) current UI state
     2) current stimulus frequency label 
     3) associated metadata
+    (...) and many more :,)
 */
 
 struct StateStore_s{
@@ -29,6 +30,17 @@ struct StateStore_s{
     std::atomic<TestFreq_E> g_freq_right_hz_e{TestFreq_None};
     std::atomic<int> g_freq_right_hz{0};
     std::atomic<int> g_freq_left_hz{0};
+
+    // Training status (Python) + subject / session ID
+    struct sessionInfo_s {
+        std::atomic<bool> g_isModelReady{0};
+        std::atomic<std::string> g_active_model_path{""}; // where we pull current classifier from
+        std::atomic<std::string> g_active_subject_id{""};
+        std::atomic<std::string> g_active_session_id{""};
+    };
+    
+    sessionInfo_s sessionInfo{};
+
 };
 
 

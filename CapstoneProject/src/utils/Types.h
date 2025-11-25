@@ -72,11 +72,12 @@ enum ActuatorState_E {
 };
 
 enum UIState_E {
-	UIState_Active_Run,
+	UIState_Active_Run, // selects most recent session as default
 	UIState_Active_Calib,
 	UIState_Instructions, // also for calib
 	UIState_Home,
-	UIState_Saved_Sessions, // saves a state store cfgs (protocol) based on training + an onnx classifier path
+	UIState_Saved_Sessions, // from run mode -> can press another button to select saved session 
+	UIState_Run_Options,
 	UIState_None,
 };
 
@@ -95,6 +96,9 @@ enum UIStateEvent_E {
 	UIStateEvent_UserPushesExit,
 	UIStateEvent_ConnectionSuccessful,
 	UIStateEvent_UserPushesSessions,
+	UIStateEvent_UserSelectsSession,
+	UIStateEvent_UserSelectsNewSession,
+	UIStateEvent_UserPushesStartDefault,
 	UIStateEvent_None,
 };
 

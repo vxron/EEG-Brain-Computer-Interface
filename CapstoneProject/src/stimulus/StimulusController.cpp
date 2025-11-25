@@ -1,6 +1,7 @@
 #include "StimulusController.hpp"
 #include <thread>
 #include "../utils/Logger.hpp"
+#include "../classifier/LaunchTrainingJob.hpp"
 
 static struct state_transition{
     UIState_E from;
@@ -22,14 +23,16 @@ static const state_transition state_transition_table[] = {
     {UIState_Active_Calib,    UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Instructions,    UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Active_Run,      UIStateEvent_UserPushesExit,                 UIState_Home},
-  
-    // To implement later:  
     {UIState_Saved_Sessions,  UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Home,            UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
+    {UIState_Run_Options,     UIStateEvent_UserPushesExit,                 UIState_Home},
+
+    {UIState_Run_Options,     UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
+    {UIState_Saved_Sessions,  UIStateEvent_UserSelectsSession,             UIState_Active_Run},
+    {UIState_Saved_Sessions,  UIStateEvent_UserSelectsNewSession,          UIState_Instructions},
+    {UIState_Run_Options,     UIStateEvent_UserPushesStartDefault,         UIState_Active_Run}
 };
 // ^todo: add popup if switching btwn run <-> calib: r u sure u want to exit???
 
-// process_inputs to determine event
 
 StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::optional<trainingProto_S> trainingProtocol) : state_(UIState_None), stateStoreRef_(stateStoreRef) {
     if (trainingProtocol.has_value()){
@@ -160,12 +163,17 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
     }
 }
 
-void StimulusController_C::onStateExit(UIState_E state){
+void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
     switch(state){
         case UIState_Active_Calib:
         case UIState_Instructions:
             currentWindowTimer_.stop_timer();
+            if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
+                // calib over... need to save csv and trigger python training script
+                TrainingJob_C job(); // need info from somewhere
+            }
             break;
+        
         case UIState_Active_Run:
         // idk yet whether or not we want to be clearing here !
             stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
@@ -185,7 +193,7 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
         const auto& t = state_transition_table[i];
 		if(state_ == t.from && ev == t.event) {
 			// match found
-			onStateExit(state_);
+			onStateExit(state_, ev);
             prevState_ = state_;
 			state_ = t.to;
 			onStateEnter(prevState_, state_);
