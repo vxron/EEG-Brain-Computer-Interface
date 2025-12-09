@@ -1,0 +1,2 @@
+** Notes on CSV:
+- Reason it starts at chunk 168 is because we added the guard for calib mode to only register windows in the middle of active blocks (edge trimming) to ensure purity.

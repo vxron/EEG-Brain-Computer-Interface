@@ -64,7 +64,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_right_hz_e= static_cast<int>(stateStoreRef_.g_freq_right_hz_e.load(std::memory_order_acquire));
     // Active session info
     bool is_model_ready = stateStoreRef_.sessionInfo.g_isModelReady.load(std::memory_order_acquire);
-    std::string active_subject_id = stateStoreRef_.sessionInfo.g_active_subject_id.load(std::memory_order_acquire);
+    std::string active_subject_id = stateStoreRef_.sessionInfo.get_active_subject_id();
 
     // 2) build json string manually
     std::ostringstream oss;

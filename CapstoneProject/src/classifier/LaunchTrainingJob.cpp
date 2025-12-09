@@ -12,12 +12,13 @@ void TrainingJob_C::launch_training_job(StateStore_s& stateStore){
     logger::tlabel = "launchTrainingJob_C";
     const std::filesystem::path scriptPath =
         R"(C:\Users\fsdma\capstone\capstone\CapstoneProject\model train\python\train_svm.py)";
+        // ^ FIX THIS SO ITS NOT LOCAL TO MY PC
     
     // Spawn worker thread
     std::thread([&stateStore, this, scriptPath]() {
         std::stringstream ss;
         // MUST MATCH PYTHON TRAINING SCRIPT PATH AND ARGS (HADEEL)
-        ss << "python scripts/train_svm.py"
+        ss << "python "
                << "\"" << scriptPath.string() << "\""
                << " --data \""     << data_dir_.string()   << "\""
                << " --model \""    << model_dir_.string()  << "\""
@@ -34,8 +35,8 @@ void TrainingJob_C::launch_training_job(StateStore_s& stateStore){
         if(rc == 0){
             // success - update state store
             stateStore.sessionInfo.g_isModelReady.store(true, std::memory_order_release);
-            stateStore.sessionInfo.g_active_subject_id.store(subject_id_, std::memory_order_release);
-            stateStore.sessionInfo.g_active_model_path.store(model_dir_.string(), std::memory_order_release);
+            stateStore.sessionInfo.set_active_model_path(model_dir_.string());
+            stateStore.sessionInfo.set_active_subject_id(subject_id_);
         }
         else {
             // failed
