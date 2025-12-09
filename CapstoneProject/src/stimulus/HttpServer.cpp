@@ -63,8 +63,9 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_left_hz_e = static_cast<int>(stateStoreRef_.g_freq_left_hz_e.load(std::memory_order_acquire));
     int freq_right_hz_e= static_cast<int>(stateStoreRef_.g_freq_right_hz_e.load(std::memory_order_acquire));
     // Active session info
-    bool is_model_ready = stateStoreRef_.sessionInfo.g_isModelReady.load(std::memory_order_acquire);
+    bool is_model_ready = stateStoreRef_.sessionInfo.g_isModelReady.load(std::memory_order_acquire); // for training job monitoring
     std::string active_subject_id = stateStoreRef_.sessionInfo.get_active_subject_id();
+    int popup = stateStoreRef_.g_ui_popup.load(std::memory_order_acquire); // any popup event
 
     // 2) build json string manually
     std::ostringstream oss;
@@ -79,6 +80,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
         << "\"freq_left_hz_e\":"      << freq_left_hz_e                      << ","
         << "\"freq_right_hz_e\":"     << freq_right_hz_e                     << ","
         << "\"is_model_ready\":"      << (is_model_ready ? "true" : "false") << ","
+        << "\"popup\":"               << popup                               << ","
         << "\"active_subject_id\":\"" << active_subject_id                   << "\""
         << "}";
 
@@ -126,6 +128,9 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserSelectsNewSession;
                 } else if (action == "back_to_run_options"){
                     ev = UIStateEvent_UserPushesStartRun;
+                } else if (action == "ack_popup"){
+                    // clear popup when user presses OK
+                    stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
                 }
             }
         }

@@ -379,6 +379,55 @@ body {
   font-size: 0.75rem;
 }
 
+/* MODAL OVERLAY (POPUPS) */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1500;
+}
+
+.modal {
+  background: #020617;
+  border-radius: 16px;
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+  padding: 18px 20px;
+  max-width: 380px;
+  width: 100%;
+}
+
+.modal h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+
+.modal p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* subtle entrance animation */
+.modal-backdrop:not(.hidden) .modal {
+  animation: modal-pop-in 160ms ease-out;
+}
+
+@keyframes modal-pop-in {
+  from {
+    transform: translateY(6px) scale(0.98);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
 /* FULLSCREEN MODE (CALIB & RUN) */
 
 /* When in fullscreen, hide sidebar + log panel, let main panel fill */

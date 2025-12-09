@@ -51,6 +51,14 @@ const btnRunSavedSessions = document.getElementById("btn-run-saved-sessions");
 const btnSessionsNew = document.getElementById("btn-sessions-new");
 const btnSessionsBack = document.getElementById("btn-sessions-back");
 
+// Modal (POPUP) DOM elements
+const elModalBackdrop = document.getElementById("modal-backdrop");
+const elModalTitle = document.getElementById("modal-title");
+const elModalBody = document.getElementById("modal-body");
+const btnModalOk = document.getElementById("modal-ok"); // ack btn for user to accept popup
+// Track whether popup is currently visible
+let modalVisible = false;
+
 // Timer for browser requests to server
 let pollInterval = null;
 let pollActive = true;
@@ -124,6 +132,24 @@ function setFullScreenMode(enabled) {
       btnExit.classList.add("hidden");
     }
   }
+}
+
+// (3) popup handling (helpers to show and hide popup)
+function showModal(title, body) {
+  if (elModalTitle && title) elModalTitle.textContent = title;
+  if (elModalBody && body) elModalBody.textContent = body;
+
+  if (elModalBackdrop) {
+    elModalBackdrop.classList.remove("hidden");
+    modalVisible = true;
+  }
+}
+
+function hideModal() {
+  if (elModalBackdrop) {
+    elModalBackdrop.classList.add("hidden");
+  }
+  modalVisible = false;
 }
 
 // ==================== 4) CONNECTION STATUS HELPER =====================
@@ -282,6 +308,33 @@ function updateUiFromState(data) {
     elRunModelStatus.textContent = modelReady
       ? "Model ready"
       : "No trained model yet, please run calibration";
+  }
+
+  // HANDLE POPUPS
+  const popupEnumIdx = data.popup ?? 0; // 0 is fallback
+
+  // if backend says "show popup" and it's not visible, open it
+  if (popupEnumIdx != 0 && !modalVisible) {
+    switch (popupEnumIdx) {
+      case 1: // UIPopup_MustCalibBeforeRun
+        showModal(
+          "No trained models found",
+          "Please complete at least one calibration session before trying to start run mode."
+        );
+        break;
+      default:
+        showModal(
+          "DEBUG MSG",
+          "we should not reach here! check that UIPopup Enum matches JS cases"
+        );
+        break;
+    }
+  }
+
+  // probably never need this since js handles hidemodal from ack btn press, but just in case:
+  // hide popup if backend says its time to hide (e.g. state change)
+  if (popupEnumIdx == 0 && modalVisible) {
+    hideModal();
   }
 }
 
@@ -562,6 +615,15 @@ async function init() {
   btnSessionsBack.addEventListener("click", () => {
     sendSessionEvent("back_to_run_options");
   });
+
+  if (btnModalOk) {
+    // if a popup is visible, wait for user ack
+    btnModalOk.addEventListener("click", () => {
+      hideModal();
+      // tell backend to clear popup in statestore
+      sendSessionEvent("ack_popup");
+    });
+  }
 }
 // Init as soon as page loads
 window.addEventListener("DOMContentLoaded", () => {
