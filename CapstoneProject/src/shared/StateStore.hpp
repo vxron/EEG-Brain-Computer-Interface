@@ -1,6 +1,7 @@
 #pragma once
 #include "../utils/Types.h"
 #include <atomic>
+#include <mutex>
 /* STATESTORE
 --> A single source of truth for all main c++ threads + client (js) to read things like:
     1) current UI state
@@ -25,6 +26,8 @@ struct StateStore_s{
     // So that UI can POST events to stimulus controller state machine:
     std::atomic<UIStateEvent_E> g_ui_event{UIStateEvent_None};
 
+    std::atomic<UIPopup_E> g_ui_popup{UIPopup_None};
+
     // run mode frequency pair to be sent to ui
     std::atomic<TestFreq_E> g_freq_left_hz_e{TestFreq_None};
     std::atomic<TestFreq_E> g_freq_right_hz_e{TestFreq_None};
@@ -34,9 +37,29 @@ struct StateStore_s{
     // Training status (Python) + subject / session ID
     struct sessionInfo_s {
         std::atomic<bool> g_isModelReady{0};
-        std::atomic<std::string> g_active_model_path{""}; // where we pull current classifier from
-        std::atomic<std::string> g_active_subject_id{""};
-        std::atomic<std::string> g_active_session_id{""};
+        // strings must be mutex-protected (proceed 1 at a time)
+        mutable std::mutex mtx_;
+        std::string g_active_model_path;
+        std::string g_active_subject_id;
+        std::string g_active_session_id;
+
+        void set_active_model_path(const std::string& v) {
+            std::lock_guard<std::mutex> lock(mtx_);
+            g_active_model_path = v; // automatically unlocks mtx_
+        }
+        std::string get_active_model_path() const {
+            std::lock_guard<std::mutex> lock(mtx_);
+            return g_active_model_path; // automatically unlocks mtx_
+        }
+
+        void set_active_subject_id(const std::string& v) {
+            std::lock_guard<std::mutex> lock(mtx_);
+            g_active_subject_id = v;
+        }
+        std::string get_active_subject_id() const {
+            std::lock_guard<std::mutex> lock(mtx_);
+            return g_active_subject_id;
+        }
     };
     sessionInfo_s sessionInfo{};
 

@@ -30,7 +30,6 @@ target_sources(CapstoneProject
       src/utils/Types.h
       src/utils/RingBuffer.hpp
       src/utils/RingBuffer.tpp   # fine; it’s header-only
-      src/utils/ModelStore.h
       src/acq/IAcqProvider.h
       src/acq/FakeAcquisition.h
       src/acq/UnicornDriver.h

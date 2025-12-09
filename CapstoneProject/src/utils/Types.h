@@ -92,6 +92,7 @@ enum UIStateEvent_E {
 	UIStateEvent_StimControllerTimeout, // switch btwn instructions/active during calib
 	UIStateEvent_StimControllerTimeoutEndCalib,
 	UIStateEvent_UserPushesStartRun,
+	UIStateEvent_UserPushesStartRunInvalid,
 	UIStateEvent_UserPushesStartCalib,
 	UIStateEvent_LostConnection,
 	UIStateEvent_UserPushesExit,
@@ -102,6 +103,12 @@ enum UIStateEvent_E {
 	UIStateEvent_UserPushesStartDefault,
 	UIStateEvent_UserPushesHardwareChecks, // Hadeel this is ur state transition
 	UIStateEvent_None,
+};
+
+enum UIPopup_E {
+	UIPopup_None,
+	UIPopup_MustCalibBeforeRun,
+	UIPopup_ModelFailedToLoad,
 };
 
 enum BitOperation_E {

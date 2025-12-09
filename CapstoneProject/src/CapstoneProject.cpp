@@ -206,7 +206,10 @@ try{
         // 1) ========= before we slide/build new window: read snapshot of ui_state and freq ============
         currState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
         if((currState == UIState_Instructions || currState == UIState_Home || currState == UIState_None)){
-            // don't build window (this is an acceptable latency)
+            // pop but don't build window 
+            // need to pop bcuz need to prevent buffer overflow 
+            // TODO: clean up implementation to always pull/pop and then save window logic to end
+            rb.pop(&temp);
             continue; //back to top while loop
         }
         // save this as prev state to check after window is built to make sure UI state hasn't changed in between

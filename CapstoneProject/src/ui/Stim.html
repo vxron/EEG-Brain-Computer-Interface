@@ -186,6 +186,20 @@
 
         <!-- HADEEL ADD HARDWARE CHECKS VIEW HERE -->
 
+        <!-- MODAL OVERLAY (popups) -->
+        <div id="modal-backdrop" class="modal-backdrop hidden">
+          <div class="modal">
+            <h3 id="modal-title">Notice</h3>
+            <p id="modal-body">
+              You must complete at least one calibration session before starting
+              run mode.
+            </p>
+            <div class="button-row" style="margin-top: 10px">
+              <button id="modal-ok" class="btn primary">OK</button>
+            </div>
+          </div>
+        </div>
+
         <!-- LOG PANEL (small strip at the bottom) -->
         <section class="log-panel">
           <h3>Event Log</h3>
@@ -194,6 +208,6 @@
       </main>
     </div>
 
-    <script src="Stim.js?v=20251119-5"></script>
+    <script src="Stim.js?v=20251119-9"></script>
   </body>
 </html>

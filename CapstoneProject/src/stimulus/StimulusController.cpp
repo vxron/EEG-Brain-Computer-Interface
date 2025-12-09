@@ -96,6 +96,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
+            //stateStoreRef_->g_ui_popup.store(UIPopup_None);
             break;
         }
         
@@ -155,9 +156,26 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             break;
         }
 
+        case UIState_Run_Options:
+            stateStoreRef_->g_ui_state.store(UIState_Run_Options, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+            stateStoreRef_->g_block_id.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
+            break;
+
+        case UIState_Saved_Sessions:
+            stateStoreRef_->g_ui_state.store(UIState_Saved_Sessions, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+            stateStoreRef_->g_block_id.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
+            break;
+
         case UIState_None: {
             // “offline” / not connected / shut down
             stateStoreRef_->g_ui_state.store(UIState_None, std::memory_order_release);
+            stateStoreRef_->g_ui_popup.store(UIPopup_None);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             break;
         }
@@ -213,7 +231,19 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     UIStateEvent_E currEvent = stateStoreRef_->g_ui_event.load(std::memory_order_acquire);
     if(currEvent != UIStateEvent_None){
         LOG_ALWAYS("SC: detected UI event=" << static_cast<int>(currEvent));
-        // a new event hasn't been detected yet !
+        
+        // special case where user is trying to press a btn that they shouldn't be allowed yet
+        // want to rtn event w 'invalid' tag
+        if(currEvent == UIStateEvent_UserPushesStartRun){
+            std::lock_guard<std::mutex> lock(stateStoreRef_->saved_sessions_mutex);
+            size_t existingSessions = stateStoreRef_->saved_sessions.size();
+            if(existingSessions == 0) {
+                stateStoreRef_->g_ui_popup.store(UIPopup_MustCalibBeforeRun, std::memory_order_release);
+                stateStoreRef_->g_ui_event.store(UIStateEvent_None, std::memory_order_release);
+                return std::nullopt; // swallow event; no transition
+            }
+        }
+
         // reset g_ui_event to NONE for next event
         stateStoreRef_->g_ui_event.store(UIStateEvent_None, std::memory_order_release);
         // return
