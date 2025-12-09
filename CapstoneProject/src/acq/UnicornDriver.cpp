@@ -55,16 +55,22 @@ bool UnicornDriver_C::pick_first_device(UNICORN_DEVICE_SERIAL& out_serial, BOOL 
   return true;
 }
 
-bool UnicornDriver_C::reset_and_enable_eeg_channels_only(UNICORN_HANDLE &handle){
+bool UnicornDriver_C::set_configuration(UNICORN_HANDLE &handle){
     UNICORN_AMPLIFIER_CONFIGURATION cfg{}; // default init
     UCHECK(UNICORN_GetConfiguration(handle,&cfg));
-    // reset
+    // 1) disable all channels
     for(int ch=0;ch<UNICORN_TOTAL_CHANNELS_COUNT;ch++){
         cfg.Channels[ch].enabled = 0;
     }
-    // set eeg channels
+    
+    // 2) get channel labels and set eeg channels only
+    channelLabels_.clear();
+    channelLabels_.reserve(UNICORN_EEG_CHANNELS_COUNT);
+    
     for(int ch=UNICORN_EEG_CONFIG_INDEX;ch<(UNICORN_EEG_CONFIG_INDEX+UNICORN_EEG_CHANNELS_COUNT);ch++){
         cfg.Channels[ch].enabled = 1;
+        // store labels in order
+        channelLabels_.emplace_back(cfg.Channels[ch].name); // char name[32] -> unicorn exposes c style array for name
     }
     UCHECK(UNICORN_SetConfiguration(handle,&cfg));
     return true;
@@ -84,8 +90,10 @@ bool UnicornDriver_C::unicorn_init(){
 	// 2) Open the device and set up configs for EEG only
 	UCHECK(UNICORN_OpenDevice(serial, &handle));
 	LOG_ALWAYS("Device opened.");
-	reset_and_enable_eeg_channels_only(handle);
+	set_configuration(handle);
+    numChannels_ = (int)channelLabels_.size();
 	LOG_ALWAYS("Set up EEG.");
+
 	return true;
 }
 

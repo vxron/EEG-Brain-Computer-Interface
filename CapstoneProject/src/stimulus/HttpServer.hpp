@@ -50,5 +50,7 @@ private:
     void handle_post_event(const httplib::Request& req, httplib::Response& res); // accept small UI cmds (JSON)
     void handle_post_ready(const httplib::Request& req, httplib::Response& res); // accept page telemetry (refresh Hz)
     void handle_options_and_set(const httplib::Request& req, httplib::Response& res); // CORS preflight
+    void handle_get_quality(const httplib::Request& req, httplib::Response& res);
+    void handle_get_eeg(const httplib::Request& req, httplib::Response& res);
     void write_json(httplib::Response& res, std::string_view json_body) const;
 }; // HttpServer_C

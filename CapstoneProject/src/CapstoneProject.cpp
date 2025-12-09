@@ -36,11 +36,8 @@ void handle_sigint(int) {
     g_stop.store(true,std::memory_order_relaxed);
 }
 
-#ifdef ACQ_BACKEND_FAKE
+
 void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStoreRef){
-#else
-void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb){
-#endif
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
 try {
@@ -79,6 +76,31 @@ try {
     };
 
     size_t tick_count = 0;
+
+    // Channel configs
+    int n_ch = acqDriver.getNumChannels();
+    if (n_ch <= 0 || n_ch > NUM_CH_CHUNK) {
+        n_ch = NUM_CH_CHUNK; // clamp defensively
+    }
+    stateStoreRef.g_n_eeg_channels.store(n_ch, std::memory_order_release);
+
+    std::vector<std::string> labels;
+    acqDriver.getChannelLabels(labels);
+    if (labels.size() < static_cast<size_t>(n_ch)) {
+        // Fallback: synthesize generic labels for missing ones
+        for (int i = static_cast<int>(labels.size()); i < n_ch; ++i) {
+            labels.emplace_back("Ch" + std::to_string(i + 1));
+        }
+    }
+
+    // assume labels.size() >= n_ch (checked above)
+    for (int i = 0; i < n_ch; ++i) {
+        stateStoreRef.eeg_channel_labels[i] = labels[i];
+        stateStoreRef.eeg_channel_enabled[i] = true;
+    }
+    for (int i = n_ch; i < NUM_CH_CHUNK; ++i) {
+        stateStoreRef.eeg_channel_enabled[i] = false;
+    }
     
     // MAIN ACQUISITION LOOP
     while(!g_stop.load(std::memory_order_relaxed)){
@@ -97,6 +119,9 @@ try {
         // before we create window: PREPROCESS CHUNK
         filterBank.process_chunk(chunk);
 #endif
+        // Update state store with this new chunk for UI vis
+        stateStoreRef.g_hasEegChunk.store(true, std::memory_order_release);
+        stateStoreRef.set_lastEegChunk(chunk);
         
         // blocking push function... will always (eventually) run and return true, 
         // unless queue is closed, in which case we want out
@@ -137,6 +162,8 @@ try{
     bool csv_opened = false;
     size_t rows_written = 0;
     // lambda helper for ensuring csv is open when trying to log
+    
+    // TODO -> FIX LOGGING TO NOT HARDCODE NUM_CH_CHUNK
     auto ensure_csv_open = [&]() {
         if (csv_opened) return true;
         csv.open("eeg_calib_data.csv", std::ios::out | std::ios::trunc);
@@ -367,16 +394,18 @@ int main() {
     HttpServer_C server(stateStore, 7777);
     server.http_start_server();
 
+    // init stateStore defaults if nothing else is set
+    for (int i = 0; i < NUM_CH_CHUNK; i++) {
+        stateStore.eeg_channel_labels[i] = "Ch" + std::to_string(i + 1);
+        stateStore.eeg_channel_enabled[i] = true;
+    }
+
     // interrupt caused by SIGINT -> 'handle_singint' acts like ISR (callback handle)
     std::signal(SIGINT, handle_sigint);
 
     // START THREADS. We pass the ring buffer by reference (std::ref) becauase each thread needs the actual shared 'ringBuf' instance, not just a copy...
     // This builds a new thread that starts executing immediately, running producer_thread_rn in parallel with the main thread (same for cons)
-#ifdef ACQ_BACKEND_FAKE
     std::thread prod(producer_thread_fn,std::ref(ringBuf), std::ref(stateStore));
-#else
-    std::thread prod(producer_thread_fn,std::ref(ringBuf));
-#endif
     std::thread cons(consumer_thread_fn,std::ref(ringBuf), std::ref(stateStore));
     std::thread http(http_thread_fn, std::ref(server));
     std::thread stim(stimulus_thread_fn, std::ref(stateStore));

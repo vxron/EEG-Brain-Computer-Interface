@@ -22,4 +22,8 @@ struct IAcqProvider_S {
 	virtual bool unicorn_start_acq() = 0; // start acquisition
 	virtual bool unicorn_stop_and_close() = 0;
 	virtual void setActiveStimulus(double fStimHz) { }; // default no-op
+
+	// channel metadata
+    virtual int  getNumChannels() const = 0;
+    virtual void getChannelLabels(std::vector<std::string>& out) const = 0;
 }; // IAcqProvider_S

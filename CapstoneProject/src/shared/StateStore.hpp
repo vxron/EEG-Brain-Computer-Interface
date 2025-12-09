@@ -11,6 +11,14 @@
 */
 
 struct StateStore_s{
+
+    // General info about active channels
+    std::atomic<int> g_n_eeg_channels{NUM_CH_CHUNK};
+    // per-channel names (size fixed at compile time)
+    std::array<std::string, NUM_CH_CHUNK> eeg_channel_labels;
+    // channel enabled mask
+    std::array<bool, NUM_CH_CHUNK> eeg_channel_enabled;
+
     std::atomic<bool> g_is_calib{false};
     std::atomic<UIState_E> g_ui_state{UIState_None}; // which "screen" should showing
     std::atomic<int> g_ui_seq{0}; // increment each time a new state is published by server so html can detect quickly
@@ -33,6 +41,25 @@ struct StateStore_s{
     std::atomic<TestFreq_E> g_freq_right_hz_e{TestFreq_None};
     std::atomic<int> g_freq_right_hz{0};
     std::atomic<int> g_freq_left_hz{0};
+
+    // For displaying signal in real-time on UI
+    std::atomic<bool> g_hasEegChunk{false};
+
+    // custom type requires mutex protection
+    mutable std::mutex last_chunk_mutex;
+    bufferChunk_S g_lastEegChunk;
+
+    // UI reads last chunk
+    bufferChunk_S get_lastEegChunk() const {
+        std::lock_guard<std::mutex> lock(last_chunk_mutex);
+        return g_lastEegChunk;  // return by value (copy)
+    }
+
+    // backend (producer) sets last chunk
+    void set_lastEegChunk(const bufferChunk_S& v) {
+        std::lock_guard<std::mutex> lock(last_chunk_mutex);
+        g_lastEegChunk = v;
+    }
 
     // Training status (Python) + subject / session ID
     struct sessionInfo_s {

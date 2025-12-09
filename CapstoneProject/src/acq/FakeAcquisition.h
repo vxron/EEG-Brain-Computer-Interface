@@ -69,6 +69,14 @@ public:
 	bool getData(std::size_t const numberOfScans, float* dest) override; // mirrors Unicorn C API GetData()
 	void setActiveStimulus(double fStimHz); // sets the active stimulus frequency (0 = none)
 
+	int getNumChannels() const override {
+        return numChannels_;
+    }
+
+    void getChannelLabels(std::vector<std::string>& out) const override {
+        out = channelLabels_;
+    }
+
 private:
 	const double fs = 250.0;
 	stimConfigs_S configs_{}; // default initiliazer _{}
@@ -102,5 +110,9 @@ private:
 	inline double stimulus_signal(double sigAmp_uV, double phase){
 		return sigAmp_uV * std::sin(phase);
 	}
+
+	// channel configs
+	int numChannels_;
+    std::vector<std::string> channelLabels_;
 
 };
