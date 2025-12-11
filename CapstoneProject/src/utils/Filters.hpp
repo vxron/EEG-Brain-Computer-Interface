@@ -3,6 +3,9 @@
 #include <cstddef>
 #include "Types.h"
 
+constexpr float SCALE_FACTOR = 0.00048828125f;
+constexpr float LEVEL_SHIFT_OFFSET = 0;
+
 // Generic FIR filter template with N taps
 template<std::size_t N>
 struct FirFilter_T {
@@ -38,7 +41,8 @@ class EegFilterBank_C {
 public:
     EegFilterBank_C();
     void process_chunk(bufferChunk_S& chunk);  // mutates in-place
-
+    // ^^TODO: make this window level
+    void level_shift_and_scale(bufferChunk_S& chunk);
 private:
     using BandpassFilter = FirFilter_T<201>;  // 5–25 Hz, Blackman, 201 taps
     using SmoothFilter   = FirFilter_T<21>;   // Savitzky–Golay, 21-point

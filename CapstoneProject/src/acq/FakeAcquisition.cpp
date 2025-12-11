@@ -5,7 +5,7 @@
 
 static constexpr double kTwoPi = std::numbers::pi * 2.0;
 
-FakeAcquisition_C::FakeAcquisition_C(const stimConfigs_S &configs) : configs_(configs), rng_(0xC0FFEEu), activeStimulusHz_(0.0) {
+FakeAcquisition_C::FakeAcquisition_C(const stimConfigs_S &configs) : configs_(configs), rng_(0xC0FFEEu), activeStimulusHz_(0.0), numChannels_(NUM_CH_CHUNK) {
 	// nothing (start in "no stim" mode)
 
 	if (configs_.occasionalArtifactsEnabled){
@@ -13,6 +13,13 @@ FakeAcquisition_C::FakeAcquisition_C(const stimConfigs_S &configs) : configs_(co
     	const double firstBlinkDelaySec = 3.0 + 4.0 * uni01_(rng_);
     	samplesToNextArtifact_ = static_cast<std::size_t>(firstBlinkDelaySec * fs);
 	}
+
+    // Just number them in fake acq...
+    channelLabels_.resize(numChannels_);
+    for (int i = 0; i < numChannels_; ++i) {
+        channelLabels_[i] = "Ch" + std::to_string(i + 1);
+    }
+
 }
 
 void FakeAcquisition_C::synthesize_data_stream(float* dest, std::size_t numberOfScans) {

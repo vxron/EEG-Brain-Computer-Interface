@@ -32,7 +32,7 @@ body {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 380px minmax(0, 1fr);
   gap: 24px;
   padding: 24px;
 }
@@ -64,7 +64,6 @@ body {
 /* CARDS */
 
 .status-card,
-.state-card,
 .controls-card {
   background: var(--bg-soft);
   border-radius: 12px;
@@ -72,8 +71,7 @@ body {
   border: 1px solid var(--border-subtle);
 }
 
-.status-row,
-.state-row {
+.status-row {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -87,6 +85,8 @@ body {
 
 .value {
   font-size: 0.9rem;
+  margin-left: auto;
+  text-align: right;
 }
 
 /* CONNECTION PILL */
@@ -198,6 +198,88 @@ body {
   cursor: pointer;
   opacity: 0.95;
   transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+/* HOME */
+#view-home {
+  background: radial-gradient(
+    circle at top left,
+    rgba(99, 102, 241, 0.16),
+    var(--bg-elevated) 55%
+  );
+  display: flex;
+  flex-direction: column;
+  justify-content: center; /* vertical centering */
+  gap: 10px; /* spacing between header, steps, tip */
+  overflow-y: hidden; /* prevent weird scrollbars */
+}
+
+@media (max-width: 1100px) {
+  #view-home {
+    justify-content: flex-start; /* top align if too narrow */
+    overflow-y: auto; /* allow scroll ONLY when necessary */
+    padding-top: 20px;
+  }
+}
+
+/* layout for the 3 mode cards */
+.home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+/* each card */
+.home-card {
+  flex: 1 1 220px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: radial-gradient(
+      circle at top left,
+      rgba(99, 102, 241, 0.08),
+      transparent 60%
+    ),
+    linear-gradient(135deg, #020617, #020617);
+  border: 1px solid rgba(129, 140, 248, 0.5);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.75);
+}
+
+.home-card h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.home-card p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* little pill tag at bottom of each card */
+.home-tag {
+  display: inline-flex;
+  margin-top: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(167, 139, 250, 0.6);
+  color: #c4b5fd;
+}
+
+.home-tip {
+  margin-top: 16px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.home-actions {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  max-width: 1000px;
+  margin: 0 auto;
 }
 
 /* MAIN PANEL */
@@ -339,6 +421,110 @@ body {
 
 .log-entry {
   color: var(--text-muted);
+}
+
+/* HARDWARE CHECKS PAGE & PLOTTING */
+
+/* Container for the hardware view */
+#view-hardware-checks {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Row of pills at the top */
+#hw-quality-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* QUALITY PILLS */
+.hw-quality-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: rgba(15, 23, 42, 1);
+  border: 1px solid #1e293b;
+  color: #e5e7eb;
+}
+
+/* Base dot */
+.hw-quality-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #64748b; /* neutral */
+}
+
+/* GOOD pill */
+.hw-quality-pill.good {
+  border-color: #4ade80;
+  color: #bbf7d0;
+}
+
+/* GOOD dot */
+.hw-quality-pill-dot.good {
+  background: #4ade80;
+}
+
+/* BAD pill */
+.hw-quality-pill.bad {
+  border-color: #f97373;
+  color: #fecaca;
+}
+
+/* BAD dot */
+.hw-quality-pill-dot.bad {
+  background: #f97373;
+}
+
+/* Plots container: scrolls INSIDE this region, not the whole page */
+#hw-plots-container {
+  flex: 1;
+  margin-top: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  grid-template-columns: 1fr; /* one column, stacked vertically */
+  gap: 10px;
+}
+
+.hw-plot canvas {
+  display: block; /* removes inline gap */
+  flex: 1 1 0;
+  width: 100% !important; /* follow parent width */
+}
+
+/* Each individual channel plot */
+.hw-plot {
+  background: #020617;
+  border-radius: 12px;
+  border: 1px solid #1e293b;
+  padding: 8px 12px;
+  height: 140px; /* fixed height prevents giant canvas */
+  display: flex;
+  flex-direction: column;
+}
+
+/* Channel label above plot */
+.hw-plot-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.8rem;
+  margin-bottom: 4px;
+  color: #cbd5f5;
+  flex: 0 0 auto;
+}
+
+.hw-plot-label .secondary {
+  opacity: 0.7;
+  font-size: 0.75rem;
 }
 
 /* SESSIONS LIST (CLICKABLE SAVED SESSIONS) */

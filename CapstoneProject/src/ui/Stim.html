@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-4" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-5" />
   </head>
   <body>
     <div class="app-shell">
       <!-- Left: status + config -->
       <aside class="sidebar">
         <header class="app-header">
-          <h1>EEG BCI Page-Turner</h1>
-          <p class="subtitle">Local Stimulus & State Monitor</p>
+          <h2>The Brain-Controlled Page-Turner</h2>
+          <p class="subtitle">Using EEG signals to turn the pages of a book</p>
         </header>
 
         <section class="status-card">
@@ -23,41 +23,26 @@
             <span class="label">Monitor refresh</span>
             <span id="refresh-label" class="value">Measuring…</span>
           </div>
-        </section>
-
-        <section class="state-card">
-          <h2>Controller State Store</h2>
-          <div class="state-row">
-            <span class="label">Sequence</span>
-            <span id="seq-value" class="value">—</span>
+          <div class="status-row">
+            <span class="label">Current State</span>
+            <span id="status-ui-state" class="value">—</span>
           </div>
-          <div class="state-row">
-            <span class="label">Stimulus Window</span>
-            <span id="stim-window-value" class="value">—</span>
+          <div class="status-row">
+            <span class="label">Active User</span>
+            <span id="status-active-subject" class="value">—</span>
           </div>
-          <div class="state-row">
-            <span class="label">Block Id</span>
-            <span id="block-value" class="value">0</span>
-          </div>
-          <div class="state-row">
-            <span class="label">Frequency</span>
-            <span id="freq-hz-value" class="value">—</span>
-          </div>
-          <div class="state-row">
-            <span class="label">Frequency Enum Value</span>
-            <span id="freq-code-pill" class="pill pill-soft">—</span>
+          <div class="status-row">
+            <span class="label">Model</span>
+            <span id="status-model" class="value">—</span>
           </div>
         </section>
 
         <section class="controls-card">
-          <h2>Session Controls</h2>
+          <h3>Session Controls</h3>
           <div class="button-row">
-            <button id="btn-start-calib" class="btn ghost">
-              Start Calibration
-            </button>
-            <button id="btn-start-run" class="btn primary">
-              Start Run Mode
-            </button>
+            <button id="btn-start-calib" class="btn ghost">Calibration</button>
+            <button id="btn-start-run" class="btn primary">Run Mode</button>
+            <button id="btn-start-hw" class="btn ghost">Hardware Setup</button>
           </div>
         </section>
       </aside>
@@ -72,17 +57,47 @@
         <div class="view-stack">
           <!-- HOME VIEW -->
           <section id="view-home" class="view">
-            <h2>Home</h2>
+            <h2>Welcome,</h2>
             <p class="view-lead">
-              Connect the C++ backend and choose a session type to begin.
+              Choose how you want to use the EEG page-turner today.
             </p>
-            <ul class="bullets">
-              <li>
-                Calibration: single-frequency blocks to train the SSVEP
-                classifier.
-              </li>
-              <li>Run Mode: dual-frequency arrows for page turning.</li>
-            </ul>
+
+            <div class="home-actions">
+              <div class="home-card">
+                <h2>1: Calibration</h2>
+                <p>
+                  For new users or when you adjust the headset. Runs
+                  single-frequency blocks to train a personalized SSVEP
+                  classifier.
+                </p>
+                <span class="home-tag">Recommended first time</span>
+              </div>
+
+              <div class="home-card">
+                <h2>2: Run Mode</h2>
+                <p>
+                  Uses the latest trained model. Look at the left or right arrow
+                  to turn pages hands-free.
+                </p>
+                <span class="home-tag">Requires trained model</span>
+              </div>
+
+              <div class="home-card">
+                <h2>3: Hardware Setup</h2>
+                <p>
+                  Opens the live EEG view so you can verify electrode contact
+                  and channel quality before starting a session.
+                </p>
+                <span class="home-tag">Live signal viewer</span>
+              </div>
+            </div>
+
+            <p class="home-tip">
+              Tip: run <strong>Hardware Setup</strong> first, then do
+              <strong>Calibration</strong>, and finally start
+              <strong>Run Mode</strong>
+              once you’re happy with the signals.
+            </p>
           </section>
 
           <!-- INSTRUCTIONS VIEW -->
@@ -157,6 +172,26 @@
           </div>
         </section>
 
+        <!-- HARDWARE CHECKS VIEW -->
+        <section id="view-hardware-checks" class="view hidden">
+          <h2>Hardware Setup & Signal Quality Checker</h2>
+          <br />
+          <p class="view-lead">
+            Verify headset placement and electrode contact by inspecting
+            per-channel signal quality indicators and live EEG trace.
+          </p>
+          <br />
+
+          <!-- Quality indicators row -->
+          <div id="hw-quality-row" class="hw-quality-row">
+            <!-- pills will be injected by JS get requests to backend -->
+          </div>
+          <!-- Scrollable container with stacked channel plots -->
+          <div id="hw-plots-container" class="hw-plots-container">
+            <!-- channel canvases will be injected by JS -->
+          </div>
+        </section>
+
         <!-- SESSIONS PAGE VIEW -->
         <section id="view-saved-sessions" class="view hidden">
           <h2>Saved Sessions</h2>
@@ -184,8 +219,6 @@
           </div>
         </section>
 
-        <!-- HADEEL ADD HARDWARE CHECKS VIEW HERE -->
-
         <!-- MODAL OVERLAY (popups) -->
         <div id="modal-backdrop" class="modal-backdrop hidden">
           <div class="modal">
@@ -208,6 +241,9 @@
       </main>
     </div>
 
-    <script src="Stim.js?v=20251119-9"></script>
+    <!-- Local Chart.js (open src lib)) -->
+    <script src="lib/chart.umd.min.js"></script>
+    <!-- Main script -->
+    <script src="Stim.js?v=20251119-10"></script>
   </body>
 </html>

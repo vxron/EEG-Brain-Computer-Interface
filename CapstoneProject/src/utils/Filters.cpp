@@ -76,3 +76,31 @@ void EegFilterBank_C::process_chunk(bufferChunk_S& chunk) {
     }
 }
 
+void EegFilterBank_C::level_shift_and_scale(bufferChunk_S& chunk){
+    // TEMPORARY FOR NOW TO GET NORMAL NUMBERS:
+    // WHAT U REALLY NEED TO DO TO FIX HERE IS REMOVE DC OFFSET ! (see below)
+    for (size_t i=0; i<NUM_SAMPLES_CHUNK; i++){
+        chunk.data[i] = chunk.data[i]*SCALE_FACTOR + LEVEL_SHIFT_OFFSET;
+    }
+}
+
+/*
+void EegFilterBank_C::level_shift_and_scale(bufferChunk_S &chunk)
+{
+    constexpr int NUM_CH = NUM_CH_CHUNK;
+    const int scansPerChunk = NUM_SAMPLES_CHUNK / NUM_CH;
+
+    for (int ch = 0; ch < NUM_CH; ++ch) {
+        double mean = 0.0;
+        for (int s = ch; s < NUM_SAMPLES_CHUNK; s += NUM_CH) {
+            mean += chunk.data[s];
+        }
+        mean /= scansPerChunk;
+
+        for (int s = ch; s < NUM_SAMPLES_CHUNK; s += NUM_CH) {
+            chunk.data[s] -= mean;
+        }
+    }
+}
+    */
+

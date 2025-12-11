@@ -160,12 +160,13 @@ struct eeg_sample_t {
 * ONE scan = ONE sample from EVERY enabled channel at a given time.
 */
 struct bufferChunk_S {
-	uint64_t tick = 0;                            // monotic sequence number (0,1,2,3...) assigned by producer so consumers can detect dropped chunks
+	uint64_t tick = 0;                           // monotic sequence number (0,1,2,3...) assigned by producer so consumers can detect dropped chunks
 	double epoch_ms = 0.0;                       // timestamp of first scan in chunk
 	std::size_t numCh = NUM_CH_CHUNK; 		     // number of enabled channels
 	std::size_t numScans = NUM_SCANS_CHUNK;      // number of scans (time steps) in this chunk (32)
 	std::array<float, NUM_SAMPLES_CHUNK> data{}; // interleaved samples: [ch0s0, ch1s0, ch2s0, ..., chN-1s0, ch0s1, ch1s1, ..., chN-1sM-1]
-	bool active_label;                       // obtained from stimulus global state 
+	bool active_label;                           // obtained from stimulus global state
+	std::array<bool, NUM_CH_CHUNK> quality;	     // quality flag for each channel in a single chunk
 }; // bufferChunk_S
 
 struct trainingProto_S {

@@ -7,17 +7,14 @@ const elLog = document.getElementById("log");
 const elConnection = document.getElementById("connection-status");
 const elConnectionLabel = document.getElementById("connection-label");
 const elRefreshLabel = document.getElementById("refresh-label");
+const elStatusUiState = document.getElementById("status-ui-state");
+const elStatusActiveSubject = document.getElementById("status-active-subject");
+const elStatusModel = document.getElementById("status-model");
 
 // Flicker animation DOM elements
 const elCalibBlock = document.getElementById("calib-block");
 const elLeftArrow = document.getElementById("left-arrow");
 const elRightArrow = document.getElementById("right-arrow");
-
-// State store
-const elSeq = document.getElementById("seq-value");
-const elStimWin = document.getElementById("stim-window-value");
-const elBlock = document.getElementById("block-value");
-const elFreqHz = document.getElementById("freq-hz-value");
 
 // UI Pills (rounded elements that show short pieces of info like labels/statuses)
 const elFreqCodePill = document.getElementById("freq-code-pill");
@@ -29,6 +26,7 @@ const viewActiveCalib = document.getElementById("view-active-calib");
 const viewActiveRun = document.getElementById("view-active-run");
 const viewRunOptions = document.getElementById("view-run-options");
 const viewSavedSessions = document.getElementById("view-saved-sessions");
+const viewHardware = document.getElementById("view-hardware-checks");
 
 // Instructions specific fields for instruction windows (fillable by state store info)
 const elInstrBlockId = document.getElementById("instr-block-id");
@@ -50,6 +48,7 @@ const btnRunStartDefault = document.getElementById("btn-run-start-default");
 const btnRunSavedSessions = document.getElementById("btn-run-saved-sessions");
 const btnSessionsNew = document.getElementById("btn-sessions-new");
 const btnSessionsBack = document.getElementById("btn-sessions-back");
+const btnStartHw = document.getElementById("btn-start-hw");
 
 // Modal (POPUP) DOM elements
 const elModalBackdrop = document.getElementById("modal-backdrop");
@@ -68,6 +67,22 @@ let calibStimulus = null;
 let leftStimulus = null;
 let rightStimulus = null;
 let stimAnimId = null;
+
+// Hardware checks DOM elements
+const hwQualityRow = document.getElementById("hw-quality-row");
+const hwPlotsContainer = document.getElementById("hw-plots-container");
+// Hardware checks plotting configs
+const HW_MAX_WINDOW_SEC = 9; // seconds visible on screen
+const HW_Y_MIN = -80; // adjust to fit (scale should be uV, EEG ~10-100uV)
+const HW_Y_MAX = 80;
+let hwCharts = []; // one Chart per channel
+let hwLabels = []; // channel names, matching backend labels (from get/eeg JSON res)
+let hwActive = false;
+let hwAnimId = null; // frame scheduler
+let hwNChannels = 0;
+let hwSamplesPerCycle = 0; // how many single eeg samples fit across the plot width
+let hwSampleIdxInCycle = 0; // circular index 0... hwSamplesPerCycle-1
+let hwGlobalIndex = 0; // global time idx (in samples) -> keep track of total time
 
 // ==================== 2) LOGGING HELPER =============================
 function logLine(msg) {
@@ -89,6 +104,7 @@ function showView(name) {
     viewActiveRun,
     viewRunOptions,
     viewSavedSessions,
+    viewHardware,
   ];
 
   for (const v of allViews) {
@@ -114,6 +130,9 @@ function showView(name) {
     case "saved_sessions":
       viewSavedSessions.classList.remove("hidden");
       break;
+    case "hardware_checks":
+      viewHardware.classList.remove("hidden");
+      break;
     default:
       viewHome.classList.remove("hidden");
       break;
@@ -134,7 +153,29 @@ function setFullScreenMode(enabled) {
   }
 }
 
-// (3) popup handling (helpers to show and hide popup)
+// (3) start/stop hardware mode
+function startHardwareMode() {
+  // Mark global mode as active so hardwareLoop does work
+  hwActive = true;
+
+  // Reset time counter so x-axis (time) starts at 0 for a new session
+  hwGlobalIndex = 0;
+
+  // Kick off hardware loop
+  if (!hwAnimId) {
+    hwAnimId = setTimeout(hardwareLoop, 0);
+  }
+}
+function stopHardwareMode() {
+  hwActive = false;
+  // Cancel the scheduled animation frame, if any
+  if (hwAnimId) {
+    clearTimeout(hwAnimId);
+    hwAnimId = null;
+  }
+}
+
+// (4) popup handling (helpers to show and hide popup)
 function showModal(title, body) {
   if (elModalTitle && title) elModalTitle.textContent = title;
   if (elModalBody && body) elModalBody.textContent = body;
@@ -236,33 +277,35 @@ function fmtFreqEnumLabel(enumType, intVal) {
 
 // ============= 6) MAP STIM_WINDOW FROM STATESTORE-> view + labels in UI ===============
 function updateUiFromState(data) {
-  // 1) Basic sidebar fields
-  elSeq.textContent = data.seq ?? "—";
-  elBlock.textContent = data.block_id ?? "0";
-  elFreqHz.textContent = data.freq_hz ?? "—";
-
-  // 2) Labels for enums
+  // Status card summary
   const stimLabel = intToLabel("stim_window", data.stim_window);
-  const freqCodeLbl = intToLabel("freq_hz_e", data.freq_hz_e);
-  elStimWin.textContent = stimLabel ?? "—";
-  elFreqCodePill.textContent = freqCodeLbl ?? "—";
+  if (elStatusUiState) {
+    elStatusUiState.textContent = stimLabel ?? "—";
+  }
 
-  // 3) View routing based on stim_window value
-  const stimState = data.stim_window;
-  // populate sidebar fields
-  elSeq.textContent = data.seq ?? "-";
-  elBlock.textContent = data.block_id ?? "-";
-  elFreqHz.textContent = fmtFreqHz(data.freq_hz);
-  elStimWin.textContent = fmtFreqEnumLabel("stim_window", data.stim_window);
-  elFreqCodePill.textContent = fmtFreqEnumLabel("freq_hz_e", data.freq_hz_e);
+  if (elStatusActiveSubject) {
+    const subj = data.active_subject_id || "None";
+    elStatusActiveSubject.textContent = subj;
+  }
+
+  if (elStatusModel) {
+    const modelReady = data.is_model_ready;
+    elStatusModel.textContent = modelReady
+      ? "Trained model ready"
+      : "No trained model";
+  }
 
   // run mode flag cleared by default
   document.body.classList.remove("run-mode");
 
-  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 7 = None
+  // View routing based on stim_window value
+  const stimState = data.stim_window;
+  // MUST MATCH UISTATE_E
+  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = None
   if (stimState === 3 /* Home */ || stimState === 7 /* None */) {
     stopCalibFlicker();
     stopRunFlicker();
+    stopHardwareMode();
     setFullScreenMode(false);
     showView("home");
   } else if (stimState === 2 /* Instructions */) {
@@ -308,6 +351,10 @@ function updateUiFromState(data) {
     elRunModelStatus.textContent = modelReady
       ? "Model ready"
       : "No trained model yet, please run calibration";
+  } else if (stimState == 6) {
+    setFullScreenMode(true);
+    startHardwareMode();
+    showView("hardware_checks");
   }
 
   // HANDLE POPUPS
@@ -424,7 +471,7 @@ async function sendRefresh(refreshHz) {
       return;
     }
     logLine(`POST /ready ok (refresh_hz=${refreshHz})`);
-    elRefreshLabel.textContent = `Monitor refresh ≈ ${refreshHz} Hz (sent to backend)`;
+    elRefreshLabel.textContent = `Monitor refresh ≈ ${refreshHz} Hz`;
   } catch (err) {
     logLine(`POST /ready error: ${err}`);
     elRefreshLabel.textContent = `Failed to send refresh rate (network error)`;
@@ -546,7 +593,235 @@ function stopRunFlicker() {
   if (rightStimulus) rightStimulus.stop();
 }
 
-// =============== 11) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
+// ================ 11) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
+// MAIN LOOP
+async function hardwareLoop() {
+  // if user left hw mode, do nothing
+  if (!hwActive) return;
+  try {
+    // fetch EEG samples and quality in parallel from backend
+    const [eegRes, qRes] = await Promise.all([
+      fetch(`${API_BASE}/eeg`),
+      fetch(`${API_BASE}/quality`),
+    ]);
+
+    // Parse JSON responses
+    const eeg = await eegRes.json();
+    const qJson = await qRes.json();
+
+    // If backend says "no data yet", just try again next animation frame
+    if (!eeg.ok) {
+      hwAnimId = setTimeout(hardwareLoop, 150);
+      return;
+    }
+
+    // extract meta from EEG json
+    const fs = eeg.fs || 250;
+    const units = eeg.units || "uV";
+    const nChannels = eeg.n_channels || eeg.channels.length;
+    const labels = Array.isArray(eeg.labels)
+      ? eeg.labels
+      : Array.from({ length: nChannels }, (_, i) => `Ch ${i + 1}`);
+    // init charts w configs
+    initHardwareCharts(nChannels, labels, fs, units);
+
+    // extract meta from quality array (0/1)
+    const quality = Array.isArray(qJson.quality)
+      ? qJson.quality
+      : new Array(nChannels).fill(0);
+    // Update the pills row at the top
+    updateHwQualityPills(quality);
+
+    // Each entry in eeg.channels[ch] is an array of samples for that channel
+    const numSamples = eeg.channels[0].length;
+    for (let s = 0; s < numSamples; s++) {
+      // For each channel, read the sample and push {x, y} into its dataset
+      for (let ch = 0; ch < nChannels; ch++) {
+        const eeg_val = eeg.channels[ch][s];
+        const chart = hwCharts[ch];
+        const ds = chart.data.datasets[0];
+
+        // use monotonically increasing sample idx for time axis
+        const k = chart._nextX || 0;
+        chart._nextX = k + 1;
+
+        // SLIDING WINDOW IMPLEMENTATION
+        ds.data.push({ x: 0, y: eeg_val }); // placeholder x
+        // only ever keep hwSamplesPerCycle points
+        if (ds.data.length > hwSamplesPerCycle) {
+          ds.data.shift(); // removes first el of array (queue implementation)
+        }
+
+        // Colour line based on quality (green = good, red = bad)
+        ds.borderColor = quality[ch] ? "#4ade80" : "#f97373";
+      }
+
+      hwGlobalIndex++;
+    }
+    // sample acquired.
+    // SLIDE x-axis window to last HW_MAX_WINDOW_SEC
+    // redraw all charts once this frame with the new data / indexes
+    hwCharts.forEach((chart) => {
+      const ds = chart.data.datasets[0];
+      const N = ds.data.length;
+      // RE-INDEX X
+      for (let i = 0; i < N; i++) {
+        ds.data[i].x = i; // leftmost point x=0, rightmost x=N-1
+      }
+      // x axis always 0 to window size (anchored to left, no offsets)
+      chart.options.scales.x.min = 0;
+      chart.options.scales.x.max = hwSamplesPerCycle - 1;
+
+      chart.update("none");
+    });
+  } catch (err) {
+    console.log("hardwareLoop error:", err);
+  }
+  hwAnimId = setTimeout(hardwareLoop, 150); // sched next frame in 150ms (a little more than 5Hz) (inf loop until hw mode is exited)
+}
+
+function initHardwareCharts(nChannels, labels, fs, units) {
+  // (A) if we already have charts for the right num of channels -> don't need to remake
+  if (hwCharts.length == nChannels) {
+    hwLabels = labels;
+
+    // update label text for each label
+    hwCharts.forEach((chart, ch) => {
+      const labelDiv = chart._labelDiv; // update
+      if (labelDiv) {
+        labelDiv.firstChild.textContent = hwLabels[ch] || `Ch ${ch + 1}`;
+      }
+    });
+    return; // init complete
+  }
+
+  // (B) rebuild from scratch
+  // Destroy any existing Chart.js instances to avoid memory leaks
+  hwCharts.forEach((c) => c.destroy());
+  hwCharts = [];
+  hwPlotsContainer.innerHTML = ""; // clear html container
+
+  // Update global state
+  hwLabels = labels;
+  hwGlobalIndex = 0;
+  hwNChannels = nChannels;
+  // update number of points we want across 1 sweep width
+  hwSamplesPerCycle = Math.max(1, Math.floor(HW_MAX_WINDOW_SEC * fs));
+  hwSampleIdxInCycle = 0; // reset
+
+  // for each channel: build a wrapper with label + canvas
+  for (let ch = 0; ch < nChannels; ch++) {
+    // Outer div to hold everything
+    const wrapper = document.createElement("div");
+    wrapper.className = "hw-plot";
+
+    // plot title
+    const labelDiv = document.createElement("div");
+    labelDiv.className = "hw-plot-label";
+
+    // Primary axis label (channel name)
+    const primarySpan = document.createElement("span");
+    primarySpan.textContent = hwLabels[ch] || `Ch ${ch + 1}`;
+
+    // Secondary axis label (units, e.g., "uV")
+    const secondarySpan = document.createElement("span");
+    secondarySpan.className = "secondary";
+    secondarySpan.textContent = units || "uV";
+
+    // assembled axis label
+    labelDiv.appendChild(primarySpan);
+    labelDiv.appendChild(secondarySpan);
+    wrapper.appendChild(labelDiv);
+
+    // Canvas where Chart.js will draw the line plot
+    const canvas = document.createElement("canvas");
+    // Height in pixels; width will be controlled by CSS
+    canvas.height = 110;
+    wrapper.appendChild(canvas);
+    hwPlotsContainer.appendChild(wrapper);
+    const ctx = canvas.getContext("2d");
+
+    // Create a new Chart.js instance for this channel
+    const chart = new Chart(ctx, {
+      type: "line",
+      data: {
+        datasets: [
+          {
+            label: hwLabels[ch] || `Ch ${ch + 1}`,
+            data: [],
+            borderWidth: 1,
+            pointRadius: 0,
+            parsing: false,
+          },
+        ],
+      },
+      options: {
+        animation: false,
+        responsive: true, // Resize with container/viewport
+        maintainAspectRatio: false, // Let CSS control
+        layout: {
+          padding: { top: 4, right: 6, bottom: 18, left: 6 },
+        },
+        scales: {
+          x: {
+            type: "linear",
+            ticks: { display: false },
+            grid: { display: false },
+            offset: false,
+            min: 0,
+            max: hwSamplesPerCycle - 1, // fixed window 0 → N-1
+          },
+          y: {
+            min: HW_Y_MIN,
+            max: HW_Y_MAX,
+          },
+        },
+        plugins: {
+          legend: { display: false }, // No legend per plot (label is above)
+          tooltip: { enabled: false },
+        },
+        elements: {
+          line: {
+            tension: 0,
+          },
+        },
+      },
+    });
+
+    chart._labelDiv = labelDiv;
+    // track next x-index per channel
+    chart._nextX = 0;
+
+    // Keep chart in the global array for all channels so we can update it each frame
+    hwCharts.push(chart);
+  }
+}
+
+// update the pill row with per-channel quality indication based on backend results
+function updateHwQualityPills(qualityArr) {
+  if (!hwQualityRow) return;
+  hwQualityRow.innerHTML = ""; // clear existing
+  // one pill per ACTIVE channel
+  for (let ch = 0; ch < hwNChannels; ch++) {
+    const isGood = qualityArr[ch];
+    // wrapper
+    const pill = document.createElement("div");
+    pill.className = "hw-quality-pill " + (isGood ? "good" : "bad");
+    // dots for good or bad channel
+    const dot = document.createElement("div");
+    dot.className = "hw-quality-pill-dot " + (isGood ? "good" : "bad");
+    // text label for good or bad channel
+    const labelSpan = document.createElement("span");
+    const chLabel = hwLabels[ch] || `Ch ${ch + 1}`;
+    labelSpan.textContent = `${chLabel}: ${isGood ? "OK" : "Needs Work"}`;
+    // Assemble pill
+    pill.appendChild(dot);
+    pill.appendChild(labelSpan);
+    hwQualityRow.appendChild(pill); // add to row
+  }
+}
+
+// =============== 12) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
 // Helper to send a session event to C++
 async function sendSessionEvent(kind) {
   // IMPORTANT: kind is defined sporadically in init(), e.g. "start_calib", "start_run"
@@ -569,7 +844,7 @@ async function sendSessionEvent(kind) {
   }
 }
 
-// ================== 12) INIT ON PAGE LOAD ===================
+// ================== 13) INIT ON PAGE LOAD ===================
 async function init() {
   logLine("Initializing UI…");
   const estimated_refresh = await estimateRefreshHz();
@@ -615,6 +890,13 @@ async function init() {
   btnSessionsBack.addEventListener("click", () => {
     sendSessionEvent("back_to_run_options");
   });
+
+  if (btnStartHw) {
+    btnStartHw.addEventListener("click", () => {
+      // tell backend user requested hardware checks state
+      sendSessionEvent("hardware_checks");
+    });
+  }
 
   if (btnModalOk) {
     // if a popup is visible, wait for user ack

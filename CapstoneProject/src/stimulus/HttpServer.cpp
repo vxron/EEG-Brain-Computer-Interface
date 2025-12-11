@@ -131,6 +131,8 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                 } else if (action == "ack_popup"){
                     // clear popup when user presses OK
                     stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
+                } else if (action == "hardware_checks"){
+                    ev = UIStateEvent_UserPushesHardwareChecks;
                 }
             }
         }
@@ -142,6 +144,94 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
 
     write_json(res, "{\"ok\":true}");
 }
+
+// writes the quality array for each channel (output decision of signal quality checker)
+void HttpServer_C::handle_get_quality(const httplib::Request& req,
+                                      httplib::Response& res)
+{
+    (void)req;
+
+    if (!stateStoreRef_.g_hasEegChunk.load(std::memory_order_acquire)) {
+        // no chunk yet: return empty but valid structure
+        write_json(res,
+            "{\"n_channels\":0,\"labels\":[],\"quality\":[]}"
+        );
+        return;
+    }
+
+    bufferChunk_S last = stateStoreRef_.get_lastEegChunk();
+
+    int n_ch = stateStoreRef_.g_n_eeg_channels.load(std::memory_order_acquire);
+    if (n_ch <= 0 || n_ch > NUM_CH_CHUNK) {
+        n_ch = NUM_CH_CHUNK; // safety fallback
+    }
+
+    std::ostringstream oss;
+    oss << "{";
+    // quality array
+    oss << "\"quality\":[";
+    for (int i = 0; i < n_ch; ++i) {
+        oss << (last.quality[i] ? 1 : 0);
+        if (i < (n_ch - 1)) oss << ",";
+    }
+    oss << "]}";
+    write_json(res, oss.str());
+}
+
+// writes eeg channel configs, labels + actual eeg samples for plotting on UI
+void HttpServer_C::handle_get_eeg(const httplib::Request& req,
+                                  httplib::Response& res)
+{
+    (void)req;
+
+    if (!stateStoreRef_.g_hasEegChunk.load(std::memory_order_acquire)) {
+        write_json(res, "{\"ok\":false,\"msg\":\"no eeg yet\"}");
+        return;
+    }
+
+    bufferChunk_S last = stateStoreRef_.get_lastEegChunk();
+
+    int n_ch = stateStoreRef_.g_n_eeg_channels.load(std::memory_order_acquire);
+    if (n_ch <= 0 || n_ch > NUM_CH_CHUNK) {
+        n_ch = NUM_CH_CHUNK; // fallback
+    }
+
+    const int stride = NUM_CH_CHUNK; // interleave stride in bufferChunk_S
+    const int samples_per_channel = NUM_SAMPLES_CHUNK / stride;
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"ok\":true,"
+        << "\"fs\":250,"
+        << "\"units\":\"uV\","
+        << "\"n_channels\":" << n_ch << ",";
+
+    // labels
+    oss << "\"labels\":[";
+    for (int ch = 0; ch < n_ch; ++ch) {
+        const std::string& lbl = stateStoreRef_.eeg_channel_labels[ch];
+        oss << "\"" << lbl << "\"";
+        if (ch < n_ch - 1) oss << ",";
+    }
+    oss << "],";
+
+    // channels
+    oss << "\"channels\":[";
+    for (int ch = 0; ch < n_ch; ++ch) {
+        oss << "[";
+        for (int s = 0; s < samples_per_channel; ++s) {
+            int idx = s * stride + ch;  // time-major interleave
+            oss << last.data[idx];
+            if (s < samples_per_channel - 1) oss << ",";
+        }
+        oss << "]";
+        if (ch < n_ch - 1) oss << ",";
+    }
+
+    oss << "]}";
+    write_json(res, oss.str());
+}
+
 
 // check ready and write monitor refresh rate from client response
 void HttpServer_C::handle_post_ready(const httplib::Request& req, httplib::Response& res){
@@ -187,6 +277,12 @@ bool HttpServer_C::http_start_server(){
     // Route bindings
     liveServerRef_->Get("/state",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_state(rq, rs); });
+
+    liveServerRef_->Get("/quality",
+        [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_quality(rq, rs); });
+
+    liveServerRef_->Get("/eeg",
+        [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_eeg(rq, rs); });
 
     liveServerRef_->Post("/event",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_post_event(rq, rs); });
