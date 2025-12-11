@@ -145,6 +145,7 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
     write_json(res, "{\"ok\":true}");
 }
 
+// writes the quality array for each channel (output decision of signal quality checker)
 void HttpServer_C::handle_get_quality(const httplib::Request& req,
                                       httplib::Response& res)
 {
@@ -167,18 +168,6 @@ void HttpServer_C::handle_get_quality(const httplib::Request& req,
 
     std::ostringstream oss;
     oss << "{";
-    // n_channels
-    oss << "\"n_channels\":" << n_ch << ",";
-
-    // labels
-    oss << "\"labels\":[";
-    for (int i = 0; i < n_ch; ++i) {
-        const std::string& lbl = stateStoreRef_.eeg_channel_labels[i];
-        oss << "\"" << lbl << "\"";
-        if (i < (n_ch - 1)) oss << ",";
-    }
-    oss << "],";
-
     // quality array
     oss << "\"quality\":[";
     for (int i = 0; i < n_ch; ++i) {
@@ -186,11 +175,10 @@ void HttpServer_C::handle_get_quality(const httplib::Request& req,
         if (i < (n_ch - 1)) oss << ",";
     }
     oss << "]}";
-
     write_json(res, oss.str());
 }
 
-
+// writes eeg channel configs, labels + actual eeg samples for plotting on UI
 void HttpServer_C::handle_get_eeg(const httplib::Request& req,
                                   httplib::Response& res)
 {
@@ -214,7 +202,7 @@ void HttpServer_C::handle_get_eeg(const httplib::Request& req,
     std::ostringstream oss;
     oss << "{"
         << "\"ok\":true,"
-        << "\"fs\":250,"          // TODO: if you have a real fs, read it from config
+        << "\"fs\":250,"
         << "\"units\":\"uV\","
         << "\"n_channels\":" << n_ch << ",";
 

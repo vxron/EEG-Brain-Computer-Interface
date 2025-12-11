@@ -172,6 +172,14 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
             break;
 
+        case UIState_Hardware_Checks:
+            stateStoreRef_->g_ui_state.store(UIState_Hardware_Checks, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+            stateStoreRef_->g_block_id.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
+            break;
+
         case UIState_None: {
             // “offline” / not connected / shut down
             stateStoreRef_->g_ui_state.store(UIState_None, std::memory_order_release);

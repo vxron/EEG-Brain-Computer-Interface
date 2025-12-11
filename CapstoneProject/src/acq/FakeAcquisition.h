@@ -38,14 +38,14 @@ public:
 	};
 	struct stimConfigs_S {
 
-		double ssvepAmplitude_uV = 20.0;
-		double noiseSigma_uV = 5.0;
+		double ssvepAmplitude_uV = 60.0;
+		double noiseSigma_uV = 8.0;
 
 		// Background components (freq, amp (uV), enabled)
-		waveComponent_S dcDrift   { 0.1,  3.0,  false };  // "drift" at 0.1 Hz
-    	waveComponent_S alpha     { 10.0, 4.0,  false };  // 8–12 Hz band
-    	waveComponent_S beta      { 20.0, 3.0,  false };  // 12–30 Hz band
-    	waveComponent_S lineNoise { 60.0, 5.0,  false };  // 60hz noise
+		waveComponent_S dcDrift   { 0.1,  10.0,  false };  // "drift" at 0.1 Hz
+    	waveComponent_S alpha     { 10.0, 5.0,  false };  // 8–12 Hz band
+    	waveComponent_S beta      { 20.0, 6.0,  false };  // 12–30 Hz band
+    	waveComponent_S lineNoise { 60.0, 7.0,  false };  // 60hz noise
 
 		bool occasionalArtifactsEnabled = 0;
 

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-4" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-5" />
   </head>
   <body>
     <div class="app-shell">
@@ -58,6 +58,7 @@
             <button id="btn-start-run" class="btn primary">
               Start Run Mode
             </button>
+            <button id="btn-start-hw" class="btn ghost">Hardware Setup</button>
           </div>
         </section>
       </aside>
@@ -157,6 +158,26 @@
           </div>
         </section>
 
+        <!-- HARDWARE CHECKS VIEW -->
+        <section id="view-hardware-checks" class="view hidden">
+          <h2>Hardware Setup & Signal Quality Checker</h2>
+          <br />
+          <p class="view-lead">
+            Verify headset placement and electrode contact by inspecting
+            per-channel signal quality indicators and live EEG trace.
+          </p>
+          <br />
+
+          <!-- Quality indicators row -->
+          <div id="hw-quality-row" class="hw-quality-row">
+            <!-- pills will be injected by JS get requests to backend -->
+          </div>
+          <!-- Scrollable container with stacked channel plots -->
+          <div id="hw-plots-container" class="hw-plots-container">
+            <!-- channel canvases will be injected by JS -->
+          </div>
+        </section>
+
         <!-- SESSIONS PAGE VIEW -->
         <section id="view-saved-sessions" class="view hidden">
           <h2>Saved Sessions</h2>
@@ -184,8 +205,6 @@
           </div>
         </section>
 
-        <!-- HADEEL ADD HARDWARE CHECKS VIEW HERE -->
-
         <!-- MODAL OVERLAY (popups) -->
         <div id="modal-backdrop" class="modal-backdrop hidden">
           <div class="modal">
@@ -208,6 +227,9 @@
       </main>
     </div>
 
-    <script src="Stim.js?v=20251119-9"></script>
+    <!-- Local Chart.js (open src lib)) -->
+    <script src="lib/chart.umd.min.js"></script>
+    <!-- Main script -->
+    <script src="Stim.js?v=20251119-10"></script>
   </body>
 </html>
