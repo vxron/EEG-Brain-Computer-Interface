@@ -7,17 +7,14 @@ const elLog = document.getElementById("log");
 const elConnection = document.getElementById("connection-status");
 const elConnectionLabel = document.getElementById("connection-label");
 const elRefreshLabel = document.getElementById("refresh-label");
+const elStatusUiState = document.getElementById("status-ui-state");
+const elStatusActiveSubject = document.getElementById("status-active-subject");
+const elStatusModel = document.getElementById("status-model");
 
 // Flicker animation DOM elements
 const elCalibBlock = document.getElementById("calib-block");
 const elLeftArrow = document.getElementById("left-arrow");
 const elRightArrow = document.getElementById("right-arrow");
-
-// State store
-const elSeq = document.getElementById("seq-value");
-const elStimWin = document.getElementById("stim-window-value");
-const elBlock = document.getElementById("block-value");
-const elFreqHz = document.getElementById("freq-hz-value");
 
 // UI Pills (rounded elements that show short pieces of info like labels/statuses)
 const elFreqCodePill = document.getElementById("freq-code-pill");
@@ -280,29 +277,29 @@ function fmtFreqEnumLabel(enumType, intVal) {
 
 // ============= 6) MAP STIM_WINDOW FROM STATESTORE-> view + labels in UI ===============
 function updateUiFromState(data) {
-  // 1) Basic sidebar fields
-  elSeq.textContent = data.seq ?? "—";
-  elBlock.textContent = data.block_id ?? "0";
-  elFreqHz.textContent = data.freq_hz ?? "—";
-
-  // 2) Labels for enums
+  // Status card summary
   const stimLabel = intToLabel("stim_window", data.stim_window);
-  const freqCodeLbl = intToLabel("freq_hz_e", data.freq_hz_e);
-  elStimWin.textContent = stimLabel ?? "—";
-  elFreqCodePill.textContent = freqCodeLbl ?? "—";
+  if (elStatusUiState) {
+    elStatusUiState.textContent = stimLabel ?? "—";
+  }
 
-  // 3) View routing based on stim_window value
-  const stimState = data.stim_window;
-  // populate sidebar fields
-  elSeq.textContent = data.seq ?? "-";
-  elBlock.textContent = data.block_id ?? "-";
-  elFreqHz.textContent = fmtFreqHz(data.freq_hz);
-  elStimWin.textContent = fmtFreqEnumLabel("stim_window", data.stim_window);
-  elFreqCodePill.textContent = fmtFreqEnumLabel("freq_hz_e", data.freq_hz_e);
+  if (elStatusActiveSubject) {
+    const subj = data.active_subject_id || "None";
+    elStatusActiveSubject.textContent = subj;
+  }
+
+  if (elStatusModel) {
+    const modelReady = data.is_model_ready;
+    elStatusModel.textContent = modelReady
+      ? "Trained model ready"
+      : "No trained model";
+  }
 
   // run mode flag cleared by default
   document.body.classList.remove("run-mode");
 
+  // View routing based on stim_window value
+  const stimState = data.stim_window;
   // MUST MATCH UISTATE_E
   // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = None
   if (stimState === 3 /* Home */ || stimState === 7 /* None */) {
@@ -474,7 +471,7 @@ async function sendRefresh(refreshHz) {
       return;
     }
     logLine(`POST /ready ok (refresh_hz=${refreshHz})`);
-    elRefreshLabel.textContent = `Monitor refresh ≈ ${refreshHz} Hz (sent to backend)`;
+    elRefreshLabel.textContent = `Monitor refresh ≈ ${refreshHz} Hz`;
   } catch (err) {
     logLine(`POST /ready error: ${err}`);
     elRefreshLabel.textContent = `Failed to send refresh rate (network error)`;
