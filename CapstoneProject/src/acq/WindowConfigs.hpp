@@ -9,12 +9,16 @@ inline constexpr std::size_t WINDOW_HOP_SCANS     = 80;      // every 0.32s (87.
 struct sliding_window_t {
     size_t const winLen = WINDOW_SCANS*NUM_CH_CHUNK;
     size_t const winHop = WINDOW_HOP_SCANS*NUM_CH_CHUNK; // amount to jump for next window
-    std::size_t tick = 0; // contains number of bufferchunk samples in window
+    
+	std::size_t tick = 0; // contains number of bufferchunk samples in window
 	
 	RingBuffer_C<float> sliding_window{WINDOW_SCANS*NUM_CH_CHUNK}; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
 	
 	std::array<float, NUM_SAMPLES_CHUNK> stash{}; // overflow storage
 	std::size_t stash_len = 0; // how many floats in stash are valid
+
+	// Window quality score to detect artifacts
+	bool isArtifactualWindow = 0;
 	
 	// labelling attributes (calib mode)
 	bool has_label = false; 

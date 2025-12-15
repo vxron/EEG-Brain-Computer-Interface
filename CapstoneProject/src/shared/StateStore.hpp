@@ -61,6 +61,17 @@ struct StateStore_s{
         g_lastEegChunk = v;
     }
 
+    // Running statistic measures of signals (rolling 45s)
+    // AFTER bandpass + CAR + artifact rejection
+    struct SignalStats_s {
+      std::array<float, NUM_CH_CHUNK> rms_uv;
+      std::array<float, NUM_CH_CHUNK> mad_uv;
+      std::array<float, NUM_CH_CHUNK> max_abs_uv;
+      std::array<float, NUM_CH_CHUNK> bad_win_rate; // 0..1
+      float global_bad_win_rate;
+      float baseline_window_sec = 45.0;
+    };
+
     // Training status (Python) + subject / session ID
     struct sessionInfo_s {
         std::atomic<bool> g_isModelReady{0};

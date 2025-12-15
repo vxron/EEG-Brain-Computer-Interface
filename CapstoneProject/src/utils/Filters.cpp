@@ -42,6 +42,48 @@ static constexpr float fir_blackman_201_b[201] = {
     -8.11674399e-07f, -1.3211498e-07f, 8.6551515e-35f
 };
 
+static constexpr float fir_hamming_201_b[201] = {
+    0.000241931009f, 5.02136622e-05f, -1.31761105e-06f, 0.000135797005f, 0.000377193862f,
+    0.000558852411f, 0.00054991899f, 0.000350214392f, 0.000101717581f, -2.59763771e-06f,
+    0.000142884498f, 0.000467362034f, 0.000756131565f, 0.000795795598f, 0.000537189634f,
+    0.000154345372f, -5.99767023e-05f, 9.54665635e-05f, 0.000561995056f, 0.00103083674f,
+    0.00114856838f, 0.000785590584f, 0.000167102353f, -0.000254618935f, -0.000122303807f,
+    0.000535115033f, 0.00127382678f, 0.00152616832f, 0.00102594707f, 5.34544172e-05f,
+    -0.000713945729f, -0.000678820892f, 0.000202611882f, 0.00131914614f, 0.00179941637f,
+    0.00115527977f, -0.000296420987f, -0.00158648266f, -0.0017678498f, -0.000648885629f,
+    0.000975062376f, 0.00182594617f, 0.00107396521f, -0.00097684496f, -0.00300263972f,
+    -0.0035696041f, -0.0022225176f, 6.60788996e-05f, 0.00149603748f, 0.000734375927f,
+    -0.00201854142f, -0.00503073496f, -0.00621174269f, -0.00467392244f, -0.00152605488f,
+    0.000780704991f, 0.000193508334f, -0.00333958338f, -0.00763998688f, -0.00974624797f,
+    -0.00809395424f, -0.00383727244f, -0.000226523066f, -0.000333484826f, -0.00469883703f,
+    -0.0106815281f, -0.014163483f, -0.0125370887f, -0.00683003291f, -0.00127447281f,
+    -0.000403446412f, -0.00563707751f, -0.0138947387f, -0.0194821161f, -0.0181491539f,
+    -0.0104667716f, -0.0018998054f, 0.000820368752f, -0.00532735409f, -0.0169402213f, -0.0260368181f,
+    -0.0255816033f, -0.01495093f, -0.00122026553f, 0.00520519551f, -0.0019483596f, -0.0194540496f,
+    -0.0356017757f, -0.0377476212f, -0.0217617259f, 0.00329564933f, 0.0194554356f, 0.0114843852f,
+    -0.0211122695f, -0.0599952922f, -0.0758661628f, -0.0449757984f, 0.0350676593f, 0.140088588f,
+    0.228976712f, 0.263723617f, 0.228976712f, 0.140088588f, 0.0350676593f, -0.0449757984f,
+    -0.0758661628f, -0.0599952922f, -0.0211122695f, 0.0114843852f, 0.0194554356f, 0.00329564933f,
+    -0.0217617259f, -0.0377476212f, -0.0356017757f, -0.0194540496f, -0.0019483596f, 0.00520519551f,
+    -0.00122026553f, -0.01495093f, -0.0255816033f, -0.0260368181f, -0.0169402213f, -0.00532735409f,
+    0.000820368752f, -0.0018998054f, -0.0104667716f, -0.0181491539f, -0.0194821161f, -0.0138947387f,
+    -0.00563707751f, -0.000403446412f, -0.00127447281f, -0.00683003291f, -0.0125370887f,
+    -0.014163483f, -0.0106815281f, -0.00469883703f, -0.000333484826f, -0.000226523066f,
+    -0.00383727244f, -0.00809395424f, -0.00974624797f, -0.00763998688f, -0.00333958338f,
+    0.000193508334f, 0.000780704991f, -0.00152605488f, -0.00467392244f, -0.00621174269f,
+    -0.00503073496f, -0.00201854142f, 0.000734375927f, 0.00149603748f, 6.60788996e-05f,
+    -0.0022225176f, -0.0035696041f, -0.00300263972f, -0.00097684496f, 0.00107396521f, 0.00182594617f,
+    0.000975062376f, -0.000648885629f, -0.0017678498f, -0.00158648266f, -0.000296420987f,
+    0.00115527977f, 0.00179941637f, 0.00131914614f, 0.000202611882f, -0.000678820892f,
+    -0.000713945729f, 5.34544172e-05f, 0.00102594707f, 0.00152616832f, 0.00127382678f,
+    0.000535115033f, -0.000122303807f, -0.000254618935f, 0.000167102353f, 0.000785590584f,
+    0.00114856838f, 0.00103083674f, 0.000561995056f, 9.54665635e-05f, -5.99767023e-05f,
+    0.000154345372f, 0.000537189634f, 0.000795795598f, 0.000756131565f, 0.000467362034f,
+    0.000142884498f, -2.59763771e-06f, 0.000101717581f, 0.000350214392f, 0.00054991899f,
+    0.000558852411f, 0.000377193862f, 0.000135797005f, -1.31761105e-06f, 5.02136622e-05f,
+    0.000241931009f
+};
+
 static constexpr float sg_21_3_b[21] = {
     -0.0559006211f, -0.0248447205f, 0.00294213795f, 0.0274599542f, 0.0487087283f, 0.0666884603f,      
     0.08139915f, 0.0928407976f, 0.101013403f, 0.105916966f, 0.107551487f, 0.105916966f, 0.101013403f, 
@@ -49,39 +91,67 @@ static constexpr float sg_21_3_b[21] = {
     -0.0248447205f, -0.0559006211f
 };
 
+// Constructor constructs with specifically set filters (choose from above options)
 EegFilterBank_C::EegFilterBank_C() {
     for (std::size_t ch = 0; ch < NUM_CH_CHUNK; ++ch) {
-        bandpass_[ch].init_from_taps(fir_blackman_201_b);
+        bandpass_[ch].init_from_taps(fir_hamming_201_b); // currently Hamming 201 taps 2-35 Hz
         smooth_[ch].init_from_taps(sg_21_3_b);
     }
 }
 
+// Preprocessing pipeline
 void EegFilterBank_C::process_chunk(bufferChunk_S& chunk) {
     constexpr std::size_t nCh = NUM_CH_CHUNK;
     constexpr std::size_t nS  = NUM_SAMPLES_CHUNK / NUM_CH_CHUNK;
 
+    // 1) Bandpass 
     for (std::size_t s = 0; s < nS; ++s) {
         for (std::size_t ch = 0; ch < nCh; ++ch) {
             const std::size_t idx = s * nCh + ch;
             float x = chunk.data[idx];
-
-            // 1) Bandpass (5–25 Hz)
             float y = bandpass_[ch].process(x);
-
-            // 2) Savitzky–Golay smoothing
-            y = smooth_[ch].process(y);
-
             chunk.data[idx] = y;
+        }
+    }
+
+    // 2) CAR
+    remove_common_mode_noise(chunk);
+}
+
+// per sample cross channel mean subtraction (CAR)
+void EegFilterBank_C::remove_common_mode_noise(bufferChunk_S& chunk){
+    // acquire new chunk
+    for(std::size_t s = 0; s < NUM_SCANS_CHUNK; s++){
+        float mean = 0.0f;
+        // acquire new sample
+        // 1) compute per-sample mean across channels
+        for(std::size_t ch = 0; ch < NUM_CH_CHUNK; ch++){
+            mean += chunk.data[s*NUM_CH_CHUNK + ch];
+        }
+        mean /= static_cast<float>(NUM_CH_CHUNK);
+        // 2) substract per-sample mean from all the channels
+        for(std::size_t ch = 0; ch < NUM_CH_CHUNK; ch++){
+            chunk.data[s*NUM_CH_CHUNK + ch] -= mean;
         }
     }
 }
 
-void EegFilterBank_C::level_shift_and_scale(bufferChunk_S& chunk){
-    // TEMPORARY FOR NOW TO GET NORMAL NUMBERS:
-    // WHAT U REALLY NEED TO DO TO FIX HERE IS REMOVE DC OFFSET ! (see below)
-    for (size_t i=0; i<NUM_SAMPLES_CHUNK; i++){
-        chunk.data[i] = chunk.data[i]*SCALE_FACTOR + LEVEL_SHIFT_OFFSET;
-    }
+void EegFilterBank_C::check_artifact_and_flag_window(sliding_window_t& window){
+    // HARD THRESHOLDS -> Any one can set bad window flag...
+    bool isBadWindow = 0;
+
+    // (1) Max absolute amplitude = 200uV for >= 3 samples on any channel
+
+    
+    // (2) Max point-to-point step = 100uV on any channel
+
+    // (3) Excess kurtosis 
+
+    // (4) Entropy
+
+    window.isArtifactualWindow = isBadWindow;
+
+    // consider EAWICA in the future
 }
 
 /*
