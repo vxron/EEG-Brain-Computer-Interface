@@ -19,6 +19,7 @@
 #include "stimulus/StimulusController.hpp"
 #include "acq/UnicornDriver.h"
 #include <fstream>
+#include "utils/SignalQualityAnalyzer.h"
 
 #ifdef USE_EEG_FILTERS
 #include "utils/Filters.hpp"
@@ -154,6 +155,8 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     size_t tick_count = 0;
 
 try{
+    SignalQualityAnalyzer_C SignalQualityAnalyzer(&stateStoreRef);
+
     sliding_window_t window; // should acquire the data for 1 window with that many pops n then increment by hop... 
     bufferChunk_S temp; // placeholder
 
@@ -210,6 +213,8 @@ try{
         }
     };
 
+    // ADD LOGGER AT TRIMMED WINDOW LEVEL FOR CALIB!
+
 	// build first window
 	while(window.sliding_window.get_count()<window.winLen){
 		// sc
@@ -230,7 +235,8 @@ try{
     UIState_E prevState = UIState_None;
 
     while(!g_stop.load(std::memory_order_relaxed)){
-        // 1) ========= before we slide/build new window: read snapshot of ui_state and freq ============
+        // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============
+
         currState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
         if((currState == UIState_Instructions || currState == UIState_Home || currState == UIState_None)){
             // pop but don't build window 
@@ -314,12 +320,18 @@ try{
 
         else if(currState == UIState_Active_Calib ) {
             // trim window ends if its calibration mode (GUARD)
-            window.sliding_window.trim_ends(40); // new function in ring buffer class
+            window.trimmed_window.clear();
+            window.sliding_window.get_trimmed_snapshot(window.trimmed_window, 40 * NUM_CH_CHUNK, 40 * NUM_CH_CHUNK;
+            window.isTrimmed = true;
 
             // we should be attaching a label to our windows for calibration data
             TestFreq_E currTestFreq = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
             window.testFreq = currTestFreq;
             window.has_label = (currTestFreq != TestFreq_None);
+        }
+
+        else if(currState == UIState_Hardware_Checks) {
+            SignalQualityAnalyzer.check_artifact_and_flag_window(window);
         }
         
         else if(currState == UIState_Active_Run){

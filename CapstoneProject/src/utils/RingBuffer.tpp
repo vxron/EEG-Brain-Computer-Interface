@@ -24,6 +24,8 @@ bool RingBuffer_C<T>::push (const T& data) {
         return 0;
     }
 
+    std::lock_guard<std::mutex> lock(mtx_);
+
     // push to tail
     ringBufferArr[tailIdx_] = data;
     // sems guarantee there's space to add when push happens
@@ -51,6 +53,8 @@ bool RingBuffer_C<T>::pop(T *dest) {
     if(isClosed_.load((std::memory_order_relaxed))) {
         return 0;
     }
+
+    std::lock_guard<std::mutex> lock(mtx_);
     // pop from head, then increment (& consider wrap-around)
     *dest = std::move(ringBufferArr[headIdx_]);
     headIdx_++;
@@ -76,6 +80,7 @@ size_t RingBuffer_C<T>::drain(T* dest) {
         if(isClosed_.load(std::memory_order_relaxed)) {
             break; // if closed, break and return how many you've added before close
         }
+        std::lock_guard<std::mutex> lock(mtx_);
         *(dest+i) = std::move(ringBufferArr[headIdx_]);
         headIdx_++;
         count_--;
@@ -91,25 +96,32 @@ size_t RingBuffer_C<T>::drain(T* dest) {
 }
 
 // special function for labelling in calib mode only
+// DOES NOT MUTATE RB!
 template<typename T>
-int RingBuffer_C<T>::trim_ends(size_t guard_samples){
-    // if it's not a full window -> forget it
-    if(count_ < capacity_){
-        return -1;
+bool RingBuffer_C<T>::get_trimmed_snapshot(
+    std::vector<T>& out,
+    size_t trimFront,
+    size_t trimBack
+) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+
+    const size_t n = count_;
+    if (n == 0) { out.clear(); return false; }
+    if (trimFront + trimBack >= n) { out.clear(); return false; }
+
+    out.resize(n - trimFront - trimBack);
+
+    size_t it = headIdx_;
+    // skip trimFront
+    for (size_t k = 0; k < trimFront; ++k) {
+        it = (it + 1) % capacity_;
     }
-    // from head (front) remove guard_samples
-    for(size_t i=0;i<guard_samples;i++){
-        // we won't actually delete the data; we'll just shift head and tail and take the indices in between there for feature extraction in calib mode
-        headIdx_++;
-        if(headIdx_ == capacity_){
-            headIdx_ = 0; //wraparound
-        }
-        tailIdx_--;
-        if(tailIdx_ == 0){ //wraparound
-            tailIdx_ = capacity_ - 1;
-        }
+    // copy middle
+    for (size_t i = 0; i < out.size(); ++i) {
+        out[i] = ringBufferArr[it];
+        it = (it + 1) % capacity_;
     }
-    return 0;
+    return true;
 }
 
 template<typename T>
@@ -118,4 +130,17 @@ void RingBuffer_C<T>::close() {
     // free the semaphores incase they were waiting for an acq
     sem_buffer_slots_available.release();
     sem_data_items_available.release();
+}
+
+template<typename T>
+void RingBuffer_C<T>::get_data_snapshot(std::vector<T>& dest) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+
+    dest.resize(count_);
+    std::size_t it = headIdx_;
+    for (std::size_t i = 0; i < count_; i++) {
+        dest[i] = ringBufferArr[it];
+        it++;
+        if (it >= capacity_) it = 0;
+    }
 }

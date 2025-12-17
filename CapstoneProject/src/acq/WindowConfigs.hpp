@@ -13,7 +13,9 @@ struct sliding_window_t {
 	std::size_t tick = 0; // contains number of bufferchunk samples in window
 	
 	RingBuffer_C<float> sliding_window{WINDOW_SCANS*NUM_CH_CHUNK}; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
-	
+	std::vector<float> trimmed_window;
+	bool isTrimmed = 0;
+
 	std::array<float, NUM_SAMPLES_CHUNK> stash{}; // overflow storage
 	std::size_t stash_len = 0; // how many floats in stash are valid
 
@@ -27,4 +29,6 @@ struct sliding_window_t {
 
 	// associated feature vector/classification output for run mode
 	SSVEPState_E decision = SSVEP_None;
+
+
 };
