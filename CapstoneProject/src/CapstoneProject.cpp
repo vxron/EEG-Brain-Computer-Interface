@@ -182,38 +182,82 @@ try{
         csv_opened = true;
         return true;
     };
-    // lambda helper for logging by chunk (when we pop out a new temp chunk from rb, we log it)
-    auto log_chunk_if_calib = [&](const bufferChunk_S& chunk) {
-        // Check UI state + label at time of logging
-        UIState_E logState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
-        TestFreq_E logFreq = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
+    // ADD LOGGER AT TRIMMED WINDOW LEVEL FOR CALIB!
+    auto ensure_csv_open_window = [&]() {
+        if (csv_opened) return true;
 
-        if (logState != UIState_Active_Calib || logFreq == TestFreq_None) {
-            return; // not in calib or no label - don't log
+        csv.open("eeg_calib_windows.csv", std::ios::out | std::ios::trunc);
+        if (!csv.is_open()) {
+            LOG_ALWAYS("ERROR: failed to open eeg_calib_windows.csv");
+            return false;
         }
 
-        if (!ensure_csv_open()) {
+        // Use detected channel count (not NUM_CH_CHUNK)
+        int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
+        if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
+
+        // Header
+        csv << "window_idx,sample_idx";
+        for (int ch = 0; ch < n_ch_local; ++ch) {
+            csv << ",eeg" << (ch + 1);
+        }
+        csv << ",testfreq_e,testfreq_hz,is_trimmed\n";
+
+        csv_opened = true;
+        return true;
+    };
+
+    auto log_trimmed_window_if_calib = [&](const sliding_window_t& w, std::size_t window_idx) {
+        // Only log if window has a valid label 
+        if (!w.has_label || w.testFreq == TestFreq_None) return;
+
+        // Make sure we’re still in calib at log-time (extra guard)
+        UIState_E logState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+        if (logState != UIState_Active_Calib) return;
+
+        if (!ensure_csv_open_window()) return;
+
+        int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
+        if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
+
+        const int labelHz = TestFreqEnumToInt(w.testFreq);
+
+        const std::vector<float>* pBuf = nullptr;
+        std::vector<float> snap; // only used if !isTrimmed
+
+        if (w.isTrimmed) {
+            pBuf = &w.trimmed_window; 
+        } else { // fallback to non trimmed (should never reach here in calib)
+            w.sliding_window.get_data_snapshot(snap);
+            pBuf = &snap;
+        }
+        const std::vector<float>& buf = *pBuf; // store acc val
+
+        // buf is time-major: [s0_ch0.., s1_ch0..]
+        if (buf.empty()) return;
+        if (buf.size() % static_cast<std::size_t>(n_ch_local) != 0) {
+            LOG_ALWAYS("WARN: trimmed window size not divisible by n_ch; skipping log");
             return;
         }
 
-        const int labelHz = TestFreqEnumToInt(logFreq);
-        // temp.data is time-major: [s0_ch0..ch7, s1_ch0..ch7, ...]
-        constexpr std::size_t nSamples = NUM_SAMPLES_CHUNK / NUM_CH_CHUNK;
+        const std::size_t n_scans = buf.size() / static_cast<std::size_t>(n_ch_local);
 
-        for (std::size_t s = 0; s < nSamples; ++s) {
-            csv << chunk.tick << "," << s;
-            for (std::size_t ch = 0; ch < NUM_CH_CHUNK; ++ch) {
-                const std::size_t idx = s * NUM_CH_CHUNK + ch;
-                csv << "," << chunk.data[idx];
+        for (std::size_t s = 0; s < n_scans; ++s) {
+            csv << window_idx << "," << s;
+            const std::size_t base = s * static_cast<std::size_t>(n_ch_local);
+            for (int ch = 0; ch < n_ch_local; ++ch) {
+                csv << "," << buf[base + static_cast<std::size_t>(ch)];
             }
-            csv << "," << static_cast<int>(logFreq)
+            csv << "," << static_cast<int>(w.testFreq)
                 << "," << labelHz
+                << "," << (w.isTrimmed ? 1 : 0)
                 << "\n";
             ++rows_written;
         }
+        if ((rows_written % 5000) == 0) csv.flush();
     };
 
-    // ADD LOGGER AT TRIMMED WINDOW LEVEL FOR CALIB!
+
 
 	// build first window
 	while(window.sliding_window.get_count()<window.winLen){
@@ -222,7 +266,6 @@ try{
 			break;
 		} 
 		else { 
-            log_chunk_if_calib(temp);
 			// this will fit fine because winLen is a multiple of number of scans per channel = 32
 			// pop sucessful -> push into sliding window
 			for(int i = 0; i<NUM_SAMPLES_CHUNK;i++){
@@ -233,20 +276,24 @@ try{
     
     UIState_E currState  = UIState_None;
     UIState_E prevState = UIState_None;
+    TestFreq_E currLabel  = TestFreq_None;
+    TestFreq_E prevLabel = TestFreq_None;
 
     while(!g_stop.load(std::memory_order_relaxed)){
         // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============
 
         currState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+        currLabel = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
         if((currState == UIState_Instructions || currState == UIState_Home || currState == UIState_None)){
             // pop but don't build window 
             // need to pop bcuz need to prevent buffer overflow 
             // TODO: clean up implementation to always pull/pop and then save window logic to end
-            rb.pop(&temp);
+            if(!rb.pop(&temp)) break;
             continue; //back to top while loop
         }
         // save this as prev state to check after window is built to make sure UI state hasn't changed in between
         prevState = currState;
+        prevLabel = currLabel;
         
         // 2) ============================= build the new window =============================
         float discard; // first pop
@@ -256,7 +303,8 @@ try{
 
         while(window.sliding_window.get_count()<window.winLen){ // now push
             UIState_E intState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
-            if(intState != prevState){
+            TestFreq_E intLabel = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
+            if((intState != prevState) || (intLabel != prevLabel)){
                 break; // change in UI; not a good window
             }
 			std::size_t amnt_left_to_add = window.winLen - window.sliding_window.get_count(); // in samples
@@ -285,7 +333,6 @@ try{
 			if(!rb.pop(&temp)){
 				break;
 			} else {
-                log_chunk_if_calib(temp);
 				// pop successful -> push into sliding window
 				if(amnt_left_to_add >= NUM_SAMPLES_CHUNK){
                     for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
@@ -304,30 +351,40 @@ try{
 					}
 				}
 			}
-            ++tick_count;
-            window.tick=tick_count;
 		}
 
         // 3) once window is full, read ui_state/freq again and decide if window is "valid" to emit based on comparison with initial ui_state and freq
         // -> if the two snapshots disagree, ui changed mid-window: drop this window 
         currState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
-        if(currState != prevState){
+        currLabel = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
+        if((currState != prevState) || (currLabel != prevLabel)){
             // changed halfway through -> not a valid window for processing
             window.decision = SSVEP_Unknown;
             window.has_label = false;
             continue; // go build next window
         }
 
-        else if(currState == UIState_Active_Calib ) {
+        // verified it's an ok window
+        ++tick_count;
+        window.tick=tick_count;
+
+        // reset before looking at state store vals
+        window.isTrimmed = false;
+        window.has_label = false;
+        window.testFreq = TestFreq_None;
+
+        if(currState == UIState_Active_Calib ) {
             // trim window ends if its calibration mode (GUARD)
             window.trimmed_window.clear();
-            window.sliding_window.get_trimmed_snapshot(window.trimmed_window, 40 * NUM_CH_CHUNK, 40 * NUM_CH_CHUNK;
+            window.sliding_window.get_trimmed_snapshot(window.trimmed_window, 40 * NUM_CH_CHUNK, 40 * NUM_CH_CHUNK);
             window.isTrimmed = true;
 
             // we should be attaching a label to our windows for calibration data
             TestFreq_E currTestFreq = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
             window.testFreq = currTestFreq;
             window.has_label = (currTestFreq != TestFreq_None);
+            // Log trimmed window (only if has label)
+            log_trimmed_window_if_calib(window, window.tick);
         }
 
         else if(currState == UIState_Hardware_Checks) {
