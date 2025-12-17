@@ -28,6 +28,16 @@ static constexpr float MAX_STEP_UV = 100.0f;    // point-to-point threshold
 static constexpr int   AMP_PERSIST_SAMPLES = 2; // require >=2 samples over MAX_ABS_UV
 static constexpr int   STEP_PERSIST_SAMPLES = 2; // require >=1 big step
 static constexpr int   UI_UPDATE_EVERY_WIN = 10; // for ~3s updates
+// Enable kurt/entropy only after we have a baseline
+static constexpr size_t MIN_BASELINE_WINS = 20;     // ~6.4s with hop (0.32s)
+// Z-score thresholds relative to rolling baseline
+static constexpr float KURT_Z = 3.5f;               // “how many std above mean”
+static constexpr float ENT_Z  = 3.5f;               // “how many std below mean”
+static constexpr float EPS_STD = 1e-6f;             // avoid divide-by-zero
+static constexpr int MIN_CH_FAIL_KURT = 2;
+static constexpr int MIN_CH_FAIL_ENT  = 2;
+
+
 
 // SHOULD BE A SINGLETON
 class SignalQualityAnalyzer_C {
@@ -45,6 +55,10 @@ private:
 
     // averages we keep track of with each new window for eventual statestore publishing
     Stats_s RollingSums_{}; // contains sum for each metric for all currently appended windows! (when we publish to state store we avg over all windows acq in the last 45s period)
+    // For adaptive thresholds: rolling mean + std (need sum and sumsq)
+    std::array<double, NUM_CH_CHUNK> kurt_sumsq_{};   // Σ kurt^2 over rolling buffer
+    std::array<double, NUM_CH_CHUNK> ent_sumsq_{};    // Σ ent^2 over rolling buffer
+
     Stats_s evicted_ {}; // keep last evicted from ring buffer for ref
     std::vector<Stats_s> tempWinStats_; // reused for recompute max
 

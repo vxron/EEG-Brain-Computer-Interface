@@ -112,6 +112,8 @@ void SignalQualityAnalyzer_C::check_artifact_and_flag_window(sliding_window_t& w
             RollingSums_.rms_uv[ch]     -= evicted_.rms_uv[ch];
             RollingSums_.kurt[ch]       -= evicted_.kurt[ch];
             RollingSums_.entropy[ch]    -= evicted_.entropy[ch];
+            kurt_sumsq_[ch]             -= (double)evicted_.kurt[ch]    * (double)evicted_.kurt[ch];
+            ent_sumsq_[ch]              -= (double)evicted_.entropy[ch] * (double)evicted_.entropy[ch];
             // max_abs/max_step handled separately (see below)
         }
         didEvictThisRound = true;
@@ -123,6 +125,8 @@ void SignalQualityAnalyzer_C::check_artifact_and_flag_window(sliding_window_t& w
 
     bool failsMaxTest = 0;
     bool failsStepTest = 0;
+    int failsKurtTestCount = 0;
+    int failsEntTestCount = 0;
 
     window.sliding_window.get_data_snapshot(win_snapshot_);
     if (win_snapshot_.size() < WINDOW_SCANS * NUM_CH_CHUNK) {
@@ -185,9 +189,51 @@ void SignalQualityAnalyzer_C::check_artifact_and_flag_window(sliding_window_t& w
 
         if (isGreaterThanMaxUvCount_[ch] >= AMP_PERSIST_SAMPLES)  failsMaxTest = true;
         if (surpassesMaxStepCount_[ch] >= STEP_PERSIST_SAMPLES) failsStepTest = true;
+
+        // assess kurtosis and entropy for this channel
+        const size_t numWinsBeforePush = RollingWinStatsBuf.get_count(); // baseline window count
+
+        bool failsKurtTest = false;
+        bool failsEntTest  = false;
+
+        if (numWinsBeforePush >= MIN_BASELINE_WINS) {
+            // Rolling mean
+            const double invN = 1.0 / (double)numWinsBeforePush;
+        
+            const double muK = (double)RollingSums_.kurt[ch]    * invN;
+            const double muE = (double)RollingSums_.entropy[ch] * invN;
+        
+            // Rolling variance: E[x^2] - (E[x])^2
+            const double ex2K = kurt_sumsq_[ch] * invN;
+            const double ex2E = ent_sumsq_[ch]  * invN;
+        
+            double varK = ex2K - muK * muK;
+            double varE = ex2E - muE * muE;
+        
+            if (varK < 0.0) varK = 0.0;
+            if (varE < 0.0) varE = 0.0;
+        
+            const double sdK = std::sqrt(varK) + EPS_STD;
+            const double sdE = std::sqrt(varE) + EPS_STD;
+        
+            // Thresholds (kurt unusually HIGH, entropy unusually LOW)
+            const double kurt_hi = muK + (double)KURT_Z * sdK; // high-kurt outlier
+            const double ent_lo  = muE - (double)ENT_Z  * sdE; // low-entropy outlier
+        
+            if ((double)winStats.kurt[ch]    > kurt_hi) failsKurtTest = true;
+            if ((double)winStats.entropy[ch] < ent_lo)  failsEntTest  = true;
+        }
+
+        if (failsKurtTest) failsKurtTestCount++;
+        if (failsEntTest)  failsEntTestCount++;
+
     }
 
-    window.isArtifactualWindow = failsMaxTest || failsStepTest;
+    window.isArtifactualWindow =
+    failsMaxTest ||
+    failsStepTest ||
+    (failsKurtTestCount >= MIN_CH_FAIL_KURT) ||
+    (failsEntTestCount  >= MIN_CH_FAIL_ENT);
 
     overall_bad_win_num_ += window.isArtifactualWindow;
     current_bad_win_num_ += window.isArtifactualWindow;
@@ -201,6 +247,8 @@ void SignalQualityAnalyzer_C::check_artifact_and_flag_window(sliding_window_t& w
         RollingSums_.rms_uv[ch]     += winStats.rms_uv[ch];
         RollingSums_.kurt[ch]       += winStats.kurt[ch];
         RollingSums_.entropy[ch]    += winStats.entropy[ch];
+        kurt_sumsq_[ch]             += (double)winStats.kurt[ch]    * (double)winStats.kurt[ch];
+        ent_sumsq_[ch]              += (double)winStats.entropy[ch] * (double)winStats.entropy[ch];
     }
 
     // rolling max: cheap approach (HELPER)
