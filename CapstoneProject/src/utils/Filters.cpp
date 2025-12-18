@@ -136,24 +136,6 @@ void EegFilterBank_C::remove_common_mode_noise(bufferChunk_S& chunk){
     }
 }
 
-void EegFilterBank_C::check_artifact_and_flag_window(sliding_window_t& window){
-    // HARD THRESHOLDS -> Any one can set bad window flag...
-    bool isBadWindow = 0;
-
-    // (1) Max absolute amplitude = 200uV for >= 3 samples on any channel
-
-    
-    // (2) Max point-to-point step = 100uV on any channel
-
-    // (3) Excess kurtosis 
-
-    // (4) Entropy
-
-    window.isArtifactualWindow = isBadWindow;
-
-    // consider EAWICA in the future
-}
-
 /*
 void EegFilterBank_C::level_shift_and_scale(bufferChunk_S &chunk)
 {

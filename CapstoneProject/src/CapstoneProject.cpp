@@ -186,78 +186,78 @@ try{
     auto ensure_csv_open_window = [&]() {
         if (csv_opened) return true;
 
-        csv.open("eeg_calib_windows.csv", std::ios::out | std::ios::trunc);
+        csv.open("eeg_windows.csv", std::ios::out | std::ios::trunc);
         if (!csv.is_open()) {
-            LOG_ALWAYS("ERROR: failed to open eeg_calib_windows.csv");
+            LOG_ALWAYS("ERROR: failed to open eeg_windows.csv");
             return false;
         }
 
-        // Use detected channel count (not NUM_CH_CHUNK)
         int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
         if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
 
-        // Header
-        csv << "window_idx,sample_idx";
-        for (int ch = 0; ch < n_ch_local; ++ch) {
-            csv << ",eeg" << (ch + 1);
-        }
-        csv << ",testfreq_e,testfreq_hz,is_trimmed\n";
+        csv << "window_idx,ui_state,is_trimmed,is_bad,sample_idx";
+        for (int ch = 0; ch < n_ch_local; ++ch) csv << ",eeg" << (ch + 1);
+        csv << ",testfreq_e,testfreq_hz\n";
 
         csv_opened = true;
+        LOG_ALWAYS("opened eeg_windows.csv");
         return true;
     };
 
-    auto log_trimmed_window_if_calib = [&](const sliding_window_t& w, std::size_t window_idx) {
-        // Only log if window has a valid label 
-        if (!w.has_label || w.testFreq == TestFreq_None) return;
-
-        // Make sure we’re still in calib at log-time (extra guard)
-        UIState_E logState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
-        if (logState != UIState_Active_Calib) return;
-
+    auto log_window_snapshot = [&](const sliding_window_t& w,
+                               UIState_E uiState,
+                               std::size_t window_idx,
+                               bool use_trimmed) {
         if (!ensure_csv_open_window()) return;
 
         int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
         if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
 
-        const int labelHz = TestFreqEnumToInt(w.testFreq);
-
+        // choose buffer
+        std::vector<float> snap;                 // local storage when snapshotting
         const std::vector<float>* pBuf = nullptr;
-        std::vector<float> snap; // only used if !isTrimmed
 
-        if (w.isTrimmed) {
-            pBuf = &w.trimmed_window; 
-        } else { // fallback to non trimmed (should never reach here in calib)
+        if (use_trimmed && w.isTrimmed && !w.trimmed_window.empty()) {
+            pBuf = &w.trimmed_window;
+        } else {
             w.sliding_window.get_data_snapshot(snap);
             pBuf = &snap;
         }
-        const std::vector<float>& buf = *pBuf; // store acc val
+        const std::vector<float>& buf = *pBuf;
 
-        // buf is time-major: [s0_ch0.., s1_ch0..]
-        if (buf.empty()) return;
+        if (buf.empty()) {
+            LOG_ALWAYS("WARN: snapshot empty, skipping CSV");
+            return;
+        }
         if (buf.size() % static_cast<std::size_t>(n_ch_local) != 0) {
-            LOG_ALWAYS("WARN: trimmed window size not divisible by n_ch; skipping log");
+            LOG_ALWAYS("WARN: snapshot size not divisible by n_ch; skipping CSV");
             return;
         }
 
         const std::size_t n_scans = buf.size() / static_cast<std::size_t>(n_ch_local);
 
+        // label fields (only meaningful in calib)
+        int tf_e = static_cast<int>(w.testFreq);
+        int tf_hz = (w.testFreq == TestFreq_None) ? -1 : TestFreqEnumToInt(w.testFreq);
+
         for (std::size_t s = 0; s < n_scans; ++s) {
-            csv << window_idx << "," << s;
+            csv << window_idx
+                << "," << static_cast<int>(uiState)
+                << "," << (use_trimmed && w.isTrimmed ? 1 : 0)
+                << "," << (w.isArtifactualWindow ? 1 : 0)
+                << "," << s;
+
             const std::size_t base = s * static_cast<std::size_t>(n_ch_local);
             for (int ch = 0; ch < n_ch_local; ++ch) {
                 csv << "," << buf[base + static_cast<std::size_t>(ch)];
             }
-            csv << "," << static_cast<int>(w.testFreq)
-                << "," << labelHz
-                << "," << (w.isTrimmed ? 1 : 0)
-                << "\n";
+
+            csv << "," << tf_e << "," << tf_hz << "\n";
             ++rows_written;
         }
+
         if ((rows_written % 5000) == 0) csv.flush();
     };
-
-
 
 	// build first window
 	while(window.sliding_window.get_count()<window.winLen){
@@ -374,26 +374,38 @@ try{
         window.testFreq = TestFreq_None;
 
         if(currState == UIState_Active_Calib ) {
+            int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
+            if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
+            
+            SignalQualityAnalyzer.check_artifact_and_flag_window(window);
+
             // trim window ends if its calibration mode (GUARD)
             window.trimmed_window.clear();
-            window.sliding_window.get_trimmed_snapshot(window.trimmed_window, 40 * NUM_CH_CHUNK, 40 * NUM_CH_CHUNK);
+            window.sliding_window.get_trimmed_snapshot(window.trimmed_window,
+                40 * n_ch_local, 40 * n_ch_local);
             window.isTrimmed = true;
 
             // we should be attaching a label to our windows for calibration data
-            TestFreq_E currTestFreq = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
-            window.testFreq = currTestFreq;
-            window.has_label = (currTestFreq != TestFreq_None);
+            window.testFreq = currLabel;
+            window.has_label = (currLabel != TestFreq_None);
             // Log trimmed window (only if has label)
-            log_trimmed_window_if_calib(window, window.tick);
+            if(window.has_label){
+                log_window_snapshot(window, currState, window.tick, /*use_trimmed=*/true);
+            }
         }
 
         else if(currState == UIState_Hardware_Checks) {
+            // MOVE THIS OUT -> WE SHOULD ALWAYS BE CHECKING THIS MAYBE??
             SignalQualityAnalyzer.check_artifact_and_flag_window(window);
+            // Log EVERY window from HW checks; use snapshot (untrimmed)
+            // testFreq will be None -> tf_hz becomes -1
+            log_window_snapshot(window, currState, window.tick, /*use_trimmed=*/false);
         }
         
         else if(currState == UIState_Active_Run){
             // run ftr extraction + classifier pipeline to get decision
             // TODO WHEN READY: add ftr vector + make decision here for run mode
+            SignalQualityAnalyzer.check_artifact_and_flag_window(window);
         }
         
 	}

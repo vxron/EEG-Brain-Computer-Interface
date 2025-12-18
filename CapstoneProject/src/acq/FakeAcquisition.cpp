@@ -29,7 +29,7 @@ void FakeAcquisition_C::synthesize_data_stream(float* dest, std::size_t numberOf
 	const double noise_uV = configs_.noiseSigma_uV;
 
 	// Per sample phase increments to move sine wave along consistently per sample without using real time
-	const double dt = 1 / fs;
+	const double dt = 1.0 / fs;
 
 	const bool stimEnabled = (activeStimulusHz_ > 0.0); // adding sin for ssvep?
 	 // What extras are enabled?
@@ -63,21 +63,21 @@ void FakeAcquisition_C::synthesize_data_stream(float* dest, std::size_t numberOf
         if (enableAlpha) {
             bg += configs_.alpha.amp_uV * std::sin(alphaPhase_);
             alphaPhase_ += dphi_alpha;
-            if (alphaPhase_ >= kTwoPi) alphaPhase_ = driftPhase_ - kTwoPi;
+            if (alphaPhase_ >= kTwoPi) alphaPhase_ = alphaPhase_ - kTwoPi;
         }
 
         // (3) Beta rhythm
         if (enableBeta) {
             bg += configs_.beta.amp_uV * std::sin(betaPhase_);
             betaPhase_ += dphi_beta;
-            if (betaPhase_ >= kTwoPi) betaPhase_ = driftPhase_ - kTwoPi;
+            if (betaPhase_ >= kTwoPi) betaPhase_ = betaPhase_ - kTwoPi;
         }
 
         // (4) Line noise
         if (enableLine) {
             bg += configs_.lineNoise.amp_uV * std::sin(linePhase_);
             linePhase_ += dphi_line;
-            if (linePhase_ >= kTwoPi) linePhase_ = driftPhase_ - kTwoPi;
+            if (linePhase_ >= kTwoPi) linePhase_ = linePhase_ - kTwoPi;
         }
 
         // (5) Occasional artifacts (blinks, motion)

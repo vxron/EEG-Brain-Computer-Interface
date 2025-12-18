@@ -2,7 +2,6 @@
 #include <array>
 #include <cstddef>
 #include "Types.h"
-#include "../acq/WindowConfigs.hpp"
 
 /* ALL PREPROCESSING LIVES HERE */
 /* MUTATES CHUNKS IN PLACE:

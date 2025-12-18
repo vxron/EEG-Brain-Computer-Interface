@@ -19,7 +19,7 @@ static float median_inplace(std::vector<float>& v) {
 // Histogram entropy (time-domain). 
 // TODO: replace with spectral entropy later (when we compute ftrs anyways)
 static float hist_entropy_channel(const std::vector<float>& snap, size_t ch,
-                                 int bins = 64, float minv = -300.0f, float maxv = 300.0f) {
+                                 int bins = 64, float minv = -200.0f, float maxv = 200.0f) {
     if (!(maxv > minv) || bins <= 1) return 0.0f;
     std::vector<int> h((size_t)bins, 0);
     float inv = 1.0f / (maxv - minv);
@@ -105,6 +105,10 @@ void SignalQualityAnalyzer_C::check_artifact_and_flag_window(sliding_window_t& w
         // increment rb (pop)
         RollingWinStatsBuf.pop(&evicted_);
         if (evicted_.isBad) current_bad_win_num_--;
+        if(current_bad_win_num_ < 0){
+            // prevent underflow
+            current_bad_win_num_ = 0;
+        }
         // subtract evicted from rolling sums
         for (size_t ch = 0; ch < NUM_CH_CHUNK; ++ch) {
             RollingSums_.mean_uv[ch]    -= evicted_.mean_uv[ch];

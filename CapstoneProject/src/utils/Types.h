@@ -223,8 +223,8 @@ struct Stats_s {
 // AFTER bandpass + CAR + artifact rejection
 struct SignalStats_s {
 	Stats_s rollingStats;
-    float current_bad_win_rate = 0.0;
-    float overall_bad_win_rate = 0.0;
+    float current_bad_win_rate = 0.0; // last 45 s
+    float overall_bad_win_rate = 0.0; // since start
     size_t num_win_in_rolling = 0;
 };
 
