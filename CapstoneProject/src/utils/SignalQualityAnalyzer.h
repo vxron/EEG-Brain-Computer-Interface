@@ -21,6 +21,8 @@
 
     // (d) Entropy (eye blinks)
 
+// TODO: add a check for poor electrode contact (e.g. no signal, not enough variation idk)
+
 
 // thresholds
 static constexpr float MAX_ABS_UV = 200.0f;     // amplitude threshold

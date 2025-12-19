@@ -50,6 +50,13 @@ const btnSessionsNew = document.getElementById("btn-sessions-new");
 const btnSessionsBack = document.getElementById("btn-sessions-back");
 const btnStartHw = document.getElementById("btn-start-hw");
 
+// Health headers (above plots, saying whether or not we overall healthy)
+const elHealthBadge = document.getElementById("hw-health-badge");
+const elHealthLabel = document.getElementById("hw-health-label");
+const elHealthRollBad = document.getElementById("hw-roll-bad");
+const elHealthOverallBad = document.getElementById("hw-overall-bad");
+const elHealthRollN = document.getElementById("hw-roll-n");
+
 // Modal (POPUP) DOM elements
 const elModalBackdrop = document.getElementById("modal-backdrop");
 const elModalTitle = document.getElementById("modal-title");
@@ -625,12 +632,9 @@ async function hardwareLoop() {
     // init charts w configs
     initHardwareCharts(nChannels, labels, fs, units);
 
-    // extract meta from quality array (0/1)
-    const quality = Array.isArray(qJson.quality)
-      ? qJson.quality
-      : new Array(nChannels).fill(0);
-    // Update the pills row at the top
-    updateHwQualityPills(quality);
+    // extract meta from stats (getQuality GET req)
+    const statsJson = await qRes.json();
+    updateHwHealthHeader(statsJson.rates);
 
     // Each entry in eeg.channels[ch] is an array of samples for that channel
     const numSamples = eeg.channels[0].length;
@@ -653,7 +657,11 @@ async function hardwareLoop() {
         }
 
         // Colour line based on quality (green = good, red = bad)
-        ds.borderColor = quality[ch] ? "#4ade80" : "#f97373";
+        const r = statsJson?.rates?.current_bad_win_rate;
+        const hc = healthClassFromBadRate(r).cls;
+        if (hc === "good") ds.borderColor = "#4ade80";
+        else if (hc === "warn") ds.borderColor = "#facc15";
+        else ds.borderColor = "#f97373";
       }
 
       hwGlobalIndex++;
@@ -687,9 +695,16 @@ function initHardwareCharts(nChannels, labels, fs, units) {
 
     // update label text for each label
     hwCharts.forEach((chart, ch) => {
-      const labelDiv = chart._labelDiv; // update
-      if (labelDiv) {
-        labelDiv.firstChild.textContent = hwLabels[ch] || `Ch ${ch + 1}`;
+      if (chart._primarySpan) {
+        chart._primarySpan.textContent = hwLabels[ch] || `Ch ${ch + 1}`;
+      }
+      // update units text if needed
+      if (chart._secondarySpan) {
+        chart._secondarySpan.textContent = units || "uV";
+      }
+      // dataset label (not visible)
+      if (chart.data?.datasets?.[0]) {
+        chart.data.datasets[0].label = hwLabels[ch] || `Ch ${ch + 1}`;
       }
     });
     return; // init complete
@@ -715,23 +730,39 @@ function initHardwareCharts(nChannels, labels, fs, units) {
     const wrapper = document.createElement("div");
     wrapper.className = "hw-plot";
 
-    // plot title
-    const labelDiv = document.createElement("div");
-    labelDiv.className = "hw-plot-label";
+    // HEADER (title left + stats right)
+    const header = document.createElement("div");
+    header.className = "hw-plot-header";
 
-    // Primary axis label (channel name)
+    const left = document.createElement("div");
+    left.className = "hw-plot-left";
+
+    const title = document.createElement("div");
+    title.className = "hw-plot-title";
+
     const primarySpan = document.createElement("span");
     primarySpan.textContent = hwLabels[ch] || `Ch ${ch + 1}`;
 
-    // Secondary axis label (units, e.g., "uV")
     const secondarySpan = document.createElement("span");
     secondarySpan.className = "secondary";
     secondarySpan.textContent = units || "uV";
 
-    // assembled axis label
-    labelDiv.appendChild(primarySpan);
-    labelDiv.appendChild(secondarySpan);
-    wrapper.appendChild(labelDiv);
+    title.appendChild(primarySpan);
+    title.appendChild(secondarySpan);
+    left.appendChild(title);
+
+    const stats = document.createElement("div");
+    stats.className = "hw-plot-stats";
+    stats.innerHTML = `
+      <span class="stat-chip" data-k="rms">RMS <b id="hwstat-rms-${ch}">—</b></span>
+      <span class="stat-chip" data-k="maxabs">MAX <b id="hwstat-maxabs-${ch}">—</b></span>
+      <span class="stat-chip" data-k="step">STEP <b id="hwstat-step-${ch}">—</b></span>
+      <span class="stat-chip" data-k="std">STD <b id="hwstat-std-${ch}">—</b></span>
+    `;
+
+    header.appendChild(left);
+    header.appendChild(stats);
+    wrapper.appendChild(header);
 
     // Canvas where Chart.js will draw the line plot
     const canvas = document.createElement("canvas");
@@ -788,7 +819,8 @@ function initHardwareCharts(nChannels, labels, fs, units) {
       },
     });
 
-    chart._labelDiv = labelDiv;
+    chart._primarySpan = primarySpan;
+    chart._secondarySpan = secondarySpan;
     // track next x-index per channel
     chart._nextX = 0;
 
@@ -797,31 +829,76 @@ function initHardwareCharts(nChannels, labels, fs, units) {
   }
 }
 
-// update the pill row with per-channel quality indication based on backend results
-function updateHwQualityPills(qualityArr) {
-  if (!hwQualityRow) return;
-  hwQualityRow.innerHTML = ""; // clear existing
-  // one pill per ACTIVE channel
-  for (let ch = 0; ch < hwNChannels; ch++) {
-    const isGood = qualityArr[ch];
-    // wrapper
-    const pill = document.createElement("div");
-    pill.className = "hw-quality-pill " + (isGood ? "good" : "bad");
-    // dots for good or bad channel
-    const dot = document.createElement("div");
-    dot.className = "hw-quality-pill-dot " + (isGood ? "good" : "bad");
-    // text label for good or bad channel
-    const labelSpan = document.createElement("span");
-    const chLabel = hwLabels[ch] || `Ch ${ch + 1}`;
-    labelSpan.textContent = `${chLabel}: ${isGood ? "OK" : "Needs Work"}`;
-    // Assemble pill
-    pill.appendChild(dot);
-    pill.appendChild(labelSpan);
-    hwQualityRow.appendChild(pill); // add to row
+// ============================== 12) HW HEALTH HELPERS ! =============================
+function pct(x) {
+  if (x == null || Number.isNaN(x)) return "—";
+  return (x * 100).toFixed(1) + "%";
+}
+
+// map current bad window rate to healthy/unhealthy/ok (green/red/yellow)
+function healthClassFromBadRate(r) {
+  if (r == null || Number.isNaN(r)) return { cls: "warn", label: "Measuring…" };
+  if (r < 0.15) return { cls: "good", label: "OK: stable signal" };
+  if (r < 0.4)
+    return { cls: "warn", label: "Borderline: maybe adjust electrodes" };
+  return { cls: "bad", label: "Needs work: too many artifacts" };
+}
+
+function updateHwHealthHeader(rates) {
+  const r = rates?.current_bad_win_rate;
+  const o = rates?.overall_bad_win_rate;
+  const n = rates?.num_win_in_rolling;
+
+  const { cls, label: txt } = healthClassFromBadRate(r);
+
+  if (elHealthBadge) {
+    elHealthBadge.classList.remove("good", "warn", "bad");
+    elHealthBadge.classList.add(cls);
+  }
+  if (elHealthLabel) elHealthLabel.textContent = txt;
+
+  if (elHealthRollBad) elHealthRollBad.textContent = pct(r);
+  if (elHealthOverallBad) elHealthOverallBad.textContent = pct(o);
+  if (elHealthRollN) elHealthRollN.textContent = n == null ? "—" : String(n);
+}
+
+function fmt1(x) {
+  if (x == null || Number.isNaN(x)) return "—";
+  return Number(x).toFixed(1);
+}
+
+function setText(id, txt) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = txt;
+}
+
+function updatePerChannelStats(statsJson) {
+  const roll = statsJson?.rolling;
+  const n = statsJson?.n_channels || 0;
+  if (!roll || n <= 0) return;
+
+  for (let ch = 0; ch < n; ch++) {
+    setText(`hwstat-rms-${ch}`, fmt1(roll.rms_uv?.[ch]));
+    setText(`hwstat-maxabs-${ch}`, fmt1(roll.max_abs_uv?.[ch]));
+    setText(`hwstat-step-${ch}`, fmt1(roll.max_step_uv?.[ch]));
+    setText(`hwstat-std-${ch}`, fmt1(roll.std_uv?.[ch]));
   }
 }
 
-// =============== 12) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
+function applyChipClass(valueId, v, warnTh, badTh) {
+  const el = document.getElementById(valueId);
+  if (!el) return;
+  const chip = el.closest(".stat-chip");
+  if (!chip) return;
+
+  chip.classList.remove("warn", "bad");
+
+  if (v == null || Number.isNaN(v)) return;
+  if (v >= badTh) chip.classList.add("bad");
+  else if (v >= warnTh) chip.classList.add("warn");
+}
+
+// =============== 13) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
 // Helper to send a session event to C++
 async function sendSessionEvent(kind) {
   // IMPORTANT: kind is defined sporadically in init(), e.g. "start_calib", "start_run"
@@ -844,7 +921,7 @@ async function sendSessionEvent(kind) {
   }
 }
 
-// ================== 13) INIT ON PAGE LOAD ===================
+// ================== 14) INIT ON PAGE LOAD ===================
 async function init() {
   logLine("Initializing UI…");
   const estimated_refresh = await estimateRefreshHz();

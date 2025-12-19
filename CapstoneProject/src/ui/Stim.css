@@ -483,6 +483,121 @@ body {
   background: #f97373;
 }
 
+/* HEALTH HEADER */
+.hw-health {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid #1e293b;
+  background: radial-gradient(
+    circle at top left,
+    rgba(99, 102, 241, 0.1),
+    rgba(2, 6, 23, 0.85) 60%
+  );
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.55);
+}
+
+.hw-health-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.hw-health-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  border: 1px solid #1e293b;
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.hw-health-badge .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #64748b;
+}
+
+.hw-health-badge .title {
+  font-size: 0.85rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.hw-health-badge .sub {
+  font-size: 0.75rem;
+  color: rgba(203, 213, 225, 0.75);
+}
+
+/* Badge states */
+.hw-health-badge.good {
+  border-color: rgba(74, 222, 128, 0.55);
+  background: rgba(34, 197, 94, 0.1);
+}
+.hw-health-badge.good .dot {
+  background: var(--success);
+}
+
+.hw-health-badge.warn {
+  border-color: rgba(250, 204, 21, 0.55);
+  background: rgba(250, 204, 21, 0.1);
+}
+.hw-health-badge.warn .dot {
+  background: #facc15;
+}
+
+.hw-health-badge.bad {
+  border-color: rgba(248, 113, 113, 0.6);
+  background: rgba(248, 113, 113, 0.1);
+}
+.hw-health-badge.bad .dot {
+  background: var(--danger);
+}
+
+/* Compact meta strip */
+.hw-health-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.meta-item {
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(30, 41, 59, 0.9);
+  background: rgba(2, 6, 23, 0.6);
+  min-width: 140px;
+}
+
+.meta-item .k {
+  font-size: 0.7rem;
+  color: rgba(203, 213, 225, 0.7);
+  margin-bottom: 2px;
+}
+
+.meta-item .v {
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.hw-health-right {
+  display: flex;
+  align-items: center;
+}
+
+.hw-health-hint {
+  font-size: 0.75rem;
+  color: rgba(203, 213, 225, 0.7);
+  max-width: 340px;
+}
+
 /* Plots container: scrolls INSIDE this region, not the whole page */
 #hw-plots-container {
   flex: 1;

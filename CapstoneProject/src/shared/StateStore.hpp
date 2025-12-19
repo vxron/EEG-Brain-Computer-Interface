@@ -66,6 +66,12 @@ struct StateStore_s{
     SignalStats_s SignalStats;
     mutable std::mutex signal_stats_mtx;
 
+    // Helper: get copy of signal stats for HTTP to read safely 
+    SignalStats_s get_signal_stats(){
+        std::lock_guard<std::mutex> lock(signal_stats_mtx);
+        return SignalStats;
+    }
+
     // Training status (Python) + subject / session ID
     struct sessionInfo_s {
         std::atomic<bool> g_isModelReady{0};

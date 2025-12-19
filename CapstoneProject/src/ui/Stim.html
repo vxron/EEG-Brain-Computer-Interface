@@ -183,9 +183,41 @@
           <br />
 
           <!-- Quality indicators row -->
-          <div id="hw-quality-row" class="hw-quality-row">
-            <!-- pills will be injected by JS get requests to backend -->
+          <!-- Health header -->
+          <div class="hw-health">
+            <div class="hw-health-left">
+              <div id="hw-health-badge" class="hw-health-badge good">
+                <span class="dot"></span>
+                <div class="txt">
+                  <div class="title">Signal Health</div>
+                  <div id="hw-health-label" class="sub">—</div>
+                </div>
+              </div>
+
+              <div class="hw-health-meta">
+                <div class="meta-item">
+                  <div class="k">Rolling bad windows</div>
+                  <div id="hw-roll-bad" class="v">—%</div>
+                </div>
+                <div class="meta-item">
+                  <div class="k">Overall bad windows</div>
+                  <div id="hw-overall-bad" class="v">—%</div>
+                </div>
+                <div class="meta-item">
+                  <div class="k">Rolling window</div>
+                  <div id="hw-roll-n" class="v">—</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="hw-health-right">
+              <div class="hw-health-hint">
+                Green = stable signal. Yellow = borderline. Red = too many
+                artifact windows.
+              </div>
+            </div>
           </div>
+
           <!-- Scrollable container with stacked channel plots -->
           <div id="hw-plots-container" class="hw-plots-container">
             <!-- channel canvases will be injected by JS -->
