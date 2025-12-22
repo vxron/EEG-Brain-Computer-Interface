@@ -376,6 +376,12 @@ function updateUiFromState(data) {
           "Please complete at least one calibration session before trying to start run mode."
         );
         break;
+      case 3: // UIPopup_TooManyBadWindowsInRun
+        showModal(
+          "Too many artifactual windows detected",
+          "Please check headset placement and rerun hardware checks to verify signal."
+        );
+        break;
       default:
         showModal(
           "DEBUG MSG",
@@ -618,7 +624,7 @@ async function hardwareLoop() {
 
     // If backend says "no data yet", just try again next animation frame
     if (!eeg.ok) {
-      hwAnimId = setTimeout(hardwareLoop, 150);
+      hwAnimId = setTimeout(hardwareLoop, 200);
       return;
     }
 
@@ -633,8 +639,8 @@ async function hardwareLoop() {
     initHardwareCharts(nChannels, labels, fs, units);
 
     // extract meta from stats (getQuality GET req)
-    const statsJson = await qRes.json();
-    updateHwHealthHeader(statsJson.rates);
+    updateHwHealthHeader(qJson.rates);
+    updatePerChannelStats(qJson);
 
     // Each entry in eeg.channels[ch] is an array of samples for that channel
     const numSamples = eeg.channels[0].length;
@@ -657,7 +663,7 @@ async function hardwareLoop() {
         }
 
         // Colour line based on quality (green = good, red = bad)
-        const r = statsJson?.rates?.current_bad_win_rate;
+        const r = qJson?.rates?.current_bad_win_rate;
         const hc = healthClassFromBadRate(r).cls;
         if (hc === "good") ds.borderColor = "#4ade80";
         else if (hc === "warn") ds.borderColor = "#facc15";
@@ -685,7 +691,7 @@ async function hardwareLoop() {
   } catch (err) {
     console.log("hardwareLoop error:", err);
   }
-  hwAnimId = setTimeout(hardwareLoop, 150); // sched next frame in 150ms (a little more than 5Hz) (inf loop until hw mode is exited)
+  hwAnimId = setTimeout(hardwareLoop, 200); // sched next frame in 150ms (a little more than 5Hz) (inf loop until hw mode is exited)
 }
 
 function initHardwareCharts(nChannels, labels, fs, units) {
@@ -791,7 +797,7 @@ function initHardwareCharts(nChannels, labels, fs, units) {
         responsive: true, // Resize with container/viewport
         maintainAspectRatio: false, // Let CSS control
         layout: {
-          padding: { top: 4, right: 6, bottom: 18, left: 6 },
+          padding: { top: 4, right: 6, bottom: 25, left: 6 },
         },
         scales: {
           x: {

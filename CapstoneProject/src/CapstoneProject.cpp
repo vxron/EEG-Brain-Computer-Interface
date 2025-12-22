@@ -153,6 +153,10 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     logger::tlabel = "consumer";
     LOG_ALWAYS("consumer start");
     size_t tick_count = 0;
+    size_t run_mode_bad_windows = 0;
+    size_t run_mode_bad_window_count = 0;
+    size_t run_mode_clean_window_count = 0;
+    SW_Timer_C run_mode_bad_window_timer;
 
 try{
     SignalQualityAnalyzer_C SignalQualityAnalyzer(&stateStoreRef);
@@ -406,6 +410,30 @@ try{
             // run ftr extraction + classifier pipeline to get decision
             // TODO WHEN READY: add ftr vector + make decision here for run mode
             SignalQualityAnalyzer.check_artifact_and_flag_window(window);
+            // popup saying 'signal is bad, too many artifactual windows. run hardware checks' when too many bad windows detected in a certain time frame, then reset
+            if(run_mode_bad_window_timer.check_timer_expired()){
+                // expired -> see if we should throw popup based on bad window counts in the 9s timeout period
+                if(run_mode_bad_window_count / run_mode_clean_window_count >= 0.25) { // require 4:1 good:bad ratio
+                    // DO POPUP
+                    stateStoreRef.g_ui_popup.store(UIPopup_TooManyBadWindowsInRun, std::memory_order_release);
+                }
+                // reset for next round
+                run_mode_bad_window_count = 0;
+            }
+
+            if(window.isArtifactualWindow){
+                if(!run_mode_bad_window_timer.is_started()){
+                    run_mode_bad_window_timer.start_timer(std::chrono::milliseconds{9000});
+                }
+                run_mode_bad_window_count++;
+                continue; // don't use this window
+            } else {
+                // clean window
+                if(run_mode_bad_window_timer.is_started()){
+                    // add to within-timer clean window count for comparison
+                    run_mode_clean_window_count++;
+                }
+            }
         }
         
 	}

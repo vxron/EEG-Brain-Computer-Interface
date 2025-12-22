@@ -430,6 +430,11 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow: hidden;
+}
+
+#hw-plots-container {
+  min-height: 0;
 }
 
 /* Row of pills at the top */
@@ -640,6 +645,73 @@ body {
 .hw-plot-label .secondary {
   opacity: 0.7;
   font-size: 0.75rem;
+}
+
+.hw-plot-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.hw-plot-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+}
+
+.hw-plot-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #cbd5f5;
+  font-weight: 600;
+}
+
+.hw-plot-title .secondary {
+  opacity: 0.65;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* HW STATS CARDS NEXT TO PLOTS! */
+.hw-plot-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.stat-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(30, 41, 59, 0.95);
+  background: rgba(2, 6, 23, 0.55);
+  font-size: 0.72rem;
+  color: rgba(203, 213, 225, 0.75);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-chip b {
+  color: #e5e7eb;
+  font-weight: 700;
+}
+
+/* optional: subtly highlight “big” values without screaming */
+.stat-chip.warn {
+  border-color: rgba(250, 204, 21, 0.55);
+  background: rgba(250, 204, 21, 0.08);
+}
+.stat-chip.bad {
+  border-color: rgba(248, 113, 113, 0.6);
+  background: rgba(248, 113, 113, 0.08);
 }
 
 /* SESSIONS LIST (CLICKABLE SAVED SESSIONS) */
