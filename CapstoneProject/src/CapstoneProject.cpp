@@ -409,6 +409,8 @@ try{
         else if(currState == UIState_Active_Run){
             // run ftr extraction + classifier pipeline to get decision
             // TODO WHEN READY: add ftr vector + make decision here for run mode
+            
+            // TODO: NEEDS TESTING IN RUN MODE (BCUZ WE HAVENT IMPLEMENTED THIS MODE YET)
             SignalQualityAnalyzer.check_artifact_and_flag_window(window);
             // popup saying 'signal is bad, too many artifactual windows. run hardware checks' when too many bad windows detected in a certain time frame, then reset
             if(run_mode_bad_window_timer.check_timer_expired()){
