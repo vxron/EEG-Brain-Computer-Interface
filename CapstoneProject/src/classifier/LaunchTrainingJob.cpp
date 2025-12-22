@@ -4,6 +4,9 @@
 #include <sstream>
 #include "../utils/Logger.hpp"
 
+// TODO: IMPLEMENT SOMTHN ON UI TO SHOW 'WAITING FOR TRAINING'
+// since it could take a while :,)
+
 TrainingJob_C::TrainingJob_C(std::string subject_id, std::string session_id, std::filesystem::path data_dir, std::filesystem::path model_dir) : 
     subject_id_(subject_id), session_id_(session_id), data_dir_(data_dir), model_dir_(model_dir) 
 {}
@@ -12,7 +15,7 @@ void TrainingJob_C::launch_training_job(StateStore_s& stateStore){
     logger::tlabel = "launchTrainingJob_C";
     const std::filesystem::path scriptPath =
         R"(C:\Users\fsdma\capstone\capstone\CapstoneProject\model train\python\train_svm.py)";
-        // ^ FIX THIS SO ITS NOT LOCAL TO MY PC
+        // ^ RODO: FIX THIS SO ITS NOT LOCAL TO MY PC
     
     // Spawn worker thread
     std::thread([&stateStore, this, scriptPath]() {

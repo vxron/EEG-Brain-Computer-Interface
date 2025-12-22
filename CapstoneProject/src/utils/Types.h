@@ -19,7 +19,8 @@
 #include "RingBuffer.hpp"
 #include <deque>
 #include "../classifier/ONNXClassifier.hpp"
-#include "SWTimer.hpp"
+#include <filesystem>
+namespace fs = std::filesystem;
 
 // _T for type
 // Use steady clock for time measurements (monotonic, not affected by system clock changes)
@@ -205,7 +206,7 @@ struct sessionConfigs_S {
 	stimulus_s right_stimulus;
 };
 
-// Window level stats
+/* SIGNAL STATS */
 struct Stats_s {
 	// value init all arrays to 0
     std::array<float, NUM_CH_CHUNK> mean_uv{};
@@ -228,5 +229,16 @@ struct SignalStats_s {
     size_t num_win_in_rolling = 0;
 };
 
+/* SESSION INFO */
+// - Consumer logging uses data_session_dir.
+// - Training outputs use model_session_dir.
+// - Both share the same subject_id + session_id.
+struct SessionPaths {
+    fs::path project_root;      // .../CapstoneProject
+    std::string subject_id;     // "hadeel" or "person3"
+    std::string session_id;     // "2025-12-22_14-31-08"
+    fs::path data_session_dir;  // .../data/<subject>/<session>/
+    fs::path model_session_dir; // .../models/<subject>/<session>/
+};
 
 /* END STRUCTS */
