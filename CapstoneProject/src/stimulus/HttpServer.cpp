@@ -145,36 +145,63 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
     write_json(res, "{\"ok\":true}");
 }
 
-// writes the quality array for each channel (output decision of signal quality checker)
+// returns rolling stats 
+// TODO: Add pipeline for 'quality' assessment (red/yellow/green) BASED ON CURRENT BAD WINDOW RATE
+// ^^maybe implement in js honestly
 void HttpServer_C::handle_get_quality(const httplib::Request& req,
                                       httplib::Response& res)
 {
     (void)req;
 
-    if (!stateStoreRef_.g_hasEegChunk.load(std::memory_order_acquire)) {
-        // no chunk yet: return empty but valid structure
-        write_json(res,
-            "{\"n_channels\":0,\"labels\":[],\"quality\":[]}"
-        );
-        return;
-    }
-
-    bufferChunk_S last = stateStoreRef_.get_lastEegChunk();
-
     int n_ch = stateStoreRef_.g_n_eeg_channels.load(std::memory_order_acquire);
-    if (n_ch <= 0 || n_ch > NUM_CH_CHUNK) {
-        n_ch = NUM_CH_CHUNK; // safety fallback
-    }
+    if (n_ch <= 0 || n_ch > NUM_CH_CHUNK) n_ch = NUM_CH_CHUNK; // default to the 8 channels
 
+    // Get rolling stats snapshot (mtx-protected in statestore)
+    SignalStats_s ss = stateStoreRef_.get_signal_stats();
+    const Stats_s rollingStats = ss.rollingStats;
+    
     std::ostringstream oss;
     oss << "{";
-    // quality array
-    oss << "\"quality\":[";
-    for (int i = 0; i < n_ch; ++i) {
-        oss << (last.quality[i] ? 1 : 0);
-        if (i < (n_ch - 1)) oss << ",";
+    oss << "\"n_channels\":" << n_ch << ",";
+
+    // labels
+    oss << "\"labels\":[";
+    for (int ch = 0; ch < n_ch; ++ch) {
+        const std::string& lbl = stateStoreRef_.eeg_channel_labels[ch];
+        oss << "\"" << lbl << "\"";
+        if (ch < n_ch - 1) oss << ",";
     }
-    oss << "]}";
+    oss << "],";
+
+    // rolling stats arrays - lambda helper :)
+    auto write_arr = [&](const char* key, const auto& arr){
+        oss << "\"" << key << "\":[";
+        for (int ch = 0; ch < n_ch; ++ch) {
+            oss << arr[ch];
+            if (ch < n_ch - 1) oss << ",";
+        }
+        oss << "]";
+    };
+
+    oss << "\"rolling\":{";
+    write_arr("mean_uv",     rollingStats.mean_uv);     oss << ",";
+    write_arr("std_uv",      rollingStats.std_uv);      oss << ",";
+    write_arr("rms_uv",      rollingStats.rms_uv);      oss << ",";
+    write_arr("mad_uv",      rollingStats.mad_uv);      oss << ",";
+    write_arr("max_abs_uv",  rollingStats.max_abs_uv);  oss << ",";
+    write_arr("max_step_uv", rollingStats.max_step_uv); oss << ",";
+    write_arr("kurt",        rollingStats.kurt);        oss << ",";
+    write_arr("entropy",     rollingStats.entropy);
+    oss << "},";
+
+    // summary rates (rolling + overall)
+    oss << "\"rates\":{"
+        << "\"current_bad_win_rate\":" << ss.current_bad_win_rate << ","
+        << "\"overall_bad_win_rate\":" << ss.overall_bad_win_rate << ","
+        << "\"num_win_in_rolling\":"   << ss.num_win_in_rolling
+        << "}";
+
+    oss << "}";
     write_json(res, oss.str());
 }
 

@@ -97,6 +97,9 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
             //stateStoreRef_->g_ui_popup.store(UIPopup_None);
+            // reset hardware page
+            std::lock_guard<std::mutex> lock(stateStoreRef_->signal_stats_mtx);
+            stateStoreRef_->SignalStats = SignalStats_s{}; //reset 
             break;
         }
         

@@ -109,6 +109,7 @@ enum UIPopup_E {
 	UIPopup_None,
 	UIPopup_MustCalibBeforeRun,
 	UIPopup_ModelFailedToLoad,
+	UIPopup_TooManyBadWindowsInRun,
 };
 
 enum BitOperation_E {
@@ -166,7 +167,6 @@ struct bufferChunk_S {
 	std::size_t numScans = NUM_SCANS_CHUNK;      // number of scans (time steps) in this chunk (32)
 	std::array<float, NUM_SAMPLES_CHUNK> data{}; // interleaved samples: [ch0s0, ch1s0, ch2s0, ..., chN-1s0, ch0s1, ch1s1, ..., chN-1sM-1]
 	bool active_label;                           // obtained from stimulus global state
-	std::array<bool, NUM_CH_CHUNK> quality;	     // quality flag for each channel in a single chunk
 }; // bufferChunk_S
 
 struct trainingProto_S {
@@ -203,6 +203,29 @@ struct stimulus_s {
 struct sessionConfigs_S {
 	stimulus_s left_stimulus;
 	stimulus_s right_stimulus;
+};
+
+// Window level stats
+struct Stats_s {
+	// value init all arrays to 0
+    std::array<float, NUM_CH_CHUNK> mean_uv{};
+    std::array<float, NUM_CH_CHUNK> std_uv{};
+    std::array<float, NUM_CH_CHUNK> rms_uv{};
+    std::array<float, NUM_CH_CHUNK> mad_uv{};
+    std::array<float, NUM_CH_CHUNK> max_abs_uv{};
+    std::array<float, NUM_CH_CHUNK> max_step_uv{};
+    std::array<float, NUM_CH_CHUNK> kurt{};
+    std::array<float, NUM_CH_CHUNK> entropy{};
+	bool isBad = false;
+};
+
+// Running statistic measures of signals (rolling 45s)
+// AFTER bandpass + CAR + artifact rejection
+struct SignalStats_s {
+	Stats_s rollingStats{};
+    float current_bad_win_rate = 0.0; // last 45 s
+    float overall_bad_win_rate = 0.0; // since start
+    size_t num_win_in_rolling = 0;
 };
 
 

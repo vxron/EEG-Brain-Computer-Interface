@@ -17,6 +17,7 @@ add_executable(CapstoneProject
   src/utils/Logger.cpp
   src/stimulus/HttpServer.cpp
   src/stimulus/StimulusController.cpp
+  src/utils/SignalQualityAnalyzer.cpp
 )
 
 # expose headers to IDEs (no compilation)

@@ -27,6 +27,7 @@
 #include "../utils/Types.h" // gives NUM_CH_CHUNK, NUM_SCANS_CHUNK
 #include <random>    // std::mt19937, std::normal_distribution 
 #include "IAcqProvider.h" // IAcqProvider_S
+#include <array>
 
 class FakeAcquisition_C : public IAcqProvider_S {
 public:
@@ -38,16 +39,16 @@ public:
 	};
 	struct stimConfigs_S {
 
-		double ssvepAmplitude_uV = 60.0;
-		double noiseSigma_uV = 8.0;
+		double ssvepAmplitude_uV = 12.0;
+		double noiseSigma_uV = 5.0;
 
 		// Background components (freq, amp (uV), enabled)
 		waveComponent_S dcDrift   { 0.1,  10.0,  false };  // "drift" at 0.1 Hz
-    	waveComponent_S alpha     { 10.0, 5.0,  false };  // 8–12 Hz band
-    	waveComponent_S beta      { 20.0, 6.0,  false };  // 12–30 Hz band
-    	waveComponent_S lineNoise { 60.0, 7.0,  false };  // 60hz noise
+    	waveComponent_S alpha     { 10.0, 7.0,  false };  // 8–12 Hz band
+    	waveComponent_S beta      { 20.0, 3.5,  false };  // 12–30 Hz band
+    	waveComponent_S lineNoise { 60.0, 4.0,  false };  // 60hz noise
 
-		bool occasionalArtifactsEnabled = 0;
+		bool occasionalArtifactsEnabled = 1;
 
 	}; // stimConfigs_S
 	
@@ -88,6 +89,7 @@ private:
 	// Random sources for noise gen
 	std::mt19937 rng_;
 	std::normal_distribution<double> noiseNorm_{ 0.0, 1.0 }; // std=1; scaled later
+	std::normal_distribution<double> norm01_{0.0, 1.0};   
 	std::uniform_real_distribution<double> uni01_{0.0, 1.0};
 
 	// Phase offsets for the superimposed signals
@@ -95,10 +97,6 @@ private:
 	double alphaPhase_   = 0.0;
 	double betaPhase_   = 0.0;
 	double linePhase_    = 0.0;
-
-	// Artifact generation (blinks, muscle motions, etc)
-	std::size_t artifactSamplesLeft_   = 0;
-	std::size_t samplesToNextArtifact_ = 0;
 
 	// Helpers
 	void synthesize_data_stream(float* dest, std::size_t numberOfScans); // used by mock_GetData
@@ -110,9 +108,44 @@ private:
 	inline double stimulus_signal(double sigAmp_uV, double phase){
 		return sigAmp_uV * std::sin(phase);
 	}
+	void maybe_start_artifact();
+    double artifact_value_for_channel(std::size_t ch);
+	double randu(double a, double b) { return a + (b - a) * uni01_(rng_); }
+    double randn(double sigma) { return sigma * norm01_(rng_); }
 
 	// channel configs
 	int numChannels_;
     std::vector<std::string> channelLabels_;
+
+	// ===================== per-channel parameters =====================
+    std::array<double, NUM_CH_CHUNK> chGain_{};         // generic per-channel gain
+    std::array<double, NUM_CH_CHUNK> chNoiseSigma_{};   // per-channel noise sigma
+
+    std::array<double, NUM_CH_CHUNK> chSsvEpGain_{};    // per-channel ssvep amplitude multiplier
+    std::array<double, NUM_CH_CHUNK> chSsvEpPhase_{};   // per-channel ssvep phase offset
+
+    std::array<double, NUM_CH_CHUNK> chAlphaGain_{};    // per-channel alpha multiplier
+    std::array<double, NUM_CH_CHUNK> chAlphaPhase_{};   // per-channel alpha phase
+    std::array<double, NUM_CH_CHUNK> chBetaGain_{};     // per-channel beta multiplier
+    std::array<double, NUM_CH_CHUNK> chBetaPhase_{};    // per-channel beta phase
+    std::array<double, NUM_CH_CHUNK> chLineGain_{};     // per-channel line multiplier
+    std::array<double, NUM_CH_CHUNK> chLinePhase_{};    // per-channel line phase
+
+	// ===================== artifact model =====================
+	enum class ArtifactType { None, Blink, ElectrodePop };
+    
+	ArtifactType artType_ = ArtifactType::None;
+    std::size_t artSamplesLeft_ = 0;
+    std::size_t samplesToNextArtifact_ = 0;
+
+    // blink state
+    std::size_t blinkTotalSamples_ = 0;    // duration
+    std::size_t blinkProgress_ = 0;        // current sample in blink
+    double blinkAmp_uV_ = 0.0;             // amplitude
+
+    // electrode pop state
+    int popChannel_ = 0;
+    double popLevel_uV_ = 0.0;
+    double popDecay_ = 0.995;              // decay per sample
 
 };

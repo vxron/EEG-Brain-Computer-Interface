@@ -20,6 +20,97 @@ FakeAcquisition_C::FakeAcquisition_C(const stimConfigs_S &configs) : configs_(co
         channelLabels_[i] = "Ch" + std::to_string(i + 1);
     }
 
+    // per channel variability
+    for (int ch = 0; ch < numChannels_; ++ch) {
+        // small generic gain variation
+        chGain_[ch] = randu(0.9, 1.1);
+
+        // per-channel noise sigma (0.8x..1.2x)
+        chNoiseSigma_[ch] = configs_.noiseSigma_uV * randu(0.8, 1.2);
+
+        // random phases
+        chSsvEpPhase_[ch] = randu(0.0, kTwoPi);
+        chAlphaPhase_[ch] = randu(0.0, kTwoPi);
+        chBetaPhase_[ch]  = randu(0.0, kTwoPi);
+        chLinePhase_[ch]  = randu(0.0, kTwoPi);
+
+        // per-channel background gains
+        chAlphaGain_[ch] = randu(0.7, 1.3);
+        chBetaGain_[ch]  = randu(0.7, 1.3);
+        chLineGain_[ch]  = randu(0.7, 1.3);
+
+        // SSVEP is spatially weighted: “occipital-ish” channels stronger.
+        // just weight last 2 channels higher.
+        const bool occipitalish = (ch >= (numChannels_ - 2));
+        chSsvEpGain_[ch] = occipitalish ? randu(1.0, 1.6) : randu(0.2, 0.6);
+    }
+}
+
+void FakeAcquisition_C::maybe_start_artifact() {
+    if (!configs_.occasionalArtifactsEnabled) return;
+
+    // already running
+    if (artSamplesLeft_ > 0) return;
+
+    // countdown until next artifact
+    if (samplesToNextArtifact_ > 0) {
+        samplesToNextArtifact_--;
+        return;
+    }
+
+    // pick artifact type
+    const double r = uni01_(rng_);
+    if (r < 0.70) {
+        // ----------------- BLINK -----------------
+        artType_ = ArtifactType::Blink;
+        blinkTotalSamples_ = static_cast<std::size_t>(0.20 * fs); // 200 ms
+        blinkProgress_ = 0;
+        blinkAmp_uV_ = randu(60.0, 140.0); // decent blink amplitude
+        artSamplesLeft_ = blinkTotalSamples_;
+    } else {
+        // -------------- ELECTRODE POP -------------
+        artType_ = ArtifactType::ElectrodePop;
+        popChannel_ = static_cast<int>(randu(0.0, (double)numChannels_));
+        if (popChannel_ >= numChannels_) popChannel_ = numChannels_ - 1;
+
+        popLevel_uV_ = randu(120.0, 350.0) * (uni01_(rng_) < 0.5 ? -1.0 : 1.0); // big DC step
+        popDecay_ = randu(0.992, 0.998); // slower/faster recovery
+        artSamplesLeft_ = static_cast<std::size_t>(randu(0.30, 0.80) * fs); // 300–800ms
+    }
+
+    // schedule next artifact in 3–7 seconds
+    const double delaySec = 3.0 + 4.0 * uni01_(rng_);
+    samplesToNextArtifact_ = static_cast<std::size_t>(delaySec * fs);
+}
+
+double FakeAcquisition_C::artifact_value_for_channel(std::size_t ch) {
+    if (artSamplesLeft_ == 0 || artType_ == ArtifactType::None) return 0.0;
+
+    if (artType_ == ArtifactType::Blink) {
+        // half-sine bump: A * sin(pi*t/T), t in [0,T]
+        const double T = (blinkTotalSamples_ > 0) ? (double)blinkTotalSamples_ : 1.0;
+        const double t = (double)blinkProgress_;
+        const double x = std::sin(std::numbers::pi * (t / T));
+        const double bump = blinkAmp_uV_ * x;
+
+        // apply strongest to “frontal-ish” channels: first 2 channels stronger
+        double scale = 0.2;
+        if (ch == 0) scale = 1.0;
+        else if (ch == 1) scale = 0.7;
+        else if (ch == 2) scale = 0.4;
+
+        return scale * bump;
+    }
+
+    if (artType_ == ArtifactType::ElectrodePop) {
+        // DC step + exponential decay on one channel
+        if ((int)ch == popChannel_) {
+            return popLevel_uV_;
+        }
+        return 0.0;
+    }
+
+    return 0.0;
 }
 
 void FakeAcquisition_C::synthesize_data_stream(float* dest, std::size_t numberOfScans) {
@@ -29,7 +120,7 @@ void FakeAcquisition_C::synthesize_data_stream(float* dest, std::size_t numberOf
 	const double noise_uV = configs_.noiseSigma_uV;
 
 	// Per sample phase increments to move sine wave along consistently per sample without using real time
-	const double dt = 1 / fs;
+	const double dt = 1.0 / fs;
 
 	const bool stimEnabled = (activeStimulusHz_ > 0.0); // adding sin for ssvep?
 	 // What extras are enabled?
@@ -46,86 +137,104 @@ void FakeAcquisition_C::synthesize_data_stream(float* dest, std::size_t numberOf
     const double dphi_beta  = kTwoPi * configs_.beta.freqHz  * dt;
     const double dphi_line  = kTwoPi * configs_.lineNoise.freqHz * dt;
 
-	// Helper: background signal (drift + rhythms + line + optional artifacts)
-    auto sampleBackground = [&]() -> double {
-        double bg = 0.0;
+	double attnModPhase = 0.0;
+    const double dphi_attn = kTwoPi * 0.15 * dt; // 0.15 Hz slow modulation
 
-        // (1) DC drift
+    for (std::size_t i = 0; i < numberOfScans; i++) {
+
+        // advance artifact scheduling
+        if (enableArtifacts) maybe_start_artifact();
+
+        // global drift phase
+        double drift = 0.0;
         if (enableDrift) {
-            bg += configs_.dcDrift.amp_uV * std::sin(driftPhase_);
+            drift = configs_.dcDrift.amp_uV * std::sin(driftPhase_);
             driftPhase_ += dphi_drift;
-			// wrap around if next iter will give phaseIdx*dphi_ssvep more than 2pi
-			// and start back by overshot amount for continuity
-            if (driftPhase_ >= kTwoPi) driftPhase_ = driftPhase_ - kTwoPi;
+            if (driftPhase_ >= kTwoPi) driftPhase_ -= kTwoPi;
         }
 
-        // (2) Alpha rhythm
-        if (enableAlpha) {
-            bg += configs_.alpha.amp_uV * std::sin(alphaPhase_);
-            alphaPhase_ += dphi_alpha;
-            if (alphaPhase_ >= kTwoPi) alphaPhase_ = driftPhase_ - kTwoPi;
+        // compute attention modulation scalar (0.9..1.1) -> for more realistic SSVEP mod by attn
+        const double attn = 1.0 + 0.10 * std::sin(attnModPhase);
+        attnModPhase += dphi_attn;
+        if (attnModPhase >= kTwoPi) attnModPhase -= kTwoPi;
+
+        // ========================= per-channel composition =========================
+        for (std::size_t ch = 0; ch < (std::size_t)numChannels_; ch++) {
+
+            double bg = 0.0;
+
+            // drift applies to all (scaled a tiny bit by channel gain)
+            bg += drift * chGain_[ch];
+
+            // alpha (per-channel phase + gain)
+            if (enableAlpha) {
+                bg += (configs_.alpha.amp_uV * chAlphaGain_[ch]) * std::sin(chAlphaPhase_[ch]);
+                chAlphaPhase_[ch] += dphi_alpha;
+                if (chAlphaPhase_[ch] >= kTwoPi) chAlphaPhase_[ch] -= kTwoPi; // NEW (per-channel)
+            }
+
+            // beta (per-channel phase + gain)
+            if (enableBeta) {
+                bg += (configs_.beta.amp_uV * chBetaGain_[ch]) * std::sin(chBetaPhase_[ch]);
+                chBetaPhase_[ch] += dphi_beta;
+                if (chBetaPhase_[ch] >= kTwoPi) chBetaPhase_[ch] -= kTwoPi; // NEW
+            }
+
+            // line noise (per-channel phase + gain)
+            if (enableLine) {
+                bg += (configs_.lineNoise.amp_uV * chLineGain_[ch]) * std::sin(chLinePhase_[ch]);
+                chLinePhase_[ch] += dphi_line;
+                if (chLinePhase_[ch] >= kTwoPi) chLinePhase_[ch] -= kTwoPi; // NEW
+            }
+
+            // SSVEP (per-channel gain + per-channel phase) with harmonic (2f)
+            double ssvep = 0.0;
+            if (stimEnabled) {
+                const double A = sigAmp_uV * chSsvEpGain_[ch] * attn;
+
+                // fundamental
+                ssvep += A * std::sin(chSsvEpPhase_[ch]);
+
+                // harmonic 2f at 0.35 amplitude
+                ssvep += 0.35 * A * std::sin(2.0 * chSsvEpPhase_[ch]);
+
+                // advance phase
+                chSsvEpPhase_[ch] += dphi_ssvep;
+                if (chSsvEpPhase_[ch] >= kTwoPi) chSsvEpPhase_[ch] -= kTwoPi;
+            }
+
+            // artifact (blink/pop)
+            const double art = artifact_value_for_channel(ch);
+
+            // noise (per-channel sigma)
+            const double noiseVal = background_noise_signal(chNoiseSigma_[ch]);
+
+            // net
+            const double netVal = bg + ssvep + art + noiseVal;
+
+            dest[NUM_CH_CHUNK * i + ch] = static_cast<float>(netVal);
         }
 
-        // (3) Beta rhythm
-        if (enableBeta) {
-            bg += configs_.beta.amp_uV * std::sin(betaPhase_);
-            betaPhase_ += dphi_beta;
-            if (betaPhase_ >= kTwoPi) betaPhase_ = driftPhase_ - kTwoPi;
-        }
+        // advance artifact state counters once per scan (not per channel)
+        if (enableArtifacts && artSamplesLeft_ > 0) {
+            artSamplesLeft_--;
 
-        // (4) Line noise
-        if (enableLine) {
-            bg += configs_.lineNoise.amp_uV * std::sin(linePhase_);
-            linePhase_ += dphi_line;
-            if (linePhase_ >= kTwoPi) linePhase_ = driftPhase_ - kTwoPi;
-        }
+            if (artType_ == ArtifactType::Blink) {
+                blinkProgress_++;
+                if (blinkProgress_ > blinkTotalSamples_) blinkProgress_ = blinkTotalSamples_;
+            }
+            if (artType_ == ArtifactType::ElectrodePop) {
+                // decay pop each scan
+                popLevel_uV_ *= popDecay_;
+            }
 
-        // (5) Occasional artifacts (blinks, motion)
-        if (enableArtifacts) {
-            if (artifactSamplesLeft_ > 0) {
-                // Rectangular artifact pulse ~80 µV
-                bg += 80.0;
-                artifactSamplesLeft_--;
-            } else {
-                if (samplesToNextArtifact_ == 0) {
-                    // New artifact ~100 ms long
-                    artifactSamplesLeft_ = static_cast<std::size_t>(0.1 * fs);
-                    // Next artifact in 3–7 seconds
-                    const double delaySec = 3.0 + 4.0 * uni01_(rng_);
-                    samplesToNextArtifact_ = static_cast<std::size_t>(delaySec * fs);
-                } else {
-                    samplesToNextArtifact_--;
-                }
+            if (artSamplesLeft_ == 0) {
+                artType_ = ArtifactType::None;
             }
         }
-        return bg;
-    };
 
-	// Helper: SSVEP component (0 if no active stim)
-    auto sampleSsvEp = [&]() -> double {
-        if (!stimEnabled) return 0.0; 
-        const double sigVal = stimulus_signal(sigAmp_uV, phaseOffset_);
-        phaseOffset_ += dphi_ssvep;
-        if (phaseOffset_ >= kTwoPi) phaseOffset_ -= kTwoPi;
-        return sigVal; // return sinusoidal magnitude based on phase
-    };
-
-	// MAIN LOOP
-	for (std::size_t i = 0; i < numberOfScans; i++) {
-
-		const double bgVal    = sampleBackground();
-        const double ssvepVal = sampleSsvEp();   // may be 0 if no stim
-		
-		for (std::size_t j = 0; j < NUM_CH_CHUNK; j++) {
-			// Additive white Gaussian noise (per-channel) for realistic signal
-			const double noiseVal = background_noise_signal(noise_uV);
-			// Noise + ssvep signal + background
-			const double netVal = noiseVal + bgVal + ssvepVal;
-			dest[NUM_CH_CHUNK * i + j] = static_cast<float>(netVal); // cast to float to mimick Unicorn output
-		}
-
-		sampleCount_++;
-	}
+        sampleCount_++;
+    }
 }
 
 void FakeAcquisition_C::setActiveStimulus(double fStimHz) {

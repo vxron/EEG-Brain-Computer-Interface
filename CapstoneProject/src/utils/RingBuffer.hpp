@@ -35,6 +35,7 @@ notes:
 #include <cstddef> // std::size_t
 #include <vector>
 #include <utility>
+#include <mutex>
 #include <atomic>
 
 // semaphore template parameter type is ptrdiff_t (type for the update param in the release() function)
@@ -60,12 +61,14 @@ public:
     size_t drain(T *dest);
     void close();
     int trim_ends(size_t guard_samples);
+    bool get_trimmed_snapshot(std::vector<T>& out, size_t trimFront, size_t trimBack) const;
     size_t get_count() const { return count_.load(std::memory_order_acquire); }; 
-
+    void get_data_snapshot(std::vector<T>& dest) const;
 private:
     size_t const capacity_;
     size_t tailIdx_ = 0;
     size_t headIdx_ = 0;
+    mutable std::mutex mtx_; // for locking/unlocking arr snapshots
     std::atomic<size_t> count_ = 0;
     std::atomic<bool> isClosed_ = 0; // open upon init; atomic because both threads use it
     // full/empty conditions based on semaphore logic 

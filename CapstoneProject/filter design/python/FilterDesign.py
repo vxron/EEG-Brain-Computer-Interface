@@ -1,9 +1,9 @@
 """
-Design bandpass filter (5–25 Hz) and Savitzky–Golay smoothing filter
-for SSVEP-EEG (fs = 250 Hz).
+Design FIR bandpass filters and Savitzky–Golay smoothing filter
+for SSVEP-EEG
 
 Outputs:
- - Magnitude response plot for the 5–25 Hz FIR bandpass candidates
+ - Magnitude response plot for the FIR bandpass candidates
  - Printed FIR taps in C++-ready format
  - Recommended Savitzky–Golay parameters
 """
@@ -13,12 +13,12 @@ import matplotlib.pyplot as plt
 from scipy.signal import firwin, freqz, savgol_filter, butter, savgol_filter, savgol_coeffs
 
 FS = 250.0  # sampling rate [Hz]
-F_LO = 5.0   # bandpass low cutoff [Hz]
-F_HI = 25.0  # bandpass high cutoff [Hz]
+F_LO = 2.0   # bandpass low cutoff [Hz]
+F_HI = 35.0  # bandpass high cutoff [Hz]
 
-# ============ (1) 5-25 Hz F2nd ORDR BANDPASS FILTER =======================
+# ============ (1) 2nd ORDER BANDPASS FILTER =======================
 def design_fir(numtaps: int, window: str):
-    """Design linear-phase FIR bandpass 5–25 Hz."""
+    """Design linear-phase FIR bandpass."""
     taps = firwin(
         numtaps=numtaps,
         cutoff=[F_LO, F_HI],
@@ -32,7 +32,7 @@ def design_fir(numtaps: int, window: str):
 
 
 def design_iir_butter(order: int):
-    """Design IIR Butterworth bandpass 5–25 Hz."""
+    """Design IIR Butterworth bandpass."""
     nyq = FS / 2.0
     Wn = [F_LO / nyq, F_HI / nyq]
     b, a = butter(order, Wn, btype="bandpass")
@@ -115,6 +115,11 @@ def demo_savgol_params():
     plt.show()
 
 
+# ============== helper: group delay =======================
+# compare the latency cost of diff tap count to assess real-time responsiveness
+def group_delay_seconds(numtaps: int, fs: float) -> float:
+    return ((numtaps - 1) / 2) / fs
+
 
 # ====================== MAIN ============================================
 def main():
@@ -151,19 +156,12 @@ def main():
         "design": lambda: design_fir(numtaps=201, window="hann"),
     })
 
-    # IIR candidates
+    # IIR candidate (for reference)
     candidates.append({
         "id": "iir_butter_2",
         "name": "IIR Butterworth, order 2",
         "type": "IIR",
         "design": lambda: design_iir_butter(order=2),
-    })
-
-    candidates.append({
-        "id": "iir_butter_4",
-        "name": "IIR Butterworth, order 4",
-        "type": "IIR",
-        "design": lambda: design_iir_butter(order=4),
     })
 
     # Design and store responses
@@ -174,6 +172,12 @@ def main():
         c["a"] = a
         c["w"] = w
         c["mag_db"] = mag_db
+
+    # Group (TRANSPORT) delay:
+    # Each output sample corresponds to an input sample that occured this much earlier in time
+    if c["type"] == "FIR":
+        gd_s = group_delay_seconds(len(b), FS)
+        print(f"{c['id']}: group delay ≈ {gd_s*1000:.1f} ms")
 
     # --------- 2) Side-by-side subplot figure ---------
     n_filters = len(candidates)
@@ -193,7 +197,7 @@ def main():
         ax.plot(w, mag_db)
         ax.axvline(F_LO, color="k", linestyle="--", linewidth=0.8)
         ax.axvline(F_HI, color="k", linestyle="--", linewidth=0.8)
-        ax.set_xlim(0, 80)
+        ax.set_xlim(0, 60)
         ax.set_ylim(-100, 5)
         ax.set_title(c["name"])
         ax.grid(True, alpha=0.3)
@@ -205,7 +209,7 @@ def main():
     for k in range(n_filters, n_rows * n_cols):
         fig.delaxes(axes[k])
 
-    fig.suptitle("Candidate 5–25 Hz Bandpass Filters (fs = 250 Hz)", y=0.98)
+    fig.suptitle("Candidate Bandpass Filters (fs = 250 Hz)", y=0.98)
     fig.tight_layout(rect=[0.02, 0.02, 0.98, 0.94])
 
     # --------- 3) Overlay all candidates in 0–40 Hz range ---------
@@ -217,8 +221,8 @@ def main():
         plt.plot(w[mask], mag_db[mask], label=c["name"])
 
     # Draw key frequencies
-    plt.axvline(F_LO, color="k", linestyle="--", linewidth=0.8, label="5 Hz cut")
-    plt.axvline(F_HI, color="k", linestyle="--", linewidth=0.8, label="25 Hz cut")
+    plt.axvline(F_LO, color="k", linestyle="--", linewidth=0.8, label="low cut")
+    plt.axvline(F_HI, color="k", linestyle="--", linewidth=0.8, label="high cut")
     for f in [8, 9, 10, 11, 12]:
         plt.axvline(f, color="r", linestyle=":", linewidth=0.7)
 
