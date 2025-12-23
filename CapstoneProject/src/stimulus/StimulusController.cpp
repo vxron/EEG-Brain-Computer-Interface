@@ -2,6 +2,7 @@
 #include <thread>
 #include "../utils/Logger.hpp"
 #include "../classifier/LaunchTrainingJob.hpp"
+#include "../utils/SessionPaths.hpp"
 
 static struct state_transition{
     UIState_E from;
@@ -117,7 +118,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_freq_hz.store(freq,std::memory_order_acquire);
             // iscalib helper
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
-
+            
             // increment queue idx so we move to next test freq on next block
             activeQueueIdx_++;
 
@@ -151,11 +152,32 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_freq_hz.store(freq, std::memory_order_acquire);
             LOG_ALWAYS("SC: stored a freq=" << static_cast<int>(freq));
 
-            // iscalib helper
+            // need to create new session if we're just entering calib for the first time
+            // TODO: delete csv log after if it doesn't include full calib session
+            bool isCalib = stateStoreRef_->g_is_calib.load(std::memory_order_acquire);
+            if(!isCalib){
+                // first time entry
+                SessionPaths SessionPath;
+                std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
+                std::string subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
+                
+                // unlock mtx before creating sess cuz creating sess is heavy and we dont wanna block :,)
+                std::lock_guard<std::mutex> unlock(stateStoreRef_->currentSessionInfo.mtx_);
+                SessionPath = capstone::sesspaths::create_session(subjectName);
+                
+                // write everything to state store
+                // the new subject's model isn't ready yet
+                stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
+                stateStoreRef_->currentSessionInfo.set_active_model_path(SessionPath.model_session_dir.string());
+                stateStoreRef_->currentSessionInfo.set_active_data_path(SessionPath.data_session_dir.string());
+                stateStoreRef_->currentSessionInfo.set_active_subject_id(SessionPath.subject_id);
+                stateStoreRef_->currentSessionInfo.set_active_session_id(SessionPath.session_id);
+            }
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
             // start timer
             currentWindowTimer_.start_timer(restBlockDur_ms_);
+
             break;
         }
 
@@ -181,6 +203,25 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
+
+            // purpose = CSV logging for stats
+            // TODO: add knob to enable/disable this functionality in hw checks mode idk
+            SessionPaths SessionPath;
+            std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
+            std::string subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
+            
+            // unlock mtx before creating sess cuz creating sess is heavy and we dont wanna block :,)
+            std::lock_guard<std::mutex> unlock(stateStoreRef_->currentSessionInfo.mtx_);
+            SessionPath = capstone::sesspaths::create_session(subjectName);
+            
+            // write everything to state store
+            // the new subject's model isn't ready yet
+            stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
+            stateStoreRef_->currentSessionInfo.set_active_model_path(SessionPath.model_session_dir.string());
+            stateStoreRef_->currentSessionInfo.set_active_data_path(SessionPath.data_session_dir.string());
+            stateStoreRef_->currentSessionInfo.set_active_subject_id(SessionPath.subject_id);
+            stateStoreRef_->currentSessionInfo.set_active_session_id(SessionPath.session_id);
+
             break;
 
         case UIState_None: {

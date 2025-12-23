@@ -63,8 +63,8 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_left_hz_e = static_cast<int>(stateStoreRef_.g_freq_left_hz_e.load(std::memory_order_acquire));
     int freq_right_hz_e= static_cast<int>(stateStoreRef_.g_freq_right_hz_e.load(std::memory_order_acquire));
     // Active session info
-    bool is_model_ready = stateStoreRef_.sessionInfo.g_isModelReady.load(std::memory_order_acquire); // for training job monitoring
-    std::string active_subject_id = stateStoreRef_.sessionInfo.get_active_subject_id();
+    bool is_model_ready = stateStoreRef_.currentSessionInfo.g_isModelReady.load(std::memory_order_acquire); // for training job monitoring
+    std::string active_subject_id = stateStoreRef_.currentSessionInfo.get_active_subject_id();
     int popup = stateStoreRef_.g_ui_popup.load(std::memory_order_acquire); // any popup event
 
     // 2) build json string manually

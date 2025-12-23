@@ -77,9 +77,10 @@ struct StateStore_s{
         std::atomic<bool> g_isModelReady{0};
         // strings must be mutex-protected (proceed 1 at a time)
         mutable std::mutex mtx_;
-        std::string g_active_model_path;
-        std::string g_active_subject_id;
-        std::string g_active_session_id;
+        std::string g_active_model_path = "";
+        std::string g_active_subject_id = "";
+        std::string g_active_session_id = "";
+        std::string g_active_data_path = "";
 
         void set_active_model_path(const std::string& v) {
             std::lock_guard<std::mutex> lock(mtx_);
@@ -98,8 +99,26 @@ struct StateStore_s{
             std::lock_guard<std::mutex> lock(mtx_);
             return g_active_subject_id;
         }
+
+        void set_active_session_id(const std::string& v) {
+            std::lock_guard<std::mutex> lock(mtx_);
+            g_active_session_id = v;
+        }
+        std::string get_active_session_id() const {
+            std::lock_guard<std::mutex> lock(mtx_);
+            return g_active_session_id;
+        }
+
+        void set_active_data_path(const std::string& v) {
+            std::lock_guard<std::mutex> lock(mtx_);
+            g_active_data_path = v;
+        }
+        std::string get_active_data_path() const {
+            std::lock_guard<std::mutex> lock(mtx_);
+            return g_active_data_path;
+        }
     };
-    sessionInfo_s sessionInfo{};
+    sessionInfo_s currentSessionInfo{};
 
     // LIST OF SAVED SESSIONS
     struct SavedSession_s {

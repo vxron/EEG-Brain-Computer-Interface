@@ -122,8 +122,7 @@ static inline std::string allocate_person_fallback(const fs::path& data_root_dir
     return "person" + std::to_string(next_id);
 }
 
-// Core Structures
-
+// PUBLIC API
 // Create a new session.
 // Inputs:
 //   preferred_subject_name:
@@ -136,7 +135,7 @@ static inline std::string allocate_person_fallback(const fs::path& data_root_dir
 //      <root>/data/<subject>/<session>/
 //      <root>/models/<subject>/<session>/
 //   - Returns paths + ids.
-static inline SessionPaths create_session(const std::string& preferred_subject_name) {
+SessionPaths create_session(const std::string& preferred_subject_name) {
     SessionPaths sp{};
 
     // 1) Find project root (CapstoneProject)

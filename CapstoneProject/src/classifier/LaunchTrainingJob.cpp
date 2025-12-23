@@ -37,13 +37,13 @@ void TrainingJob_C::launch_training_job(StateStore_s& stateStore){
 
         if(rc == 0){
             // success - update state store
-            stateStore.sessionInfo.g_isModelReady.store(true, std::memory_order_release);
-            stateStore.sessionInfo.set_active_model_path(model_dir_.string());
-            stateStore.sessionInfo.set_active_subject_id(subject_id_);
+            stateStore.currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
+            stateStore.currentSessionInfo.set_active_model_path(model_dir_.string());
+            stateStore.currentSessionInfo.set_active_subject_id(subject_id_);
         }
         else {
             // failed
-            stateStore.sessionInfo.g_isModelReady.store(false, std::memory_order_release);
+            stateStore.currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
             LOG_ALWAYS("Training job failed to launch.");
         }
     }).detach(); 
