@@ -20,6 +20,7 @@
 #include "acq/UnicornDriver.h"
 #include <fstream>
 #include "utils/SignalQualityAnalyzer.h"
+#include <filesystem>
 
 #ifdef USE_EEG_FILTERS
 #include "utils/Filters.hpp"
@@ -164,50 +165,112 @@ try{
     sliding_window_t window; // should acquire the data for 1 window with that many pops n then increment by hop... 
     bufferChunk_S temp; // placeholder
 
-    // init csv: only need to produce csv in calibration mode for model training (training dataset)
-    std::ofstream csv;
-    bool csv_opened = false;
-    size_t rows_written = 0;
-    // lambda helper for ensuring csv is open when trying to log
+    namespace fs = std::filesystem;
+
+    // Two independent CSV files, one at window level, one at chunk level
+    std::ofstream csv_chunk;   // eeg_chunk_data.csv
+    std::ofstream csv_win;     // eeg_windows.csv
+    bool chunk_opened = false;
+    bool win_opened   = false;
+    size_t rows_written_chunk = 0;
+    size_t rows_written_win   = 0;
+
+    // Track which session these files belong to so we can reopen when session changes
+    std::string active_session_id;
+    std::string active_data_dir;
     
-    // TODO -> FIX LOGGING TO NOT HARDCODE NUM_CH_CHUNK
-    auto ensure_csv_open = [&]() {
-        if (csv_opened) return true;
-        csv.open("eeg_calib_data.csv", std::ios::out | std::ios::trunc);
-        if (!csv.is_open()) {
-            LOG_ALWAYS("ERROR: failed to open eeg_calib_data.csv");
-            return false;
+    // follow the session the stim controller created
+    auto refresh_active_session_paths = [&]() -> bool {
+        std::string sid;
+        std::string ddir;
+        {
+            // Your sessionInfo has its own mutex; use its getters if you wrote them.
+            sid  = stateStoreRef.currentSessionInfo.get_active_session_id();
+            ddir = stateStoreRef.currentSessionInfo.get_active_data_path();
         }
-        csv << "chunk_tick,sample_idx";
-        for (std::size_t ch = 0; ch < NUM_CH_CHUNK; ++ch) {
-            csv << ",eeg" << (ch + 1);
-        }
-        csv << ",testfreq_e,testfreq_hz\n";
-        csv_opened = true;
+
+        // Not ready yet (StimulusController may not have created a session)
+        if (sid.empty() || ddir.empty()) return false;
+
+        // If same session, no change
+        if (sid == active_session_id && ddir == active_data_dir) return true;
+
+        // Session changed - close old files and reset flags
+        if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); chunk_opened = false; }
+        if (win_opened)   { csv_win.flush();   csv_win.close();   win_opened   = false; }
+
+        active_session_id = sid;
+        active_data_dir   = ddir;
+
+        LOG_ALWAYS("consumer: switched logging session to "
+                   << "session_id=" << active_session_id
+                   << " data_dir=" << active_data_dir);
+
         return true;
     };
-    // ADD LOGGER AT TRIMMED WINDOW LEVEL FOR CALIB!
-    auto ensure_csv_open_window = [&]() {
-        if (csv_opened) return true;
 
-        csv.open("eeg_windows.csv", std::ios::out | std::ios::trunc);
-        if (!csv.is_open()) {
-            LOG_ALWAYS("ERROR: failed to open eeg_windows.csv");
+    // TODO -> FIX LOGGING TO NOT HARDCODE NUM_CH_CHUNK
+    auto ensure_csv_open_chunk = [&]() -> bool {
+        if (chunk_opened) return true;
+
+        if (!refresh_active_session_paths()) {
+            // No active session yet; don’t write
+            return false;
+        }
+
+        fs::path out_path = fs::path(active_data_dir) / "eeg_calib_data.csv";
+
+        csv_chunk.open(out_path, std::ios::out | std::ios::trunc);
+        if (!csv_chunk.is_open()) {
+            LOG_ALWAYS("ERROR: failed to open " << out_path.string());
+            return false;
+        }
+
+        // Header
+        csv_chunk << "chunk_tick,sample_idx";
+        for (std::size_t ch = 0; ch < NUM_CH_CHUNK; ++ch) {
+            csv_chunk << ",eeg" << (ch + 1);
+        }
+        csv_chunk << ",testfreq_e,testfreq_hz\n";
+
+        chunk_opened = true;
+        rows_written_chunk = 0;
+
+        LOG_ALWAYS("opened " << out_path.string());
+        return true;
+    };
+
+    auto ensure_csv_open_window = [&]() -> bool {
+        if (win_opened) return true;
+
+        if (!refresh_active_session_paths()) {
+            return false;
+        }
+
+        fs::path out_path = fs::path(active_data_dir) / "eeg_windows.csv";
+
+        csv_win.open(out_path, std::ios::out | std::ios::trunc);
+        if (!csv_win.is_open()) {
+            LOG_ALWAYS("ERROR: failed to open " << out_path.string());
             return false;
         }
 
         int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
         if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
 
-        csv << "window_idx,ui_state,is_trimmed,is_bad,sample_idx";
-        for (int ch = 0; ch < n_ch_local; ++ch) csv << ",eeg" << (ch + 1);
-        csv << ",testfreq_e,testfreq_hz\n";
+        // Header
+        csv_win << "window_idx,ui_state,is_trimmed,is_bad,sample_idx";
+        for (int ch = 0; ch < n_ch_local; ++ch) csv_win << ",eeg" << (ch + 1);
+        csv_win << ",testfreq_e,testfreq_hz\n";
 
-        csv_opened = true;
-        LOG_ALWAYS("opened eeg_windows.csv");
+        win_opened = true;
+        rows_written_win = 0;
+
+        LOG_ALWAYS("opened " << out_path.string());
         return true;
     };
 
+    // helper for WINDOW LEVEL ONLY
     auto log_window_snapshot = [&](const sliding_window_t& w,
                                UIState_E uiState,
                                std::size_t window_idx,
@@ -245,22 +308,22 @@ try{
         int tf_hz = (w.testFreq == TestFreq_None) ? -1 : TestFreqEnumToInt(w.testFreq);
 
         for (std::size_t s = 0; s < n_scans; ++s) {
-            csv << window_idx
-                << "," << static_cast<int>(uiState)
-                << "," << (use_trimmed && w.isTrimmed ? 1 : 0)
-                << "," << (w.isArtifactualWindow ? 1 : 0)
-                << "," << s;
+            csv_win << window_idx
+                    << "," << static_cast<int>(uiState)
+                    << "," << (use_trimmed && w.isTrimmed ? 1 : 0)
+                    << "," << (w.isArtifactualWindow ? 1 : 0)
+                    << "," << s;
 
             const std::size_t base = s * static_cast<std::size_t>(n_ch_local);
             for (int ch = 0; ch < n_ch_local; ++ch) {
-                csv << "," << buf[base + static_cast<std::size_t>(ch)];
+                csv_win << "," << buf[base + static_cast<std::size_t>(ch)];
             }
 
-            csv << "," << tf_e << "," << tf_hz << "\n";
-            ++rows_written;
+            csv_win << "," << tf_e << "," << tf_hz << "\n";
+            ++rows_written_win;
         }
 
-        if ((rows_written % 5000) == 0) csv.flush();
+        if ((rows_written_win % 5000) == 0) csv_win.flush();
     };
 
 	// build first window
@@ -285,6 +348,9 @@ try{
 
     while(!g_stop.load(std::memory_order_relaxed)){
         // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============
+
+        // Keep active session paths fresh (no-op if unchanged)
+        refresh_active_session_paths();
 
         currState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
         currLabel = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
@@ -415,12 +481,13 @@ try{
             // popup saying 'signal is bad, too many artifactual windows. run hardware checks' when too many bad windows detected in a certain time frame, then reset
             if(run_mode_bad_window_timer.check_timer_expired()){
                 // expired -> see if we should throw popup based on bad window counts in the 9s timeout period
-                if(run_mode_bad_window_count / run_mode_clean_window_count >= 0.25) { // require 4:1 good:bad ratio
+                if((run_mode_clean_window_count > 0) && (double(run_mode_bad_window_count) / double(run_mode_clean_window_count) >= 0.25)) { // require 4:1 good:bad ratio
                     // DO POPUP
                     stateStoreRef.g_ui_popup.store(UIPopup_TooManyBadWindowsInRun, std::memory_order_release);
                 }
                 // reset for next round
                 run_mode_bad_window_count = 0;
+                run_mode_clean_window_count = 0;
             }
 
             if(window.isArtifactualWindow){
@@ -442,10 +509,8 @@ try{
     // exiting due to producer exiting means we need to close window rb
     window.sliding_window.close();
     rb.close();
-    if(csv_opened){ // calib sess
-        csv.flush();
-        csv.close();
-    }
+    if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); }
+    if (win_opened)   { csv_win.flush();   csv_win.close();   }
 }
 catch (const std::exception& e) {
         LOG_ALWAYS("consumer: FATAL unhandled exception: " << e.what());
