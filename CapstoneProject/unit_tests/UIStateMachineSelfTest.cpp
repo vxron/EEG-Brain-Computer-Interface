@@ -41,10 +41,14 @@ static void set_state_store_run_at_10_hz_and_12_hz(StateStore_s & stateStore){
     stateStore.g_ui_state.store(UIState_Active_Run, std::memory_order_relaxed);
     stateStore.g_freq_hz.store(0, std::memory_order_relaxed);
     stateStore.g_freq_hz_e.store(TestFreq_None, std::memory_order_relaxed);
-    stateStore.g_freq_left_hz.store(10, std::memory_order_release);
-    stateStore.g_freq_left_hz_e.store(TestFreq_10_Hz, std::memory_order_release);
-    stateStore.g_freq_right_hz.store(12, std::memory_order_release);
-    stateStore.g_freq_right_hz_e.store(TestFreq_12_Hz, std::memory_order_release);
+    // Run-mode pair
+    // mtx protect
+    std::lock_guard<std::mutex> lock(stateStore.saved_sessions_mutex);
+    int currIdx = stateStore.currentSessionIdx; 
+    stateStore.saved_sessions[currIdx].freq_left_hz = 10.0;
+    stateStore.saved_sessions[currIdx].freq_right_hz = 12.0;
+    stateStore.saved_sessions[currIdx].freq_left_hz_e = TestFreq_10_Hz;
+    stateStore.saved_sessions[currIdx].freq_right_hz_e = TestFreq_12_Hz;
 }
 
 static void set_state_store_instructions_for_10_hz(StateStore_s & stateStore){

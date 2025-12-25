@@ -14,7 +14,8 @@ static const state_transition state_transition_table[] = {
     // from                           event                                     to
     {UIState_None,            UIStateEvent_ConnectionSuccessful,           UIState_Home},
 
-    {UIState_Home,            UIStateEvent_UserPushesStartCalib,           UIState_Instructions},
+    {UIState_Home,            UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Calib_Options,   UIStateEvent_UserEntersName,                 UIState_Instructions},
     {UIState_Home,            UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
     {UIState_Home,            UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
     
@@ -36,7 +37,7 @@ static const state_transition state_transition_table[] = {
     {UIState_Run_Options,     UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
     
 };
-// ^todo: add popup if switching btwn run <-> calib: r u sure u want to exit???
+// ^todo: add popup if switching: r u sure u want to exit???
 
 
 StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::optional<trainingProto_S> trainingProtocol) : state_(UIState_None), stateStoreRef_(stateStoreRef) {
@@ -78,15 +79,15 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
     // first read seq atomically then increment (common to all state enters)
     currSeq = stateStoreRef_->g_ui_seq.load(std::memory_order_acquire);
     stateStoreRef_->g_ui_seq.store(currSeq + 1, std::memory_order_release);
-    switch(newState){
+    switch (newState) {
         case UIState_Active_Run: {
             stateStoreRef_->g_ui_state.store(UIState_Active_Run, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             // TODO: make these per person based on saved sessions (see struct in types.h)
-            stateStoreRef_->g_freq_left_hz.store(10, std::memory_order_release);
-            stateStoreRef_->g_freq_right_hz.store(12, std::memory_order_release);
-            stateStoreRef_->g_freq_left_hz_e.store(TestFreq_10_Hz, std::memory_order_release);
-            stateStoreRef_->g_freq_right_hz_e.store(TestFreq_12_Hz, std::memory_order_release);
+            //stateStoreRef_->g_freq_left_hz.store(10, std::memory_order_release);
+            //stateStoreRef_->g_freq_right_hz.store(12, std::memory_order_release);
+            //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_10_Hz, std::memory_order_release);
+            //stateStoreRef_->g_freq_right_hz_e.store(TestFreq_12_Hz, std::memory_order_release);
             break;
         }
         
@@ -112,10 +113,10 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_block_id.store(currId + 1,std::memory_order_release);
             // freqs
             freqToTest = activeBlockQueue_[activeQueueIdx_];
-            stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_acquire);
+            stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_release);
             // use helper
             freq =  TestFreqEnumToInt(freqToTest);
-            stateStoreRef_->g_freq_hz.store(freq,std::memory_order_acquire);
+            stateStoreRef_->g_freq_hz.store(freq,std::memory_order_release);
             // iscalib helper
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
             
@@ -124,6 +125,13 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
 
             // start timer
             currentWindowTimer_.start_timer(activeBlockDur_ms_);
+            break;
+        }
+
+        case UIState_Calib_Options: {
+            // (1) ask subject for name with popup that takes user entry & write to state store
+            // (2) check if it matches any name in previously stored sessions
+            // (3) start calib (happens automatically w state transition)
             break;
         }
 
@@ -148,8 +156,8 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             } // otherwise accept "bad" test freq vis a vis refresh
     
             // storing
-            stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_acquire);
-            stateStoreRef_->g_freq_hz.store(freq, std::memory_order_acquire);
+            stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_release);
+            stateStoreRef_->g_freq_hz.store(freq, std::memory_order_release);
             LOG_ALWAYS("SC: stored a freq=" << static_cast<int>(freq));
 
             // need to create new session if we're just entering calib for the first time
@@ -157,21 +165,28 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             bool isCalib = stateStoreRef_->g_is_calib.load(std::memory_order_acquire);
             if(!isCalib){
                 // first time entry
+                // TODO: ask subject for name when creating a new session
                 SessionPaths SessionPath;
-                std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
-                std::string subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
-                
-                // unlock mtx before creating sess cuz creating sess is heavy and we dont wanna block :,)
-                std::lock_guard<std::mutex> unlock(stateStoreRef_->currentSessionInfo.mtx_);
+                std::string subjectName;
+                // scope lock to just reading name
+                {
+                    std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
+                    subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
+                } // unlocks here for creating sess
+                 
+                // creating sess is heavy and we dont wanna block :,)
                 SessionPath = capstone::sesspaths::create_session(subjectName);
                 
-                // write everything to state store
+                // lock again to write everything to state store
                 // the new subject's model isn't ready yet
-                stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
-                stateStoreRef_->currentSessionInfo.set_active_model_path(SessionPath.model_session_dir.string());
-                stateStoreRef_->currentSessionInfo.set_active_data_path(SessionPath.data_session_dir.string());
-                stateStoreRef_->currentSessionInfo.set_active_subject_id(SessionPath.subject_id);
-                stateStoreRef_->currentSessionInfo.set_active_session_id(SessionPath.session_id);
+                {
+                    std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
+                    stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
+                    stateStoreRef_->currentSessionInfo.set_active_model_path(SessionPath.model_session_dir.string());
+                    stateStoreRef_->currentSessionInfo.set_active_data_path(SessionPath.data_session_dir.string());
+                    stateStoreRef_->currentSessionInfo.set_active_subject_id(SessionPath.subject_id);
+                    stateStoreRef_->currentSessionInfo.set_active_session_id(SessionPath.session_id);
+                }
             }
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
@@ -181,23 +196,25 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             break;
         }
 
-        case UIState_Run_Options:
+        case UIState_Run_Options: {
             stateStoreRef_->g_ui_state.store(UIState_Run_Options, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
             break;
+        }
 
-        case UIState_Saved_Sessions:
+        case UIState_Saved_Sessions: {
             stateStoreRef_->g_ui_state.store(UIState_Saved_Sessions, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
             break;
+        }
 
-        case UIState_Hardware_Checks:
+        case UIState_Hardware_Checks: {
             stateStoreRef_->g_ui_state.store(UIState_Hardware_Checks, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
@@ -207,22 +224,27 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             // purpose = CSV logging for stats
             // TODO: add knob to enable/disable this functionality in hw checks mode idk
             SessionPaths SessionPath;
-            std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
-            std::string subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
-            
-            // unlock mtx before creating sess cuz creating sess is heavy and we dont wanna block :,)
-            std::lock_guard<std::mutex> unlock(stateStoreRef_->currentSessionInfo.mtx_);
+            std::string subjectName;
+            {
+                std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
+                subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
+            }
+
             SessionPath = capstone::sesspaths::create_session(subjectName);
             
             // write everything to state store
             // the new subject's model isn't ready yet
-            stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
-            stateStoreRef_->currentSessionInfo.set_active_model_path(SessionPath.model_session_dir.string());
-            stateStoreRef_->currentSessionInfo.set_active_data_path(SessionPath.data_session_dir.string());
-            stateStoreRef_->currentSessionInfo.set_active_subject_id(SessionPath.subject_id);
-            stateStoreRef_->currentSessionInfo.set_active_session_id(SessionPath.session_id);
+            {
+                std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
+                stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
+                stateStoreRef_->currentSessionInfo.set_active_model_path(SessionPath.model_session_dir.string());
+                stateStoreRef_->currentSessionInfo.set_active_data_path(SessionPath.data_session_dir.string());
+                stateStoreRef_->currentSessionInfo.set_active_subject_id(SessionPath.subject_id);
+                stateStoreRef_->currentSessionInfo.set_active_session_id(SessionPath.session_id);
+            }
 
             break;
+        }
 
         case UIState_None: {
             // “offline” / not connected / shut down
@@ -232,8 +254,9 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             break;
         }
         
-        default:
+        default: {
             break;
+        }
     }
 }
 
@@ -243,8 +266,13 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
         case UIState_Instructions:
             currentWindowTimer_.stop_timer();
             if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
-                // calib over... need to save csv and trigger python training script
-                TrainingJob_C job(); // need info from somewhere (TODO -> saved sessions in state store)
+                // calib over... need to save csv in consumer thread (finalize training data)
+                {
+                    // scope for locking & changing bool flag (mtx unlocked again at end of scope)
+                    std::lock_guard<std::mutex> lock(stateStoreRef_->mtx_finalize_request);
+                    stateStoreRef_->finalize_requested = true;
+                }
+                stateStoreRef_->cv_finalize_request.notify_one();
             }
             break;
         

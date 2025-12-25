@@ -38,7 +38,6 @@ void handle_sigint(int) {
     g_stop.store(true,std::memory_order_relaxed);
 }
 
-
 void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStoreRef){
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
@@ -326,6 +325,35 @@ try{
         if ((rows_written_win % 5000) == 0) csv_win.flush();
     };
 
+    auto handle_finalize_if_requested = [&]() {
+        // quick check flag (locked)
+        bool do_finalize = false;
+        {
+            std::lock_guard<std::mutex> lock(stateStoreRef.mtx_finalize_request);
+            do_finalize = stateStoreRef.finalize_requested;
+            if (do_finalize) stateStoreRef.finalize_requested = false;
+        } // unlock mtx on exit
+        if (!do_finalize) return;
+
+        // Only finalize if we are *currently* in calib pipeline
+        UIState_E s = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+        if (s != UIState_Active_Calib) {
+            // if HW checks, we explicitly do nothing
+            return;
+        }
+
+        // Close/flush files
+        if (win_opened)   { csv_win.flush();   csv_win.close();   win_opened = false; }
+        if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); chunk_opened = false; }
+
+        // Signal to training manager: data is ready (to launch training thread)
+        {
+            std::lock_guard<std::mutex> lock(stateStoreRef.mtx_train_job_request);
+            stateStoreRef.train_job_requested = true;
+        }
+        stateStoreRef.cv_train_job_request.notify_one();
+    };
+
 	// build first window
 	while(window.sliding_window.get_count()<window.winLen){
 		// sc
@@ -348,6 +376,9 @@ try{
 
     while(!g_stop.load(std::memory_order_relaxed)){
         // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============
+    
+        // check if we need to stop writing calib data and start training thread
+        handle_finalize_if_requested();
 
         // Keep active session paths fresh (no-op if unchanged)
         refresh_active_session_paths();
@@ -561,6 +592,132 @@ void http_thread_fn(HttpServer_C& http){
     }
 }
 
+/* HADEEL, THE SCRIPT MUST OUTPUT
+(1) ONNX MODELS
+(2) BEST TWO FREQUENCIES TO USE (HIGHEST SNR FOR THIS PERSON)
+--> Script must output to <model_dir>/train_result.json
+*/
+void training_manager_thread_fn(StateStore_s& stateStoreRef){
+    logger::tlabel = "training manager";
+    namespace fs = std::filesystem;
+    // HADEEL TODO: set this to wherever the training script lives.
+    const fs::path scriptPath = fs::path("C:/path/to/train_ssvep.py");
+    if (!fs::exists(scriptPath)) {
+        LOG_ALWAYS("WARN: training script not found at " << scriptPath.string()
+                  << " (training will fail until path is fixed)");
+    }
+
+    while(!g_stop.load(std::memory_order_acquire)){
+        // wait for training request
+        std::unique_lock<std::mutex> lock(stateStoreRef.mtx_train_job_request); // locked
+        // mtx gets unlocked (thread sleeps) until notify_one is fired from stim controller & train job is req
+        // (avoids busy-wait)
+        stateStoreRef.cv_train_job_request.wait(lock, [&stateStoreRef]{ 
+            return (stateStoreRef.train_job_requested == true || g_stop.load(std::memory_order_acquire)); // this thread waits for one of these to be true
+        });
+
+        if(g_stop.load(std::memory_order_acquire)){
+            // exit cleanly
+            break;
+        }
+
+        // CONSUME EVENT SLOT = set flag back to false while holding mtx
+        // reset flag for next time
+        stateStoreRef.train_job_requested = false;
+        // unlock mtx with std::unique_lock's 'unlock' function
+        lock.unlock(); // unlock for heavy work
+
+        // what happens when it wakes up:
+        // (1) Snapshot session info (paths/ids)
+        std::string data_dir, model_dir, subject_id, session_id;
+        {
+            std::lock_guard<std::mutex> sLk(stateStoreRef.currentSessionInfo.mtx_);
+            data_dir   = stateStoreRef.currentSessionInfo.g_active_data_path;
+            model_dir  = stateStoreRef.currentSessionInfo.g_active_model_path;
+            subject_id = stateStoreRef.currentSessionInfo.g_active_subject_id;
+            session_id = stateStoreRef.currentSessionInfo.g_active_session_id;
+            // Mark "not ready" while training
+            stateStoreRef.currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
+        }
+        // (2) Validate inputs (don’t launch if missing)
+        if (data_dir.empty() || model_dir.empty() || subject_id.empty() || session_id.empty()) {
+            LOG_ALWAYS("Training request missing session info; skipping.");
+            continue;
+        }
+
+        // Ensure model directory exists (script writes outputs here)
+        {
+            std::error_code ec;
+            fs::create_directories(fs::path(model_dir), ec);
+            if (ec) {
+                LOG_ALWAYS("ERROR: could not create model_dir=" << model_dir
+                          << " (" << ec.message() << ")");
+                continue;
+            }
+        }
+        // (3) Launch training script (should block here)
+        std::stringstream ss;
+        
+        // TODO: MUST MATCH PYTHON TRAINING SCRIPT PATH AND ARGS (HADEEL)
+        ss << "python "
+               << "\"" << scriptPath.string() << "\""
+               << " --data \""     << data_dir  << "\""
+               << " --model \""    << model_dir  << "\""
+               << " --subject \""  << subject_id          << "\""
+               << " --session \""  << session_id          << "\"";
+
+        const std::string cmd = ss.str();
+        /* std::system executes the cmd string using host shell
+        -> it BLOCKS "this" background thread until the Python script finishes
+        -> rc is the exit code of the cmd
+        */
+        LOG_ALWAYS("Launching training: " << cmd);
+        int rc = std::system(cmd.c_str());
+
+        // TODO: parse json result to write best freqs to state store
+
+
+        //(4) Publich result to state store
+        if (rc == 0) {
+            stateStoreRef.currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
+
+            // Add to saved sessions list so UI can pick it later
+            StateStore_s::SavedSession_s s;
+            s.subject   = subject_id;
+            s.session   = session_id;
+            s.id        = subject_id + "_" + session_id;
+            s.label     = session_id; // TODO: make better
+            s.model_dir = model_dir;
+            // TODO: PARSE JSON AND SET THE FREQS PROPERLY
+            // temporary for now:
+            s.freq_left_hz = 10;
+            s.freq_right_hz = 12;
+            s.freq_left_hz_e = TestFreq_10_Hz;
+            s.freq_right_hz_e = TestFreq_12_Hz;
+
+            int lastIdx = 0;
+            {
+                // add saved session: blocks until mutex is available for acquiring
+                std::unique_lock<std::mutex> lock(stateStoreRef.saved_sessions_mutex);
+                stateStoreRef.saved_sessions.push_back(s);
+                // set idx to it
+                lastIdx = static_cast<int>(stateStoreRef.saved_sessions.size() - 1);
+            }
+            
+            // unlock mtx
+            lock.unlock();
+
+            stateStoreRef.currentSessionIdx.store(lastIdx, std::memory_order_release);
+            LOG_ALWAYS("Training SUCCESS.");
+
+        } else {
+            stateStoreRef.currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
+            LOG_ALWAYS("Training job failed (rc=" << rc << ")");
+        }
+
+    }
+}
+
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");
 
@@ -585,6 +742,7 @@ int main() {
     std::thread cons(consumer_thread_fn,std::ref(ringBuf), std::ref(stateStore));
     std::thread http(http_thread_fn, std::ref(server));
     std::thread stim(stimulus_thread_fn, std::ref(stateStore));
+    std::thread train(training_manager_thread_fn, std::ref(stateStore));
 
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
     while(g_stop.load(std::memory_order_acquire) == 0){
@@ -593,11 +751,17 @@ int main() {
 
     // on system shutdown:
     // ctrl+c called...
+
+    // is this sufficient to handle cv closing idk??
+    stateStore.cv_train_job_request.notify_all();
+    stateStore.cv_finalize_request.notify_all();
+
     ringBuf.close();
     server.http_close_server();
     prod.join();
     cons.join(); // close "join" individual threads
     http.join();
     stim.join();
+    train.join();
     return 0; 
 }
