@@ -90,6 +90,12 @@ enum StimShapes_E {
 	StimShape_Arrow,
 };
 
+enum EpilepsyRisk_E {
+	EpilepsyRisk_No,
+	EpilepsyRisk_Yes,
+	EpilepsyRisk_Unknown,
+};
+
 enum UIStateEvent_E {
 	UIStateEvent_StimControllerTimeout, // switch btwn instructions/active during calib
 	UIStateEvent_StimControllerTimeoutEndCalib,
@@ -104,7 +110,8 @@ enum UIStateEvent_E {
 	UIStateEvent_UserSelectsNewSession,
 	UIStateEvent_UserPushesStartDefault,
 	UIStateEvent_UserPushesHardwareChecks,
-	UIStateEvent_UserEntersName,
+	UIStateEvent_UserPushesStartCalibFromOptions,
+	UIStateEvent_UserConfirmsOverwriteCalib,
 	UIStateEvent_None,
 };
 
@@ -113,6 +120,8 @@ enum UIPopup_E {
 	UIPopup_MustCalibBeforeRun,
 	UIPopup_ModelFailedToLoad,
 	UIPopup_TooManyBadWindowsInRun,
+	UIPopup_InvalidCalibOptions,
+	UIPopup_ConfirmOverwriteCalib
 };
 
 enum BitOperation_E {

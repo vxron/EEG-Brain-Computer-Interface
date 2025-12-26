@@ -67,7 +67,11 @@ struct StateStore_s{
         return SignalStats;
     }
 
-    // Training status (Python) + subject / session ID
+    // Pending name / epilepsy risk from front end (UIState_Calib_Options) (disclaimer form)
+    std::mutex calib_options_mtx;
+    std::string pending_subject_name;
+    EpilepsyRisk_E pending_epilepsy;
+
     struct sessionInfo_s {
         std::atomic<bool> g_isModelReady{0};
         // strings must be mutex-protected (proceed 1 at a time)
@@ -76,6 +80,7 @@ struct StateStore_s{
         std::string g_active_subject_id = "";
         std::string g_active_session_id = "";
         std::string g_active_data_path = "";
+        EpilepsyRisk_E g_epilepsy_risk = EpilepsyRisk_Unknown;
 
         void set_active_model_path(const std::string& v) {
             std::lock_guard<std::mutex> lock(mtx_);

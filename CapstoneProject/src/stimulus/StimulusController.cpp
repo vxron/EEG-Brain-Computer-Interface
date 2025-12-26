@@ -15,7 +15,7 @@ static const state_transition state_transition_table[] = {
     {UIState_None,            UIStateEvent_ConnectionSuccessful,           UIState_Home},
 
     {UIState_Home,            UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
-    {UIState_Calib_Options,   UIStateEvent_UserEntersName,                 UIState_Instructions},
+    {UIState_Calib_Options,   UIStateEvent_UserPushesStartCalibFromOptions,UIState_Instructions},
     {UIState_Home,            UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
     {UIState_Home,            UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
     
@@ -24,6 +24,7 @@ static const state_transition state_transition_table[] = {
     {UIState_Instructions,    UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
       
     {UIState_Active_Calib,    UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Calib_Options,   UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Instructions,    UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Active_Run,      UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Saved_Sessions,  UIStateEvent_UserPushesExit,                 UIState_Home},
@@ -58,6 +59,8 @@ StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::opt
      trainingProtocol_.activeBlockDuration_s * 1000 };
      restBlockDur_ms_ = std::chrono::milliseconds{
      trainingProtocol_.restDuration_s * 1000 };
+
+     // TODO: protocol for epilepsy with diff freqs...
 
 }
 
@@ -129,9 +132,10 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
         }
 
         case UIState_Calib_Options: {
-            // (1) ask subject for name with popup that takes user entry & write to state store
-            // (2) check if it matches any name in previously stored sessions
-            // (3) start calib (happens automatically w state transition)
+            stateStoreRef_->g_ui_state.store(UIState_Calib_Options, std::memory_order_release);
+            // (1) first clear stale entries
+            pending_subject_name_ = "";
+            pending_epilepsy_ = EpilepsyRisk_Unknown;
             break;
         }
 
@@ -150,6 +154,8 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
                 LOG_ALWAYS("SC: dropped testcase=" << static_cast<int>(freq));
                 // reasonably drop since we have other divisors
                 activeQueueIdx_++;
+                // guard against boundless incrementing
+                if ( (activeQueueIdx_ >= (int)activeBlockQueue_.size()) || (activeQueueIdx_ >= trainingProtocol_.numActiveBlocks) ) break;
                 freqToTest = activeBlockQueue_[activeQueueIdx_];
                 freq =  TestFreqEnumToInt(freqToTest);
                 result = checkStimFreqIsIntDivisorOfRefresh(true, freq);
@@ -165,19 +171,10 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             bool isCalib = stateStoreRef_->g_is_calib.load(std::memory_order_acquire);
             if(!isCalib){
                 // first time entry
-                // TODO: ask subject for name when creating a new session
                 SessionPaths SessionPath;
-                std::string subjectName;
-                // scope lock to just reading name
-                {
-                    std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
-                    subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
-                } // unlocks here for creating sess
-                 
-                // creating sess is heavy and we dont wanna block :,)
-                SessionPath = capstone::sesspaths::create_session(subjectName);
+                SessionPath = capstone::sesspaths::create_session(pending_subject_name_);
                 
-                // lock again to write everything to state store
+                // lock again to write everything to state store; PUBLISH!
                 // the new subject's model isn't ready yet
                 {
                     std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
@@ -278,10 +275,10 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
         
         case UIState_Active_Run:
         // idk yet whether or not we want to be clearing here !
-            stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
-            stateStoreRef_->g_freq_left_hz.store(0, std::memory_order_release);
-            stateStoreRef_->g_freq_right_hz.store(0, std::memory_order_release);
-            stateStoreRef_->g_freq_right_hz_e.store(TestFreq_None, std::memory_order_release);
+            //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
+            //stateStoreRef_->g_freq_left_hz.store(0, std::memory_order_release);
+            //stateStoreRef_->g_freq_right_hz.store(0, std::memory_order_release);
+            //stateStoreRef_->g_freq_right_hz_e.store(TestFreq_None, std::memory_order_release);
             break;
         default:
             break;
@@ -307,8 +304,8 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
 
 std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     // the following are in order of priority 
-    // (1) UI events sent in by POST (EXTERNAL): user presses exit, user presses start calib, user presses start run
-    UIStateEvent_E currEvent = stateStoreRef_->g_ui_event.load(std::memory_order_acquire);
+    // (1) read UI event sent in by POST: consume event & write it's now None
+    UIStateEvent_E currEvent = stateStoreRef_->g_ui_event.exchange(UIStateEvent_None, std::memory_order_acq_rel);
     if(currEvent != UIStateEvent_None){
         LOG_ALWAYS("SC: detected UI event=" << static_cast<int>(currEvent));
         
@@ -319,13 +316,70 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
             size_t existingSessions = stateStoreRef_->saved_sessions.size();
             if(existingSessions == 0) {
                 stateStoreRef_->g_ui_popup.store(UIPopup_MustCalibBeforeRun, std::memory_order_release);
-                stateStoreRef_->g_ui_event.store(UIStateEvent_None, std::memory_order_release);
                 return std::nullopt; // swallow event; no transition
             }
         }
 
-        // reset g_ui_event to NONE for next event
-        stateStoreRef_->g_ui_event.store(UIStateEvent_None, std::memory_order_release);
+        if(currEvent == UIStateEvent_UserPushesStartCalibFromOptions){
+            // (ie trying to submit name + epilepsy status)
+            bool shouldStartCalib = true;
+            // (1) consume form inputs
+            {
+                std::lock_guard<std::mutex> lock(stateStoreRef_->calib_options_mtx);
+                pending_epilepsy_ = stateStoreRef_->pending_epilepsy;
+                pending_subject_name_ = stateStoreRef_->pending_subject_name;
+            }
+
+            // (2a) clean & check if inputs are bad
+            while (!pending_subject_name_.empty() && std::isspace((unsigned char)pending_subject_name_.back())) pending_subject_name_.pop_back();
+            while (!pending_subject_name_.empty() && std::isspace((unsigned char)pending_subject_name_.front())) pending_subject_name_.erase(pending_subject_name_.begin());
+            if((pending_epilepsy_ == EpilepsyRisk_Unknown) || (pending_subject_name_.length() < 3)){
+                shouldStartCalib = false;
+            }
+
+            // (2b) check if it matches any name in previously stored sessions
+            // if it matches, we should say "found existing calibration models for <username>. are you sure you want to restart?" with popup
+            bool exists = false;
+            {
+                std::lock_guard<std::mutex> lock(stateStoreRef_->saved_sessions_mutex);
+                for (const auto& s : stateStoreRef_->saved_sessions) { // iterate over saved sessions
+                    if (s.subject == pending_subject_name_) {
+                        exists = true;
+                    }
+                }
+            }
+            if(exists){
+                // ask for confirm instead of immediately overwriting
+                awaiting_calib_overwrite_confirm_ = true;
+                stateStoreRef_->g_ui_popup.store(UIPopup_ConfirmOverwriteCalib, std::memory_order_release);
+                return std::nullopt; // swallow until user confirms
+            }
+
+            // (3) start calib if (2a) and (2b) (happens automatically w state transition)
+            // otherwise, swallow transition
+            if(!shouldStartCalib){
+                // TODO: some sort of popup should occur here
+                stateStoreRef_->g_ui_popup.store(UIPopup_InvalidCalibOptions, std::memory_order_release);
+                return std::nullopt; // swallow event; no transition
+            }
+
+            awaiting_calib_overwrite_confirm_ = false;
+            return currEvent;
+            
+        }
+
+        if(ev==UIStateEvent_UserConfirmsOverwriteCalib){
+            if(!awaiting_calib_overwrite_confirm_){
+                // stale confirm click; we've already processed
+                return std::nullopt;
+            }
+            // otherwise
+            // clear flag
+            awaiting_calib_overwrite_confirm_ = false;
+            // proceed into Instructions exactly like the original submit would have
+            return UIStateEvent_UserPushesStartCalibFromOptions; // corresponding to state transition row
+        }
+
         // return
         return currEvent;
     }

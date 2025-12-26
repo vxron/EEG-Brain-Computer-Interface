@@ -33,6 +33,10 @@ private:
     std::chrono::milliseconds activeBlockDur_ms_{0};
     std::chrono::milliseconds restBlockDur_ms_{0};
 
+    std::string pending_subject_name_ = ""; // for calib mode quick access
+    EpilepsyRisk_E pending_epilepsy_ = EpilepsyRisk_Unknown; 
+    bool awaiting_calib_overwrite_confirm_ = false; // do we need to double check w user to enter calib sess?
+
     std::optional<UIStateEvent_E> detectEvent();
     void processEvent(UIStateEvent_E ev);
     void onStateEnter(UIState_E prevState, UIState_E newState);
