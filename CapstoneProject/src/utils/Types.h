@@ -73,15 +73,15 @@ enum ActuatorState_E {
 };
 
 enum UIState_E {
-	UIState_Active_Run, // selects most recent session as default
-	UIState_Active_Calib,
-	UIState_Instructions, // also for calib
-	UIState_Home,
-	UIState_Saved_Sessions, // from run mode -> can press another button to select saved session 
-	UIState_Run_Options,
-	UIState_Hardware_Checks,
-	UIState_Calib_Options,
-	UIState_None,
+	UIState_Active_Run, // 0 selects most recent session as default
+	UIState_Active_Calib, // 1
+	UIState_Instructions, // 2 also for calib
+	UIState_Home, // 3
+	UIState_Saved_Sessions, // 4 from run mode -> can press another button to select saved session 
+	UIState_Run_Options, // 5
+	UIState_Hardware_Checks, // 6
+	UIState_Calib_Options, // 7
+	UIState_None, // 8
 };
 
 enum StimShapes_E {
@@ -92,27 +92,30 @@ enum StimShapes_E {
 
 enum EpilepsyRisk_E {
 	EpilepsyRisk_No,
+	EpilepsyRisk_YesButHighFreqOk,
 	EpilepsyRisk_Yes,
+
 	EpilepsyRisk_Unknown,
 };
 
 enum UIStateEvent_E {
 	UIStateEvent_StimControllerTimeout, // switch btwn instructions/active during calib
-	UIStateEvent_StimControllerTimeoutEndCalib,
-	UIStateEvent_UserPushesStartRun,
-	UIStateEvent_UserPushesStartRunInvalid,
-	UIStateEvent_UserPushesStartCalib,
-	UIStateEvent_LostConnection,
-	UIStateEvent_UserPushesExit,
-	UIStateEvent_ConnectionSuccessful,
-	UIStateEvent_UserPushesSessions,
-	UIStateEvent_UserSelectsSession,
-	UIStateEvent_UserSelectsNewSession,
-	UIStateEvent_UserPushesStartDefault,
-	UIStateEvent_UserPushesHardwareChecks,
-	UIStateEvent_UserPushesStartCalibFromOptions,
-	UIStateEvent_UserConfirmsOverwriteCalib,
-	UIStateEvent_None,
+	UIStateEvent_StimControllerTimeoutEndCalib, // 1
+	UIStateEvent_UserPushesStartRun, // 2
+	UIStateEvent_UserPushesStartRunInvalid, // 3
+	UIStateEvent_UserPushesStartCalib, // 4
+	UIStateEvent_LostConnection, // 5
+	UIStateEvent_UserPushesExit, // 6
+	UIStateEvent_ConnectionSuccessful, // 7
+	UIStateEvent_UserPushesSessions, // 8
+	UIStateEvent_UserSelectsSession, // 9
+	UIStateEvent_UserSelectsNewSession, // 10
+	UIStateEvent_UserPushesStartDefault, // 11
+	UIStateEvent_UserPushesHardwareChecks, // 12
+	UIStateEvent_UserPushesStartCalibFromOptions, // 13
+	UIStateEvent_UserCancelsPopup, // 14
+	UIStateEvent_UserAcksPopup, // 15
+	UIStateEvent_None, // 16
 };
 
 enum UIPopup_E {

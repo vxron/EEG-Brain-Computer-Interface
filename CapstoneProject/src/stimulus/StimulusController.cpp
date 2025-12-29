@@ -1,7 +1,6 @@
 #include "StimulusController.hpp"
 #include <thread>
 #include "../utils/Logger.hpp"
-#include "../classifier/LaunchTrainingJob.hpp"
 #include "../utils/SessionPaths.hpp"
 
 static struct state_transition{
@@ -172,24 +171,31 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             if(!isCalib){
                 // first time entry
                 SessionPaths SessionPath;
-                SessionPath = capstone::sesspaths::create_session(pending_subject_name_);
-                
+                try {
+                    SessionPath = capstone::sesspaths::create_session(pending_subject_name_);
+                    // publish to stateStore...
+                } catch (const std::exception& e) {
+                    LOG_ALWAYS("SC: create_session failed: " << e.what());
+                    // TODO: transition back to Home by injecting an event or setting state
+                    // (don’t set g_stop)
+                    return;
+                }
+
                 // lock again to write everything to state store; PUBLISH!
                 // the new subject's model isn't ready yet
                 {
                     std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
                     stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
-                    stateStoreRef_->currentSessionInfo.set_active_model_path(SessionPath.model_session_dir.string());
-                    stateStoreRef_->currentSessionInfo.set_active_data_path(SessionPath.data_session_dir.string());
-                    stateStoreRef_->currentSessionInfo.set_active_subject_id(SessionPath.subject_id);
-                    stateStoreRef_->currentSessionInfo.set_active_session_id(SessionPath.session_id);
+                    stateStoreRef_->currentSessionInfo.g_active_model_path = SessionPath.model_session_dir.string();
+                    stateStoreRef_->currentSessionInfo.g_active_data_path = SessionPath.data_session_dir.string();
+                    stateStoreRef_->currentSessionInfo.g_active_subject_id = SessionPath.subject_id;
+                    stateStoreRef_->currentSessionInfo.g_active_session_id = SessionPath.session_id;
                 }
             }
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
             // start timer
             currentWindowTimer_.start_timer(restBlockDur_ms_);
-
             break;
         }
 
@@ -234,10 +240,10 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             {
                 std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
                 stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
-                stateStoreRef_->currentSessionInfo.set_active_model_path(SessionPath.model_session_dir.string());
-                stateStoreRef_->currentSessionInfo.set_active_data_path(SessionPath.data_session_dir.string());
-                stateStoreRef_->currentSessionInfo.set_active_subject_id(SessionPath.subject_id);
-                stateStoreRef_->currentSessionInfo.set_active_session_id(SessionPath.session_id);
+                stateStoreRef_->currentSessionInfo.g_active_model_path = SessionPath.model_session_dir.string();
+                stateStoreRef_->currentSessionInfo.g_active_data_path = SessionPath.data_session_dir.string();
+                stateStoreRef_->currentSessionInfo.g_active_subject_id = SessionPath.subject_id;
+                stateStoreRef_->currentSessionInfo.g_active_session_id = SessionPath.session_id;
             }
 
             break;
@@ -265,6 +271,7 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
                 // calib over... need to save csv in consumer thread (finalize training data)
                 {
+                    LOG_ALWAYS("reached inside final event");
                     // scope for locking & changing bool flag (mtx unlocked again at end of scope)
                     std::lock_guard<std::mutex> lock(stateStoreRef_->mtx_finalize_request);
                     stateStoreRef_->finalize_requested = true;
@@ -314,7 +321,8 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
         if(currEvent == UIStateEvent_UserPushesStartRun){
             std::lock_guard<std::mutex> lock(stateStoreRef_->saved_sessions_mutex);
             size_t existingSessions = stateStoreRef_->saved_sessions.size();
-            if(existingSessions == 0) {
+            LOG_ALWAYS("SC: UserPushesStartRun, existingSessions=" << existingSessions);
+            if(existingSessions <= 1) { // 1 for default
                 stateStoreRef_->g_ui_popup.store(UIPopup_MustCalibBeforeRun, std::memory_order_release);
                 return std::nullopt; // swallow event; no transition
             }
@@ -368,12 +376,14 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
             
         }
 
-        if(ev==UIStateEvent_UserConfirmsOverwriteCalib){
-            if(!awaiting_calib_overwrite_confirm_){
-                // stale confirm click; we've already processed
-                return std::nullopt;
-            }
-            // otherwise
+        if(currEvent == UIStateEvent_UserCancelsPopup && awaiting_calib_overwrite_confirm_){
+            // popup in question is for 'session name already exists' detected
+            // cancels means don't transition to calib
+            awaiting_calib_overwrite_confirm_ = false; 
+            return std::nullopt; // swallow transition from calib options -> calib 
+        }
+
+        if(currEvent == UIStateEvent_UserAcksPopup && awaiting_calib_overwrite_confirm_){
             // clear flag
             awaiting_calib_overwrite_confirm_ = false;
             // proceed into Instructions exactly like the original submit would have

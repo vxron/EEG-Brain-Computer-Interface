@@ -82,37 +82,21 @@ struct StateStore_s{
         std::string g_active_data_path = "";
         EpilepsyRisk_E g_epilepsy_risk = EpilepsyRisk_Unknown;
 
-        void set_active_model_path(const std::string& v) {
-            std::lock_guard<std::mutex> lock(mtx_);
-            g_active_model_path = v; // automatically unlocks mtx_
-        }
         std::string get_active_model_path() const {
             std::lock_guard<std::mutex> lock(mtx_);
             return g_active_model_path; // automatically unlocks mtx_
         }
 
-        void set_active_subject_id(const std::string& v) {
-            std::lock_guard<std::mutex> lock(mtx_);
-            g_active_subject_id = v;
-        }
         std::string get_active_subject_id() const {
             std::lock_guard<std::mutex> lock(mtx_);
             return g_active_subject_id;
         }
 
-        void set_active_session_id(const std::string& v) {
-            std::lock_guard<std::mutex> lock(mtx_);
-            g_active_session_id = v;
-        }
         std::string get_active_session_id() const {
             std::lock_guard<std::mutex> lock(mtx_);
             return g_active_session_id;
         }
 
-        void set_active_data_path(const std::string& v) {
-            std::lock_guard<std::mutex> lock(mtx_);
-            g_active_data_path = v;
-        }
         std::string get_active_data_path() const {
             std::lock_guard<std::mutex> lock(mtx_);
             return g_active_data_path;

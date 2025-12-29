@@ -336,8 +336,9 @@ try{
         if (!do_finalize) return;
 
         // Only finalize if we are *currently* in calib pipeline
+        LOG_ALWAYS("finalize detected");
         UIState_E s = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
-        if (s != UIState_Active_Calib) {
+        if (s != UIState_Active_Calib && s != UIState_Instructions) {
             // if HW checks, we explicitly do nothing
             return;
         }
@@ -345,12 +346,14 @@ try{
         // Close/flush files
         if (win_opened)   { csv_win.flush();   csv_win.close();   win_opened = false; }
         if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); chunk_opened = false; }
+        LOG_ALWAYS("files closed");
 
         // Signal to training manager: data is ready (to launch training thread)
         {
             std::lock_guard<std::mutex> lock(stateStoreRef.mtx_train_job_request);
             stateStoreRef.train_job_requested = true;
         }
+        LOG_ALWAYS("notify");
         stateStoreRef.cv_train_job_request.notify_one();
     };
 
@@ -565,9 +568,15 @@ void stimulus_thread_fn(StateStore_s& stateStoreRef){
         stimController.runUIStateMachine();
         LOG_ALWAYS("stim: exit");
     }
+    catch (const std::system_error& e) {
+        LOG_ALWAYS("stim: FATAL std::system_error: " << e.what()
+            << " | code=" << e.code().value()
+            << " | category=" << e.code().category().name()
+            << " | message=" << e.code().message());
+        // then your shutdown path...
+    }
     catch (const std::exception& e) {
-        LOG_ALWAYS("stim: FATAL unhandled exception: " << e.what());
-        g_stop.store(true, std::memory_order_relaxed);
+        LOG_ALWAYS("stim: FATAL std::exception: " << e.what());
     }
     catch (...) {
         LOG_ALWAYS("stim: FATAL unknown exception");

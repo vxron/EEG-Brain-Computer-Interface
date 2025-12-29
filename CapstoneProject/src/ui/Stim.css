@@ -752,6 +752,87 @@ body {
   font-size: 0.75rem;
 }
 
+/* CALIB OPTIONS */
+#view-calib-options {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* Center card */
+#view-calib-options .card {
+  width: min(560px, 92%);
+  background: rgba(2, 6, 23, 0.92);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+  padding: 18px 18px 14px;
+}
+
+#view-calib-options h2 {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+}
+
+#view-calib-options .muted {
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+/* Form fields */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.field > span {
+  font-size: 0.78rem;
+  color: rgba(203, 213, 225, 0.8);
+}
+
+.field input,
+.field select {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(30, 41, 59, 0.95);
+  background: rgba(15, 23, 42, 0.75);
+  color: var(--text-main);
+  padding: 10px 12px;
+  outline: none;
+  font-size: 0.9rem;
+}
+
+.field input::placeholder {
+  color: rgba(156, 163, 175, 0.7);
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: rgba(99, 102, 241, 0.9);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+/* Footer row (Back / Start) */
+#view-calib-options .row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+#view-calib-options .row .btn {
+  flex: 1 1 auto;
+}
+
+.btn.secondary {
+  background: rgba(15, 23, 42, 0.9);
+  border-color: #1d293b;
+}
+
 /* MODAL OVERLAY (POPUPS) */
 
 .modal-backdrop {

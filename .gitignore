@@ -6,6 +6,10 @@
 /cmake_install.cmake
 /compile_commands.json
 
+# Data & Model dirs
+/data/
+/models/
+
 # Visual Studio / VS Code junk
 /.vs/
 /.vscode/

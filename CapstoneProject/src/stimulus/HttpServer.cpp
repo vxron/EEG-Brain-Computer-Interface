@@ -73,21 +73,26 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     std::string active_subject_id = stateStoreRef_.currentSessionInfo.get_active_subject_id();
     int popup = stateStoreRef_.g_ui_popup.load(std::memory_order_acquire); // any popup event
 
+    // Pending session info
+    std::lock_guard<std::mutex> lock2(stateStoreRef_.calib_options_mtx);
+    std::string pending_subject_name = stateStoreRef_.pending_subject_name;
+
     // 2) build json string manually
     std::ostringstream oss;
     oss << "{"
-        << "\"seq\":"                 << seq                                 << ","
-        << "\"stim_window\":"         << stim_window                         << ","
-        << "\"block_id\":"            << block_id                            << ","
-        << "\"freq_hz\":"             << freq_hz                             << ","
-        << "\"freq_hz_e\":"           << freq_hz_e                           << ","
-        << "\"freq_left_hz\":"        << freq_left_hz                        << ","
-        << "\"freq_right_hz\":"       << freq_right_hz                       << ","
-        << "\"freq_left_hz_e\":"      << freq_left_hz_e                      << ","
-        << "\"freq_right_hz_e\":"     << freq_right_hz_e                     << ","
-        << "\"is_model_ready\":"      << (is_model_ready ? "true" : "false") << ","
-        << "\"popup\":"               << popup                               << ","
-        << "\"active_subject_id\":\"" << active_subject_id                   << "\""
+        << "\"seq\":"                    << seq                                 << ","
+        << "\"stim_window\":"            << stim_window                         << ","
+        << "\"block_id\":"               << block_id                            << ","
+        << "\"freq_hz\":"                << freq_hz                             << ","
+        << "\"freq_hz_e\":"              << freq_hz_e                           << ","
+        << "\"freq_left_hz\":"           << freq_left_hz                        << ","
+        << "\"freq_right_hz\":"          << freq_right_hz                       << ","
+        << "\"freq_left_hz_e\":"         << freq_left_hz_e                      << ","
+        << "\"freq_right_hz_e\":"        << freq_right_hz_e                     << ","
+        << "\"is_model_ready\":"         << (is_model_ready ? "true" : "false") << ","
+        << "\"popup\":"                  << popup                               << ","
+        << "\"pending_subject_name\":\"" << pending_subject_name                << "\","
+        << "\"active_subject_id\":\""    << active_subject_id                   << "\""
         << "}";
 
     std::string json_snapshot = oss.str();
@@ -136,6 +141,11 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserPushesStartRun;
                 } else if (action == "ack_popup"){
                     // clear popup when user presses OK
+                    ev = UIStateEvent_UserAcksPopup;
+                    stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
+                } else if (action == "cancel_popup") {
+                    // clear popup (and event should be swallowed)
+                    ev = UIStateEvent_UserCancelsPopup;
                     stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
                 } else if (action == "hardware_checks"){
                     ev = UIStateEvent_UserPushesHardwareChecks;
