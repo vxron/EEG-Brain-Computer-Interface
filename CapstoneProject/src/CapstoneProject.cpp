@@ -21,6 +21,7 @@
 #include <fstream>
 #include "utils/SignalQualityAnalyzer.h"
 #include <filesystem>
+#include "utils/SessionPaths.hpp"
 
 #ifdef USE_EEG_FILTERS
 #include "utils/Filters.hpp"
@@ -335,10 +336,10 @@ try{
         } // unlock mtx on exit
         if (!do_finalize) return;
 
-        // Only finalize if we are *currently* in calib pipeline
+        // Always finalize when requested - exception is if we are in HW checks
         LOG_ALWAYS("finalize detected");
         UIState_E s = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
-        if (s != UIState_Active_Calib && s != UIState_Instructions) {
+        if (s == UIState_Hardware_Checks) {
             // if HW checks, we explicitly do nothing
             return;
         }
@@ -346,7 +347,6 @@ try{
         // Close/flush files
         if (win_opened)   { csv_win.flush();   csv_win.close();   win_opened = false; }
         if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); chunk_opened = false; }
-        LOG_ALWAYS("files closed");
 
         // Signal to training manager: data is ready (to launch training thread)
         {
@@ -609,8 +609,19 @@ void http_thread_fn(HttpServer_C& http){
 void training_manager_thread_fn(StateStore_s& stateStoreRef){
     logger::tlabel = "training manager";
     namespace fs = std::filesystem;
-    // HADEEL TODO: set this to wherever the training script lives.
-    const fs::path scriptPath = fs::path("C:/path/to/train_ssvep.py");
+    fs::path projectRoot = capstone::sesspaths::find_project_root();
+    if (fs::exists(projectRoot / "CapstoneProject") && fs::is_directory(projectRoot / "CapstoneProject")) {
+        projectRoot /= "CapstoneProject";
+    }
+    // Script lives at: <CapstoneProject>/model train/python/train_svm.py
+    fs::path scriptPath = projectRoot / "model train" / "python" / "train_svm.py";
+
+    std::error_code ec;
+    scriptPath = fs::weakly_canonical(scriptPath, ec); // normalize path (non-throwing)
+    LOG_ALWAYS("trainmgr: projectRoot=" << projectRoot.string());
+    LOG_ALWAYS("trainmgr: scriptPath=" << scriptPath.string()
+              << " (exists=" << (fs::exists(scriptPath) ? "Y" : "N") << ")"
+              << " (ec=" << (ec ? ec.message() : "ok") << ")");
     if (!fs::exists(scriptPath)) {
         LOG_ALWAYS("WARN: training script not found at " << scriptPath.string()
                   << " (training will fail until path is fixed)");

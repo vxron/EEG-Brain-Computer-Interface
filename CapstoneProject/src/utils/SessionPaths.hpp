@@ -157,7 +157,7 @@ static inline std::string allocate_person_fallback(const fs::path& data_root_dir
 //      <root>/data/<subject>/<session>/
 //      <root>/models/<subject>/<session>/
 //   - Returns paths + ids.
-SessionPaths create_session(const std::string& preferred_subject_name) {
+static inline SessionPaths create_session(const std::string& preferred_subject_name) {
     SessionPaths sp{};
 
     SESS_LOG("create_session: BEGIN preferred_subject_name='" << preferred_subject_name << "'");

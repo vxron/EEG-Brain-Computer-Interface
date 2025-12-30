@@ -35,7 +35,11 @@ private:
 
     std::string pending_subject_name_ = ""; // for calib mode quick access
     EpilepsyRisk_E pending_epilepsy_ = EpilepsyRisk_Unknown; 
+
+    // latches to make things edge-triggered :)
+    bool end_calib_timeout_emitted_ = false;
     bool awaiting_calib_overwrite_confirm_ = false; // do we need to double check w user to enter calib sess?
+    bool awaiting_highfreq_confirm_ = false;
 
     std::optional<UIStateEvent_E> detectEvent();
     void processEvent(UIStateEvent_E ev);

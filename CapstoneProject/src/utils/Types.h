@@ -63,7 +63,11 @@ enum TestFreq_E {
 	TestFreq_9_Hz,
 	TestFreq_10_Hz,
 	TestFreq_11_Hz,
-	TestFreq_12_Hz
+	TestFreq_12_Hz,
+	TestFreq_20_Hz,
+	TestFreq_25_Hz,
+	TestFreq_30_Hz,
+	TestFreq_35_Hz,
 };
 
 enum ActuatorState_E {
@@ -94,7 +98,6 @@ enum EpilepsyRisk_E {
 	EpilepsyRisk_No,
 	EpilepsyRisk_YesButHighFreqOk,
 	EpilepsyRisk_Yes,
-
 	EpilepsyRisk_Unknown,
 };
 
@@ -119,12 +122,13 @@ enum UIStateEvent_E {
 };
 
 enum UIPopup_E {
-	UIPopup_None,
-	UIPopup_MustCalibBeforeRun,
-	UIPopup_ModelFailedToLoad,
-	UIPopup_TooManyBadWindowsInRun,
-	UIPopup_InvalidCalibOptions,
-	UIPopup_ConfirmOverwriteCalib
+	UIPopup_None, // 0
+	UIPopup_MustCalibBeforeRun, // 1
+	UIPopup_ModelFailedToLoad, // 2
+	UIPopup_TooManyBadWindowsInRun, // 3
+	UIPopup_InvalidCalibOptions, // 4
+	UIPopup_ConfirmOverwriteCalib, // 5
+	UIPopup_ConfirmHighFreqOk, // 6
 };
 
 enum BitOperation_E {
@@ -152,6 +156,14 @@ inline int TestFreqEnumToInt(TestFreq_E enumVal){
 			return 12;
 		case TestFreq_9_Hz:
 			return 9;
+		case TestFreq_20_Hz:
+			return 20;
+		case TestFreq_25_Hz:
+			return 25;
+		case TestFreq_30_Hz:
+			return 30;
+		case TestFreq_35_Hz:
+			return 35;
 		case TestFreq_None:
 			return 0;
 		default:

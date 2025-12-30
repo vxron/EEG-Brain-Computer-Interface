@@ -284,6 +284,14 @@ function intToLabel(enumType, integer) {
           return "TestFreq_11_Hz";
         case 5:
           return "TestFreq_12_Hz";
+        case 6:
+          return "TestFreq_20_Hz";
+        case 7:
+          return "TestFreq_25_Hz";
+        case 8:
+          return "TestFreq_30_Hz";
+        case 9:
+          return "TestFreq_35_Hz";
         default:
           return `Unknown (${integer})`;
       }
@@ -425,6 +433,12 @@ function updateUiFromState(data) {
             okText: "Overwrite",
             cancelText: "Cancel",
           }
+        );
+        break;
+      case 6: // UIPopup_ConfirmHighFreqOk
+        showModal(
+          "High frequency SSVEP decoding (>20Hz) will be attempted",
+          "The final model's performance may be poor, and device functionality may be limited."
         );
         break;
       default:
@@ -989,14 +1003,6 @@ async function sendCalibOptionsAndStart() {
     showModal(
       "Cannot proceed",
       "This device is not safe for use for individuals with photosensitivity."
-    );
-    return;
-  }
-
-  if (raw === "1") {
-    showModal(
-      "High frequency SSVEP decoding (>20Hz) will be attempted",
-      "The final model's performance may be poor, and device functionality may be limited."
     );
     return;
   }

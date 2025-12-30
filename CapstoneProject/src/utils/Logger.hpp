@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
-#include <iostream>
-#include <iomanip>
+#include <string>
+#include <mutex>
 
 namespace logger {
   // Returns ms since program start (steady clock).
@@ -12,12 +12,20 @@ namespace logger {
 
   // Per-thread label used in log lines (defaults to "main").
   extern thread_local const char* tlabel;
+
+  // Global log mutex (single sink).
+  std::mutex& log_mutex();
+
+  // Thread-safe write of a fully formatted line.
+  void write_line(const std::string& line);
 }
 
-// Pretty simple macros. Keep I/O headers included above.
+// Macros build the full line, then print under a mutex.
 #define LOG_ALWAYS(msg) do { \
-  std::cout << "[" << std::setw(6) << logger::ms_since_start() << " ms] " \
-            << logger::tlabel << ": " << msg << std::endl; \
+  std::ostringstream _oss; \
+  _oss << "[" << std::setw(6) << logger::ms_since_start() << " ms] " \
+       << logger::tlabel << ": " << msg; \
+  logger::write_line(_oss.str()); \
 } while(0)
 
 #define LOG_DBG(msg) do { if (logger::verbose()) LOG_ALWAYS(msg); } while(0)

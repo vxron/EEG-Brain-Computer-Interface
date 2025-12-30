@@ -3,7 +3,7 @@
 #include "../utils/Logger.hpp"
 #include "../utils/SessionPaths.hpp"
 
-static struct state_transition{
+struct state_transition{
     UIState_E from;
     UIStateEvent_E event;
     UIState_E to;
@@ -57,9 +57,7 @@ StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::opt
      activeBlockDur_ms_ = std::chrono::milliseconds{
      trainingProtocol_.activeBlockDuration_s * 1000 };
      restBlockDur_ms_ = std::chrono::milliseconds{
-     trainingProtocol_.restDuration_s * 1000 };
-
-     // TODO: protocol for epilepsy with diff freqs...
+     trainingProtocol_.restDuration_s * 1000 };     
 
 }
 
@@ -131,10 +129,10 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
         }
 
         case UIState_Calib_Options: {
+            // RESET MEMBERS FOR NEW SESS
+            end_calib_timeout_emitted_ = false;
+            activeQueueIdx_ = 0;
             stateStoreRef_->g_ui_state.store(UIState_Calib_Options, std::memory_order_release);
-            // (1) first clear stale entries
-            pending_subject_name_ = "";
-            pending_epilepsy_ = EpilepsyRisk_Unknown;
             break;
         }
 
@@ -180,6 +178,11 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
                     // (don’t set g_stop)
                     return;
                 }
+
+                LOG_ALWAYS("SC: create_session used subject_name=" << pending_subject_name_);
+                // clear stale entries
+                pending_subject_name_ = "";
+                pending_epilepsy_ = EpilepsyRisk_Unknown;
 
                 // lock again to write everything to state store; PUBLISH!
                 // the new subject's model isn't ready yet
@@ -280,6 +283,20 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             }
             break;
         
+        case UIState_Calib_Options:
+            // when we exit here and we move onto instructions, it means what we've published to the epilepsy risk is confirmed
+            if(pending_epilepsy_ == EpilepsyRisk_YesButHighFreqOk) {
+                // need to adapt training protocol
+                trainingProtocol_.freqsToTest = {TestFreq_20_Hz, TestFreq_25_Hz, TestFreq_30_Hz, TestFreq_35_Hz};
+                activeBlockQueue_ = trainingProtocol_.freqsToTest;
+                trainingProtocol_.numActiveBlocks = trainingProtocol_.freqsToTest.size();
+                activeQueueIdx_ = 0;
+            } 
+            // clear after consuming
+            pending_epilepsy_ = EpilepsyRisk_Unknown;
+            pending_subject_name_.clear();
+            break;
+        
         case UIState_Active_Run:
         // idk yet whether or not we want to be clearing here !
             //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
@@ -299,6 +316,7 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
         const auto& t = state_transition_table[i];
 		if(state_ == t.from && ev == t.event) {
 			// match found
+            LOG_ALWAYS("SC: TRANSITION " << (int)state_ << " --(" << (int)ev << ")-> " << (int)t.to);
 			onStateExit(state_, ev);
             prevState_ = state_;
 			state_ = t.to;
@@ -306,6 +324,7 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
             break;
 		}
 	}
+    LOG_ALWAYS("SC: NO TRANSITION for state=" << (int)state_ << " event=" << (int)ev);
     return;
 }
 
@@ -363,15 +382,30 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
                 return std::nullopt; // swallow until user confirms
             }
 
+            // (2c) check if high frequency popup is now waiting
+            if(pending_epilepsy_ == EpilepsyRisk_YesButHighFreqOk) {
+                awaiting_highfreq_confirm_ = true;
+                stateStoreRef_->g_ui_popup.store(UIPopup_ConfirmHighFreqOk, std::memory_order_release);
+                return std::nullopt; // swallow until user presses ok on popup
+            }
+
             // (3) start calib if (2a) and (2b) (happens automatically w state transition)
             // otherwise, swallow transition
             if(!shouldStartCalib){
-                // TODO: some sort of popup should occur here
                 stateStoreRef_->g_ui_popup.store(UIPopup_InvalidCalibOptions, std::memory_order_release);
                 return std::nullopt; // swallow event; no transition
             }
 
             awaiting_calib_overwrite_confirm_ = false;
+            awaiting_highfreq_confirm_ = false;
+            
+            // right before return - clear statestore for next calib options entry
+            {
+                std::lock_guard<std::mutex> lock_final(stateStoreRef_->calib_options_mtx);
+                stateStoreRef_->pending_subject_name.clear();
+                stateStoreRef_->pending_epilepsy = EpilepsyRisk_Unknown;
+            }
+
             return currEvent;
             
         }
@@ -387,19 +421,35 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
             // clear flag
             awaiting_calib_overwrite_confirm_ = false;
             // proceed into Instructions exactly like the original submit would have
+            LOG_ALWAYS("SC: popup ack -> remap to StartCalibFromOptions (awaiting_highfreq_confirm_)");
             return UIStateEvent_UserPushesStartCalibFromOptions; // corresponding to state transition row
         }
 
-        // return
+        // check other popup on calib options page
+        if(currEvent == UIStateEvent_UserAcksPopup && awaiting_highfreq_confirm_){
+            awaiting_highfreq_confirm_ = false;
+            LOG_ALWAYS("SC: popup ack -> remap to StartCalibFromOptions (awaiting_highfreq_confirm_)");
+            return UIStateEvent_UserPushesStartCalibFromOptions;
+        }
+
         return currEvent;
     }
 
     // responsible for detecting three INTERNAL events:
     // (2) check if window timer is exceeded and we've reached the end of a training bout
-    if ((activeQueueIdx_ >= trainingProtocol_.numActiveBlocks) && 
-        (currentWindowTimer_.check_timer_expired()))
+    // only emit end in active calib 
+    if ((state_ == UIState_Active_Calib) && 
+        (activeQueueIdx_ >= trainingProtocol_.numActiveBlocks) && 
+        (currentWindowTimer_.check_timer_expired()) &&
+        (!end_calib_timeout_emitted_))
     {
-        LOG_ALWAYS("SC: detected end event=" << static_cast<int>(currEvent));
+        end_calib_timeout_emitted_ = true; // rising edge trigger
+        currentWindowTimer_.stop_timer();
+        LOG_ALWAYS("SC: returning internal event=" << (int)UIStateEvent_StimControllerTimeoutEndCalib
+          << " state=" << (int)state_
+          << " idx=" << activeQueueIdx_
+          << " num=" << trainingProtocol_.numActiveBlocks
+          << " timer_expired=" << currentWindowTimer_.check_timer_expired());
         return UIStateEvent_StimControllerTimeoutEndCalib;
     }
     // (3) check window timer exceeded
