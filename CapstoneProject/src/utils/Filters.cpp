@@ -1,4 +1,5 @@
 #include "Filters.hpp"
+#include "../utils/Logger.hpp"
 
 // from FilterDesign.py
 static constexpr float fir_blackman_201_b[201] = {
@@ -42,6 +43,7 @@ static constexpr float fir_blackman_201_b[201] = {
     -8.11674399e-07f, -1.3211498e-07f, 8.6551515e-35f
 };
 
+// THESE TAPS ARE NOT GOOD BECAUSE THEY DONT HAVE ZERO DC GAIN
 static constexpr float fir_hamming_201_b[201] = {
     0.000241931009f, 5.02136622e-05f, -1.31761105e-06f, 0.000135797005f, 0.000377193862f,
     0.000558852411f, 0.00054991899f, 0.000350214392f, 0.000101717581f, -2.59763771e-06f,
@@ -91,11 +93,45 @@ static constexpr float sg_21_3_b[21] = {
     -0.0248447205f, -0.0559006211f
 };
 
+static inline void log_fir_dc_gain_once(const float* b, std::size_t n, const char* name) {
+    double sum = 0.0;
+    double l1  = 0.0;
+    double l2  = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const double v = (double)b[i];
+        sum += v;
+        l1  += std::fabs(v);
+        l2  += v * v;
+    }
+    const double l2n = std::sqrt(l2);
+
+    LOG_ALWAYS("[FIR CHECK] " << name
+              << " taps=" << n
+              << " sum=" << std::setprecision(10) << sum
+              << " (DC gain ~ sum)"
+              << " |sum|=" << std::fabs(sum)
+              << " L1=" << l1
+              << " L2=" << l2n);
+}
+
 // Constructor constructs with specifically set filters (choose from above options)
 EegFilterBank_C::EegFilterBank_C() {
+    LOG_ALWAYS("EegFilterBank constructed");
+    // One-time FIR sanity check: bandpass should have sum(b) ~ 0 (kills DC)
+    static bool didCheck = false;
+    if (!didCheck) {
+        didCheck = true;
+        log_fir_dc_gain_once(fir_hamming_201_b, 201, "fir_hamming_201_b (2-35 Hz?)");
+        // optional: compare
+        log_fir_dc_gain_once(fir_blackman_201_b, 201, "fir_blackman_201_b (2-35 Hz?)");
+        log_fir_dc_gain_once(sg_21_3_b, 21, "sg_21_3_b (smoother)");
+    }
+
     for (std::size_t ch = 0; ch < NUM_CH_CHUNK; ++ch) {
-        bandpass_[ch].init_from_taps(fir_hamming_201_b); // currently Hamming 201 taps 2-35 Hz
+        bandpass_[ch].init_from_taps(fir_blackman_201_b); // currently Hamming 201 taps 2-35 Hz
         smooth_[ch].init_from_taps(sg_21_3_b);
+        dc_[ch].a = 0.995f;                 // try 0.995–0.999
+        dc_[ch].reset(0.0f);
     }
 }
 
@@ -104,18 +140,21 @@ void EegFilterBank_C::process_chunk(bufferChunk_S& chunk) {
     constexpr std::size_t nCh = NUM_CH_CHUNK;
     constexpr std::size_t nS  = NUM_SAMPLES_CHUNK / NUM_CH_CHUNK;
 
-    // 1) Bandpass 
+    // 1) CAR
+    remove_common_mode_noise(chunk);
+
+    // 2) frequency filtering
     for (std::size_t s = 0; s < nS; ++s) {
         for (std::size_t ch = 0; ch < nCh; ++ch) {
             const std::size_t idx = s * nCh + ch;
             float x = chunk.data[idx];
-            float y = bandpass_[ch].process(x);
-            chunk.data[idx] = y;
+            // 2a) Simple DC blocker
+            x = dc_[ch].process(x);
+            // 2b) Bandpass FIR
+            x = bandpass_[ch].process(x);
+            chunk.data[idx] = x;
         }
     }
-
-    // 2) CAR
-    remove_common_mode_noise(chunk);
 }
 
 // per sample cross channel mean subtraction (CAR)

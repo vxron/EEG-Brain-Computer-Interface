@@ -2,6 +2,11 @@
 #include <array>
 #include <cstddef>
 #include "Types.h"
+#include <numeric>   // std::accumulate
+#include <cmath>     // std::fabs
+#include "../utils/Logger.hpp"
+#include <cstddef>
+#include <algorithm>
 
 /* ALL PREPROCESSING LIVES HERE */
 /* MUTATES CHUNKS IN PLACE:
@@ -14,6 +19,23 @@
 static constexpr float MAX_SPIKE_AMP_UV = 175; 
 // Point-to-point jumps are also likely artifactual, can't be real change in EEG
 static constexpr float MAX_BTWN_SAMPLE_STEP_UV = 100;
+
+struct DcBlocker1P {
+    // y[n] = x[n] - x[n-1] + a*y[n-1]
+    // a close to 1 => lower cutoff (slower drift removed)
+    float a = 0.995f;
+    float x1 = 0.0f;
+    float y1 = 0.0f;
+
+    void reset(float x0 = 0.0f) { x1 = x0; y1 = 0.0f; }
+
+    float process(float x) {
+        float y = (x - x1) + a * y1;
+        x1 = x;
+        y1 = y;
+        return y;
+    }
+};
 
 // Linear-phase FIR filter template with N taps:
 //
@@ -66,6 +88,7 @@ private:
     // todo: read ch from statestore instead of using num_ch_chunk
     std::array<BandpassFilter, NUM_CH_CHUNK> bandpass_; // one for each channel of data
     std::array<SmoothFilter,   NUM_CH_CHUNK> smooth_;
+    DcBlocker1P dc_[NUM_CH_CHUNK];
 
     // Preprocessing pipeline:
     void apply_bandpass(bufferChunk_S& chunk);

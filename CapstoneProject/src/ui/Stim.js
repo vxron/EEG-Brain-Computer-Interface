@@ -80,8 +80,8 @@ const hwQualityRow = document.getElementById("hw-quality-row");
 const hwPlotsContainer = document.getElementById("hw-plots-container");
 // Hardware checks plotting configs
 const HW_MAX_WINDOW_SEC = 9; // seconds visible on screen
-const HW_Y_MIN = -80; // adjust to fit (scale should be uV, EEG ~10-100uV)
-const HW_Y_MAX = 80;
+const HW_Y_MIN = -100; // adjust to fit (scale should be uV, EEG ~10-100uV)
+const HW_Y_MAX = 100;
 let hwCharts = []; // one Chart per channel
 let hwLabels = []; // channel names, matching backend labels (from get/eeg JSON res)
 let hwActive = false;
