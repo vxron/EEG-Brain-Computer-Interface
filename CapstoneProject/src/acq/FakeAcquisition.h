@@ -64,8 +64,9 @@ public:
 
 	// Lifecycle methods to match IAcqProvider_S interface
 	bool unicorn_init() override { return true; } // nothing to init
-	bool unicorn_start_acq() override { return true; }
-	bool unicorn_stop_and_close() override {return true; } // nothing to cleanup
+	bool unicorn_start_acq(bool testMode) override { return true; }
+	bool unicorn_stop_and_close() override { return true; } // nothing to cleanup
+	bool dump_config_and_indices() override { return true; } // ignore test dump
 
 	bool getData(std::size_t const numberOfScans, float* dest) override; // mirrors Unicorn C API GetData()
 	void setActiveStimulus(double fStimHz); // sets the active stimulus frequency (0 = none)

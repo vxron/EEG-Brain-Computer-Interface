@@ -19,8 +19,9 @@ struct IAcqProvider_S {
 	virtual bool getData(std::size_t const numberOfScans, float* dest) = 0; // pure virtual function = 0
 	virtual ~IAcqProvider_S() = default; // virtual destructor for proper cleanup of derived classes
 	virtual bool unicorn_init() = 0; // establishes unicorn session; sets configuration
-	virtual bool unicorn_start_acq() = 0; // start acquisition
+	virtual bool unicorn_start_acq(bool testMode) = 0; // start acquisition
 	virtual bool unicorn_stop_and_close() = 0;
+	virtual bool dump_config_and_indices() = 0;
 	virtual void setActiveStimulus(double fStimHz) { }; // default no-op
 
 	// channel metadata

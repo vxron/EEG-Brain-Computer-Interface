@@ -5,6 +5,8 @@
 #include <string>
 #include <sstream>
 #include "../utils/Logger.hpp"
+#include <vector>
+#include <iomanip>
 
 #include "../../unicorn/include/unicorn.h"
 
