@@ -137,6 +137,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
         }
 
         case UIState_Instructions: {
+
             // stim window
             stateStoreRef_->g_ui_state.store(UIState_Instructions, std::memory_order_release);
             // instruction windows still get freq info for next active block cuz UI will tell user what freq they'll be seeing next
@@ -163,11 +164,25 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_freq_hz.store(freq, std::memory_order_release);
             LOG_ALWAYS("SC: stored a freq=" << static_cast<int>(freq));
 
+            // instructions state is entered from Calib_Options or Saved_Sessions
             // need to create new session if we're just entering calib for the first time
             // TODO: delete csv log after if it doesn't include full calib session
             bool isCalib = stateStoreRef_->g_is_calib.load(std::memory_order_acquire);
             if(!isCalib){
                 // first time entry
+
+                // if from calib_options
+                if(prevState == UIState_Calib_Options){
+                    if(pending_epilepsy_ == EpilepsyRisk_YesButHighFreqOk) {
+                        // need to adapt training protocol
+                        trainingProtocol_.freqsToTest = {TestFreq_20_Hz, TestFreq_25_Hz, TestFreq_30_Hz, TestFreq_35_Hz};
+                        activeBlockQueue_ = trainingProtocol_.freqsToTest;
+                        trainingProtocol_.numActiveBlocks = trainingProtocol_.freqsToTest.size();
+                        activeQueueIdx_ = 0;
+                    } 
+                }
+
+                // new session publishing
                 SessionPaths SessionPath;
                 try {
                     SessionPath = capstone::sesspaths::create_session(pending_subject_name_);
@@ -180,10 +195,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
                 }
 
                 LOG_ALWAYS("SC: create_session used subject_name=" << pending_subject_name_);
-                // clear stale entries
-                pending_subject_name_ = "";
-                pending_epilepsy_ = EpilepsyRisk_Unknown;
-
+            
                 // lock again to write everything to state store; PUBLISH!
                 // the new subject's model isn't ready yet
                 {
@@ -193,7 +205,12 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
                     stateStoreRef_->currentSessionInfo.g_active_data_path = SessionPath.data_session_dir.string();
                     stateStoreRef_->currentSessionInfo.g_active_subject_id = SessionPath.subject_id;
                     stateStoreRef_->currentSessionInfo.g_active_session_id = SessionPath.session_id;
+                    stateStoreRef_->currentSessionInfo.g_epilepsy_risk = pending_epilepsy_;
                 }
+
+                // clear pending entries we just used to create session
+                pending_subject_name_.clear();
+                pending_epilepsy_ = EpilepsyRisk_Unknown;
             }
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
@@ -282,21 +299,7 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
                 stateStoreRef_->cv_finalize_request.notify_one();
             }
             break;
-        
-        case UIState_Calib_Options:
-            // when we exit here and we move onto instructions, it means what we've published to the epilepsy risk is confirmed
-            if(pending_epilepsy_ == EpilepsyRisk_YesButHighFreqOk) {
-                // need to adapt training protocol
-                trainingProtocol_.freqsToTest = {TestFreq_20_Hz, TestFreq_25_Hz, TestFreq_30_Hz, TestFreq_35_Hz};
-                activeBlockQueue_ = trainingProtocol_.freqsToTest;
-                trainingProtocol_.numActiveBlocks = trainingProtocol_.freqsToTest.size();
-                activeQueueIdx_ = 0;
-            } 
-            // clear after consuming
-            pending_epilepsy_ = EpilepsyRisk_Unknown;
-            pending_subject_name_.clear();
-            break;
-        
+    
         case UIState_Active_Run:
         // idk yet whether or not we want to be clearing here !
             //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
