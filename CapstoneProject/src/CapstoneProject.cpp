@@ -609,7 +609,7 @@ void http_thread_fn(HttpServer_C& http){
 void training_manager_thread_fn(StateStore_s& stateStoreRef){
     logger::tlabel = "training manager";
     namespace fs = std::filesystem;
-    fs::path projectRoot = capstone::sesspaths::find_project_root();
+    fs::path projectRoot = sesspaths::find_project_root();
     if (fs::exists(projectRoot / "CapstoneProject") && fs::is_directory(projectRoot / "CapstoneProject")) {
         projectRoot /= "CapstoneProject";
     }

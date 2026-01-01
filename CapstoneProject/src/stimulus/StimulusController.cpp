@@ -185,7 +185,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
                 // new session publishing
                 SessionPaths SessionPath;
                 try {
-                    SessionPath = capstone::sesspaths::create_session(pending_subject_name_);
+                    SessionPath = sesspaths::create_session(pending_subject_name_);
                     // publish to stateStore...
                 } catch (const std::exception& e) {
                     LOG_ALWAYS("SC: create_session failed: " << e.what());
@@ -253,7 +253,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
                 subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
             }
 
-            SessionPath = capstone::sesspaths::create_session(subjectName);
+            SessionPath = sesspaths::create_session(subjectName);
             
             // write everything to state store
             // the new subject's model isn't ready yet
