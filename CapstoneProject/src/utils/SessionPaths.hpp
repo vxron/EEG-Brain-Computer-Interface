@@ -28,10 +28,11 @@
 #include "Logger.hpp"
 
 #define SESS_LOG(msg) LOG_ALWAYS("sesspaths: " << msg)
-
 namespace sesspaths {
 
 namespace fs = std::filesystem;
+
+static constexpr const char* kInProgressSuffix = "__IN_PROGRESS";
 
 //  Inline Helpers
 static inline std::string ec_str(const std::error_code& ec) {
@@ -105,10 +106,32 @@ static inline fs::path model_file(const SessionPaths& sp, const std::string& fil
     return sp.model_session_dir / filename;
 }
 
+static inline bool ends_with(const std::string& s, const std::string& suf) {
+    return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+}
+
+static inline std::string with_in_progress_suffix(const std::string& session_id_base) {
+    return session_id_base + kInProgressSuffix;
+}
+
+static inline bool is_in_progress_session_id(const std::string& session_id) {
+    return ends_with(session_id, kInProgressSuffix);
+}
+
+static inline std::string strip_in_progress_suffix(std::string session_id) {
+    const std::string suf = kInProgressSuffix;
+    if (ends_with(session_id, suf)) {
+        session_id.resize(session_id.size() - suf.size());
+    }
+    return session_id;
+}
+
 // declarations
 fs::path find_project_root(int max_depth = 12);
 std::string allocate_person_fallback(const fs::path& data_root_dir);
 void prune_old_sessions_for_subject(const fs::path& subject_dir, std::size_t keep_n);
 SessionPaths create_session(const std::string& preferred_subject_name);
+void delete_session_dirs_if_in_progress(const SessionPaths& sp);
+bool finalize_session_dirs(SessionPaths& sp); 
 
 } // namespace sesspaths

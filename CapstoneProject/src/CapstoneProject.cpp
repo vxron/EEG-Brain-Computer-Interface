@@ -336,17 +336,49 @@ try{
         } // unlock mtx on exit
         if (!do_finalize) return;
 
-        // Always finalize when requested - exception is if we are in HW checks
+        // Always finalize when requested
         LOG_ALWAYS("finalize detected");
-        UIState_E s = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
-        if (s == UIState_Hardware_Checks) {
-            // if HW checks, we explicitly do nothing
-            return;
-        }
 
         // Close/flush files
         if (win_opened)   { csv_win.flush();   csv_win.close();   win_opened = false; }
         if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); chunk_opened = false; }
+
+        // remove __IN_PROGRESS from session titles given we've completed calib successfully
+        std::string data_dir, model_dir, subject_id, session_id;
+        {
+            std::lock_guard<std::mutex> lock(stateStoreRef.currentSessionInfo.mtx_);
+            data_dir   = stateStoreRef.currentSessionInfo.g_active_data_path;
+            model_dir  = stateStoreRef.currentSessionInfo.g_active_model_path;
+            session_id = stateStoreRef.currentSessionInfo.g_active_session_id;
+            subject_id = stateStoreRef.currentSessionInfo.g_active_subject_id;
+        }
+
+        const std::string base_id = sesspaths::strip_in_progress_suffix(session_id);
+        std::error_code ec;
+        fs::path old_data  = fs::path(data_dir);
+        fs::path old_model = fs::path(model_dir);
+        fs::path new_data  = old_data.parent_path()  / base_id;
+        fs::path new_model = old_model.parent_path() / base_id;
+
+        if (sesspaths::is_in_progress_session_id(session_id)) {
+            fs::rename(old_data, new_data, ec);
+            if (ec) SESS_LOG("finalize: ERROR data rename: " << ec.message());
+            ec.clear();
+
+            fs::rename(old_model, new_model, ec);
+            if (ec) SESS_LOG("finalize: ERROR model rename: " << ec.message());
+
+            // Update StateStore paths/ids so training uses the final (non-suffixed) dirs
+            {
+                std::lock_guard<std::mutex> lock(stateStoreRef.currentSessionInfo.mtx_);
+                stateStoreRef.currentSessionInfo.g_active_session_id = base_id;
+                stateStoreRef.currentSessionInfo.g_active_data_path  = new_data.string();
+                stateStoreRef.currentSessionInfo.g_active_model_path = new_model.string();
+            }
+        }
+        // After creating new dirs
+        sesspaths::prune_old_sessions_for_subject(new_data / subject_id, 3);
+        // TODO: PRUNE MODELS IF/WHEN TRAINING FAILS !
 
         // Signal to training manager: data is ready (to launch training thread)
         {
@@ -501,9 +533,6 @@ try{
         else if(currState == UIState_Hardware_Checks) {
             // MOVE THIS OUT -> WE SHOULD ALWAYS BE CHECKING THIS MAYBE??
             SignalQualityAnalyzer.check_artifact_and_flag_window(window);
-            // Log EVERY window from HW checks; use snapshot (untrimmed)
-            // testFreq will be None -> tf_hz becomes -1
-            log_window_snapshot(window, currState, window.tick, /*use_trimmed=*/false);
         }
         
         else if(currState == UIState_Active_Run){

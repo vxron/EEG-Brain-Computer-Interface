@@ -243,29 +243,6 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
-
-            // purpose = CSV logging for stats
-            // TODO: add knob to enable/disable this functionality in hw checks mode idk
-            SessionPaths SessionPath;
-            std::string subjectName;
-            {
-                std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
-                subjectName = stateStoreRef_->currentSessionInfo.g_active_subject_id;
-            }
-
-            SessionPath = sesspaths::create_session(subjectName);
-            
-            // write everything to state store
-            // the new subject's model isn't ready yet
-            {
-                std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
-                stateStoreRef_->currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
-                stateStoreRef_->currentSessionInfo.g_active_model_path = SessionPath.model_session_dir.string();
-                stateStoreRef_->currentSessionInfo.g_active_data_path = SessionPath.data_session_dir.string();
-                stateStoreRef_->currentSessionInfo.g_active_subject_id = SessionPath.subject_id;
-                stateStoreRef_->currentSessionInfo.g_active_session_id = SessionPath.session_id;
-            }
-
             break;
         }
 
@@ -298,6 +275,27 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
                 }
                 stateStoreRef_->cv_finalize_request.notify_one();
             }
+            if(ev == UIStateEvent_UserPushesExit) {
+                // calib incomplete... delete session (if still __IN_PROGRESS)
+                SessionPaths sp; // temp object
+                {
+                    std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
+                    sp.subject_id        = stateStoreRef_->currentSessionInfo.g_active_subject_id;
+                    sp.session_id        = stateStoreRef_->currentSessionInfo.g_active_session_id;
+                    sp.data_session_dir  = std::filesystem::path(stateStoreRef_->currentSessionInfo.g_active_data_path);
+                    sp.model_session_dir = std::filesystem::path(stateStoreRef_->currentSessionInfo.g_active_model_path);
+                }
+                sesspaths::delete_session_dirs_if_in_progress(sp);
+
+                // clear active session info so UI doesn't show stale sessions
+                {
+                    std::lock_guard<std::mutex> lock(stateStoreRef_->currentSessionInfo.mtx_);
+                    stateStoreRef_->currentSessionInfo.g_active_session_id.clear();
+                    stateStoreRef_->currentSessionInfo.g_active_data_path.clear();
+                    stateStoreRef_->currentSessionInfo.g_active_model_path.clear();
+                }
+            }
+            // TODO: any fault cases
             break;
     
         case UIState_Active_Run:

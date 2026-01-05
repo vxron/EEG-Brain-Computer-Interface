@@ -156,6 +156,11 @@ struct StateStore_s{
     std::condition_variable cv_train_job_request;
     bool train_job_requested = false;
 
+    // (3) train done (model ready) notif from training manager -> stim controller
+    // (device becomes operable), can update sessionInfo model_ready bool
+    std::mutex mtx_model_ready;
+    std::condition_variable cv_model_ready;
+
 };
 
 

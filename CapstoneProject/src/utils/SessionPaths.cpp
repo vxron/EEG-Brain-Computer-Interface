@@ -31,6 +31,58 @@ fs::path sesspaths::find_project_root(int max_depth) {
     return fallback;
 }
 
+// Rename <.../<ts>__IN_PROGRESS> -> <.../<ts>> for BOTH data + models.
+// Updates session_id + dirs in-place
+bool sesspaths::finalize_session_dirs(SessionPaths& sp) {
+    std::error_code ec;
+
+    if (!is_in_progress_session_id(sp.session_id)) {
+        SESS_LOG("finalize_session_dirs: not in progress, nothing to do");
+        return true;
+    }
+
+    const std::string base_id = strip_in_progress_suffix(sp.session_id);
+
+    fs::path new_data  = sp.data_session_dir.parent_path()  / base_id;
+    fs::path new_model = sp.model_session_dir.parent_path() / base_id;
+
+    SESS_LOG("finalize_session_dirs: renaming data " << sp.data_session_dir.string()
+             << " -> " << new_data.string());
+    fs::rename(sp.data_session_dir, new_data, ec);
+    if (ec) {
+        SESS_LOG("finalize_session_dirs: ERROR renaming data (" << ec.message() << ")");
+        return false;
+    }
+    ec.clear();
+
+    SESS_LOG("finalize_session_dirs: renaming model " << sp.model_session_dir.string()
+             << " -> " << new_model.string());
+    fs::rename(sp.model_session_dir, new_model, ec);
+    if (ec) {
+        SESS_LOG("finalize_session_dirs: ERROR renaming model (" << ec.message() << ")");
+        return false;
+    }
+
+    // Update struct
+    sp.session_id       = base_id;
+    sp.data_session_dir = new_data;
+    sp.model_session_dir= new_model;
+
+    return true;
+}
+
+// Delete session dirs if they're still IN_PROGRESS (aborted calib)
+void sesspaths::delete_session_dirs_if_in_progress(const SessionPaths& sp) {
+    if (!is_in_progress_session_id(sp.session_id)) return;
+
+    std::error_code ec;
+    fs::remove_all(sp.data_session_dir, ec);
+    if (ec) SESS_LOG("abort: ERROR removing data (" << ec.message() << ")");
+    ec.clear();
+
+    fs::remove_all(sp.model_session_dir, ec);
+    if (ec) SESS_LOG("abort: ERROR removing model (" << ec.message() << ")");
+}
 
 // Allocate a fallback subject id: person1, person2, ...
 // Persist the counter in: <root>/data/.next_person_id
@@ -164,7 +216,8 @@ SessionPaths sesspaths::create_session(const std::string& preferred_subject_name
         << " (fallback=" << (used_fallback ? "Y" : "N") << ")");
 
     // 3) Create session id
-    sp.session_id = make_session_id_timestamp();
+    const std::string base_id = make_session_id_timestamp();
+    sp.session_id = with_in_progress_suffix(base_id);
     SESS_LOG("create_session: session_id=" << sp.session_id);
 
     // 4) Build session dirs + create them
@@ -191,10 +244,6 @@ SessionPaths sesspaths::create_session(const std::string& preferred_subject_name
         // todo: decide if u want hard fail
         // throw std::runtime_error("create_session: failed to create session directories");
     }
-
-    // After creating new dirs
-    prune_old_sessions_for_subject(data_root / sp.subject_id, 3);
-    prune_old_sessions_for_subject(models_root / sp.subject_id, 3);
 
     return sp;
 }
