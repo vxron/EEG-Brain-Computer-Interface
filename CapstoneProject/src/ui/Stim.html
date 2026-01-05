@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-6" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-7" />
   </head>
   <body>
     <div class="app-shell">
@@ -308,6 +308,45 @@
           </div>
         </div>
 
+        <!-- PENDING TRAINING OVERLAY -->
+        <div
+          id="training-overlay"
+          class="busy-backdrop hidden"
+          aria-hidden="true"
+        >
+          <button
+            id="btn-cancel-training"
+            class="busy-cancel-btn"
+            type="button"
+          >
+            Cancel Training (Return Home)
+          </button>
+          <div
+            class="busy-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Training"
+          >
+            <div class="busy-head">
+              <div class="busy-title">Training model...</div>
+              <div class="busy-sub">
+                This may take several minutes. Please keep the app open.
+              </div>
+            </div>
+
+            <div class="busy-progress" aria-label="Training progress">
+              <div class="busy-bar"></div>
+            </div>
+
+            <div class="busy-foot">
+              <span class="busy-pill">
+                <span class="busy-dot"></span>
+                Running Python training job on calibration data.
+              </span>
+            </div>
+          </div>
+        </div>
+
         <!-- LOG PANEL (small strip at the bottom) -->
         <section class="log-panel">
           <h3>Event Log</h3>
@@ -319,6 +358,6 @@
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-15"></script>
+    <script src="Stim.js?v=20251119-16"></script>
   </body>
 </html>

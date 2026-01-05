@@ -58,16 +58,16 @@ enum SSVEPState_E {
 }; // SSVEPState_E
 
 enum TestFreq_E {
-	TestFreq_None,
-	TestFreq_8_Hz,
-	TestFreq_9_Hz,
-	TestFreq_10_Hz,
-	TestFreq_11_Hz,
-	TestFreq_12_Hz,
-	TestFreq_20_Hz,
-	TestFreq_25_Hz,
-	TestFreq_30_Hz,
-	TestFreq_35_Hz,
+	TestFreq_None, // 0
+	TestFreq_8_Hz, // 1
+	TestFreq_9_Hz, // 2
+	TestFreq_10_Hz, // 3
+	TestFreq_11_Hz, // 4
+	TestFreq_12_Hz, // 5
+	TestFreq_20_Hz, // 6
+	TestFreq_25_Hz, // 7
+	TestFreq_30_Hz, // 8
+	TestFreq_35_Hz, // 9
 };
 
 enum ActuatorState_E {
@@ -85,7 +85,8 @@ enum UIState_E {
 	UIState_Run_Options, // 5
 	UIState_Hardware_Checks, // 6
 	UIState_Calib_Options, // 7
-	UIState_None, // 8
+	UIState_Pending_Training, // 8 when we're waiting for training to complete after calib
+	UIState_None, // 9
 };
 
 enum StimShapes_E {
@@ -118,7 +119,8 @@ enum UIStateEvent_E {
 	UIStateEvent_UserPushesStartCalibFromOptions, // 13
 	UIStateEvent_UserCancelsPopup, // 14
 	UIStateEvent_UserAcksPopup, // 15
-	UIStateEvent_None, // 16
+	UIStateEvent_ModelReady, // 16
+	UIStateEvent_None, // 17
 };
 
 enum UIPopup_E {

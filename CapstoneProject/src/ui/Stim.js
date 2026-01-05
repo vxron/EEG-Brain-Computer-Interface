@@ -99,7 +99,11 @@ const selEpilepsy = document.getElementById("calib-epilepsy");
 const btnCalibSubmit = document.getElementById("btn-calib-submit");
 const btnCalibBack = document.getElementById("btn-calib-back");
 
-// ==================== 2) LOGGING HELPER =============================
+// Pending Training DOM elements
+const elTrainingOverlay = document.getElementById("training-overlay");
+const btnCancelTraining = document.getElementById("btn-cancel-training");
+
+// ===================== 2) LOGGING HELPER =============================
 function logLine(msg) {
   const time = new Date().toLocaleTimeString();
   const line = document.createElement("div");
@@ -227,6 +231,14 @@ function hideModal() {
   modalVisible = false;
 }
 
+// (5) pending training modal helper
+function showTrainingOverlay(show) {
+  if (!elTrainingOverlay) return;
+
+  elTrainingOverlay.classList.toggle("hidden", !show);
+  document.body.classList.toggle("is-busy", show);
+}
+
 // ==================== 4) CONNECTION STATUS HELPER =====================
 // UI should show red/green based on C++ server connection status
 function setConnectionStatus(ok) {
@@ -247,7 +259,7 @@ function intToLabel(enumType, integer) {
     return "error";
   }
   switch (enumType) {
-    case "stim_window":
+    case "stim_window": // must match UIState_E
       switch (integer) {
         case 0:
           return "UIState_Active_Run";
@@ -266,11 +278,13 @@ function intToLabel(enumType, integer) {
         case 7:
           return "UIState_Calib_Options";
         case 8:
+          return "UIState_Pending_Training";
+        case 9:
           return "UIState_None";
         default:
           return `Unknown (${integer})`;
       }
-    case "freq_hz_e":
+    case "freq_hz_e": // must match TestFreq_E
       switch (integer) {
         case 0:
           return "TestFreq_None";
@@ -342,11 +356,11 @@ function updateUiFromState(data) {
   // run mode flag cleared by default
   document.body.classList.remove("run-mode");
 
-  // View routing based on stim_window value
+  // View routing based on stim_window value (MUST MATCH UISTATE_E)
   const stimState = data.stim_window;
-  // MUST MATCH UISTATE_E
-  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = None
-  if (stimState === 3 /* Home */ || stimState === 8 /* None */) {
+
+  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = None
+  if (stimState === 3 /* Home */ || stimState === 9 /* None */) {
     stopCalibFlicker();
     stopRunFlicker();
     stopHardwareMode();
@@ -403,7 +417,13 @@ function updateUiFromState(data) {
     stopCalibFlicker();
     setFullScreenMode(false);
     showView("calib_options");
+  } else if (stimState == 8) {
+    stopCalibFlicker();
+    setFullScreenMode(false);
   }
+
+  // pending training overlay driven purely by state
+  showTrainingOverlay(stimState === 8); // uistate_pending_training
 
   // HANDLE POPUPS TRIGGERED BY BACKEND:
   const popupEnumIdx = data.popup ?? 0; // 0 is fallback
@@ -1093,6 +1113,13 @@ async function init() {
 
   if (btnCalibBack) {
     btnCalibBack.addEventListener("click", () => {
+      sendSessionEvent("exit");
+    });
+  }
+
+  if (btnCancelTraining) {
+    btnCancelTraining.addEventListener("click", () => {
+      // Cancel python job + return home
       sendSessionEvent("exit");
     });
   }
