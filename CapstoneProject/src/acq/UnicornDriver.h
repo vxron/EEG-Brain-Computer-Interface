@@ -13,8 +13,9 @@ public:
 	explicit UnicornDriver_C();
 	~UnicornDriver_C();
 	bool unicorn_init(); // establishes unicorn session; sets configuration
-	bool unicorn_start_acq(); // start acquisition
+	bool unicorn_start_acq(bool testMode); // start acquisition
 	bool unicorn_stop_and_close();
+	bool dump_config_and_indices();
 	//bool unicorn_read_one_sample(eeg_sample_t& sample); // uses provider's getdata call to transform into sample format
 	bool getData(std::size_t numberOfScans, float* dest) override; // single chunk from getdata()
 	

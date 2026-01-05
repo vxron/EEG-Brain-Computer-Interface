@@ -97,13 +97,67 @@ bool UnicornDriver_C::unicorn_init(){
 	return true;
 }
 
-bool UnicornDriver_C::unicorn_start_acq(){
+bool UnicornDriver_C::unicorn_start_acq(bool testMode){
 	logger::tlabel = "Unicorn Driver";
 	// Start acquisition in measurement mode (FALSE = not dummy test signal)
-	UCHECK(UNICORN_StartAcquisition(handle, FALSE));
-	LOG_ALWAYS("Acquisition started (measurement mode).");
+	UCHECK(UNICORN_StartAcquisition(handle, testMode ? TRUE : FALSE));
+    LOG_ALWAYS("Acquisition started (" << (testMode ? "TEST SIGNAL" : "MEASUREMENT") << ").");
     running = true;
 	return true;
+}
+
+bool UnicornDriver_C::dump_config_and_indices() {
+    logger::tlabel = "Unicorn Driver";
+
+    // Helper: safely print fixed-size char arrays (may not be null-terminated)
+    auto clip_cstr = [](const char* s, size_t maxLen) -> std::string {
+        if (!s) return std::string();
+        size_t n = 0;
+        while (n < maxLen && s[n] != '\0') ++n;
+        return std::string(s, n);
+    };
+
+    UNICORN_AMPLIFIER_CONFIGURATION cfg{}; // default init
+    UCHECK(UNICORN_GetConfiguration(handle,&cfg));
+
+    // Print enabled channels + their unit/range
+    LOG_ALWAYS("=== Enabled channels (from current configuration) ===");
+    for (int i = 0; i < UNICORN_TOTAL_CHANNELS_COUNT; ++i) {
+        if (cfg.Channels[i].enabled) {
+            const std::string name = clip_cstr(cfg.Channels[i].name, sizeof(cfg.Channels[i].name));
+            const std::string unit = clip_cstr(cfg.Channels[i].unit, sizeof(cfg.Channels[i].unit));
+            LOG_ALWAYS("EN ch[" << i << "] name=\"" << name
+                               << "\" unit=\"" << unit
+                               << "\" range=[" << cfg.Channels[i].range[0]
+                               << "," << cfg.Channels[i].range[1] << "]");
+        }
+    }
+
+    uint32_t numAcqCh=0;
+    UCHECK(UNICORN_GetNumberOfAcquiredChannels(handle, &numAcqCh));
+    LOG_ALWAYS("numAcqCh="<<numAcqCh);
+
+    // Verify index mapping
+    LOG_ALWAYS("=== Channel indices within an acquired scan ===");
+    const char* names[] = {
+        "EEG 1","EEG 2","EEG 3","EEG 4","EEG 5","EEG 6","EEG 7","EEG 8",
+        "Battery Level","Counter","Validation Indicator",
+        "Accelerometer X","Accelerometer Y","Accelerometer Z",
+        "Gyroscope X","Gyroscope Y","Gyroscope Z"
+    };
+
+    for (const char* n : names) {
+        uint32_t idx = 0;
+        int ec = UNICORN_GetChannelIndex(handle, n, &idx);
+        if (ec == UNICORN_ERROR_SUCCESS) {
+            LOG_ALWAYS("index(\"" << n << "\")=" << idx);
+        } else {
+            // Useful to see what is NOT present in current acquired scan
+            LOG_ALWAYS("index(\"" << n << "\")=N/A (ec=" << ec << ")");
+        }
+    }
+
+    return true;
 }
 
 bool UnicornDriver_C::unicorn_stop_and_close(){

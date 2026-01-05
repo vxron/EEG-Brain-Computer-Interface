@@ -31,6 +31,8 @@
 #include "acq/FakeAcquisition.h"
 #endif
 
+constexpr bool TEST_MODE = 1;
+
 // Global "please stop" flag set by Ctrl+C (SIGINT) to shut down cleanly
 static std::atomic<bool> g_stop{false};
 
@@ -71,7 +73,7 @@ try {
     // then we can choose based on acq_backend_fake which provider btwn unicorn and fake to set th eobjec too?
     // also need to updat csv so it logs appropraite measures (all eeg channels) in the acq_bavkend_fake path
 
-    if (acqDriver.unicorn_init() == false || acqDriver.unicorn_start_acq() == false){
+    if (acqDriver.unicorn_init() == false || acqDriver.dump_config_and_indices() == false || acqDriver.unicorn_start_acq(TEST_MODE) == false){
         LOG_ALWAYS("unicorn_init failed; exiting producer");
         rb.close();
         return;
