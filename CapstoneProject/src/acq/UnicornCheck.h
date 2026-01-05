@@ -5,8 +5,8 @@
 #include <string>
 #include <sstream>
 #include "../utils/Logger.hpp"
+#include <iomanip>   // std::setw
 #include <vector>
-#include <iomanip>
 
 #include "../../unicorn/include/unicorn.h"
 

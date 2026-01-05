@@ -10,6 +10,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cctype>
+#include "../utils/JsonUtils.hpp"
 
 // Constructor
 HttpServer_C::HttpServer_C(StateStore_s& stateStoreRef, int port) : stateStoreRef_(stateStoreRef), liveServerRef_(nullptr), port_(port) {
@@ -57,31 +58,41 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int block_id = stateStoreRef_.g_block_id.load(std::memory_order_acquire);
     int freq_hz_e = static_cast<int>(stateStoreRef_.g_freq_hz_e.load(std::memory_order_acquire));
     int freq_hz = stateStoreRef_.g_freq_hz.load(std::memory_order_acquire);
-    // Run-mode pair 
-    int freq_left_hz   = stateStoreRef_.g_freq_left_hz.load(std::memory_order_acquire);
-    int freq_right_hz  = stateStoreRef_.g_freq_right_hz.load(std::memory_order_acquire);
-    int freq_left_hz_e = static_cast<int>(stateStoreRef_.g_freq_left_hz_e.load(std::memory_order_acquire));
-    int freq_right_hz_e= static_cast<int>(stateStoreRef_.g_freq_right_hz_e.load(std::memory_order_acquire));
+    
+    // Run-mode pair
+    // mtx protect
+    std::lock_guard<std::mutex> lock(stateStoreRef_.saved_sessions_mutex);
+    int currIdx = stateStoreRef_.currentSessionIdx.load(std::memory_order_acquire);
+    int freq_left_hz   = stateStoreRef_.saved_sessions[currIdx].freq_left_hz;
+    int freq_right_hz  = stateStoreRef_.saved_sessions[currIdx].freq_right_hz;
+    int freq_left_hz_e = static_cast<int>(stateStoreRef_.saved_sessions[currIdx].freq_left_hz_e);
+    int freq_right_hz_e = static_cast<int>(stateStoreRef_.saved_sessions[currIdx].freq_right_hz_e);
+
     // Active session info
-    bool is_model_ready = stateStoreRef_.sessionInfo.g_isModelReady.load(std::memory_order_acquire); // for training job monitoring
-    std::string active_subject_id = stateStoreRef_.sessionInfo.get_active_subject_id();
+    bool is_model_ready = stateStoreRef_.currentSessionInfo.g_isModelReady.load(std::memory_order_acquire); // for training job monitoring
+    std::string active_subject_id = stateStoreRef_.currentSessionInfo.get_active_subject_id();
     int popup = stateStoreRef_.g_ui_popup.load(std::memory_order_acquire); // any popup event
+
+    // Pending session info
+    std::lock_guard<std::mutex> lock2(stateStoreRef_.calib_options_mtx);
+    std::string pending_subject_name = stateStoreRef_.pending_subject_name;
 
     // 2) build json string manually
     std::ostringstream oss;
     oss << "{"
-        << "\"seq\":"                 << seq                                 << ","
-        << "\"stim_window\":"         << stim_window                         << ","
-        << "\"block_id\":"            << block_id                            << ","
-        << "\"freq_hz\":"             << freq_hz                             << ","
-        << "\"freq_hz_e\":"           << freq_hz_e                           << ","
-        << "\"freq_left_hz\":"        << freq_left_hz                        << ","
-        << "\"freq_right_hz\":"       << freq_right_hz                       << ","
-        << "\"freq_left_hz_e\":"      << freq_left_hz_e                      << ","
-        << "\"freq_right_hz_e\":"     << freq_right_hz_e                     << ","
-        << "\"is_model_ready\":"      << (is_model_ready ? "true" : "false") << ","
-        << "\"popup\":"               << popup                               << ","
-        << "\"active_subject_id\":\"" << active_subject_id                   << "\""
+        << "\"seq\":"                    << seq                                 << ","
+        << "\"stim_window\":"            << stim_window                         << ","
+        << "\"block_id\":"               << block_id                            << ","
+        << "\"freq_hz\":"                << freq_hz                             << ","
+        << "\"freq_hz_e\":"              << freq_hz_e                           << ","
+        << "\"freq_left_hz\":"           << freq_left_hz                        << ","
+        << "\"freq_right_hz\":"          << freq_right_hz                       << ","
+        << "\"freq_left_hz_e\":"         << freq_left_hz_e                      << ","
+        << "\"freq_right_hz_e\":"        << freq_right_hz_e                     << ","
+        << "\"is_model_ready\":"         << (is_model_ready ? "true" : "false") << ","
+        << "\"popup\":"                  << popup                               << ","
+        << "\"pending_subject_name\":\"" << pending_subject_name                << "\","
+        << "\"active_subject_id\":\""    << active_subject_id                   << "\""
         << "}";
 
     std::string json_snapshot = oss.str();
@@ -130,9 +141,29 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserPushesStartRun;
                 } else if (action == "ack_popup"){
                     // clear popup when user presses OK
+                    ev = UIStateEvent_UserAcksPopup;
+                    stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
+                } else if (action == "cancel_popup") {
+                    // clear popup (and event should be swallowed)
+                    ev = UIStateEvent_UserCancelsPopup;
                     stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
                 } else if (action == "hardware_checks"){
                     ev = UIStateEvent_UserPushesHardwareChecks;
+                } else if (action == "start_calib_from_options") {
+                    
+                    // read form fields from JSON
+                    std::string subj;
+                    int epilepsy_i = static_cast<int>(EpilepsyRisk_Unknown);
+                    JSON::extract_json_string(body, "\"subject_name\"", subj);
+                    JSON::extract_json_int(body, "\"epilepsy\"", epilepsy_i);
+                    // publish to statestore
+                    {
+                        std::lock_guard<std::mutex> lock(stateStoreRef_.calib_options_mtx);
+                        stateStoreRef_.pending_subject_name = subj;
+                        stateStoreRef_.pending_epilepsy = static_cast<EpilepsyRisk_E>(epilepsy_i);
+                    }
+                    ev = UIStateEvent_UserPushesStartCalibFromOptions;
+                    
                 }
             }
         }

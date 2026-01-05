@@ -141,36 +141,106 @@
               <div id="right-arrow" class="flicker-block arrow-right">→</div>
             </div>
           </section>
+
+          <!-- RUN OPTIONS VIEW (START DEFAULT OR SEE PREV SESSIONS) -->
+          <section id="view-run-options" class="view hidden">
+            <h2>Run Options</h2>
+            <p class="view-lead">
+              Welcome back, <span id="run-welcome-name">friend</span>. Choose
+              how you want to start the session.
+            </p>
+
+            <div class="inline-stats">
+              <div>
+                <span class="label">Last trained subject</span>
+                <span id="run-last-subject" class="value">—</span>
+              </div>
+              <div>
+                <span class="label">Model status</span>
+                <span id="run-model-status" class="value">—</span>
+              </div>
+            </div>
+
+            <div class="button-row" style="margin-top: 14px">
+              <button id="btn-run-start-default" class="btn primary">
+                Start with latest model
+              </button>
+              <button id="btn-run-saved-sessions" class="btn ghost">
+                Choose saved session…
+              </button>
+            </div>
+          </section>
+
+          <!-- CALIB OPTIONS VIEW -->
+          <section id="view-calib-options" class="view hidden">
+            <div class="card">
+              <h2>Calibration Setup</h2>
+              <p class="muted">
+                New user? Start here. Please enter your name and confirm you can
+                safely view flickering stimuli. If you are photosensitive, but
+                tolerant to higher frequencies, the app can still be run at
+                higher frequencies, but might not work as well.
+              </p>
+
+              <label class="field">
+                <span>Name</span>
+                <input
+                  id="calib-name"
+                  type="text"
+                  placeholder="e.g., khalil"
+                  autocomplete="off"
+                />
+              </label>
+
+              <label class="field">
+                <span>Epilepsy / Photosensitivity risk</span>
+                <select id="calib-epilepsy">
+                  <option value="4">Select…</option>
+                  <option value="0">No known risk</option>
+                  <option value="1">
+                    At risk, but tolerant to high frequency
+                  </option>
+                  <option value="2">At risk (do not proceed)</option>
+                  <option value="3">Unsure</option>
+                </select>
+              </label>
+
+              <div class="row">
+                <button id="btn-calib-back" class="btn secondary">Back</button>
+                <button id="btn-calib-submit" class="btn primary">
+                  Start Calibration
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- SESSIONS PAGE VIEW -->
+          <section id="view-saved-sessions" class="view hidden">
+            <h2>Saved Sessions</h2>
+            <p class="view-lead">
+              Select a previous session to load its trained model, or start a
+              new one.
+            </p>
+
+            <!-- Placeholder list; filled from GET /state as calib sessions are run -->
+            <!-- will be made clickable in css -->
+            <div id="sessions-empty" class="label" style="margin-bottom: 8px">
+              No saved sessions yet.
+            </div>
+            <ul id="sessions-list" class="sessions-list">
+              <!-- <li> items injected by JS -->
+            </ul>
+
+            <div class="button-row" style="margin-top: 14px">
+              <button id="btn-sessions-new" class="btn primary">
+                Start new session
+              </button>
+              <button id="btn-sessions-back" class="btn ghost">
+                Back to run options
+              </button>
+            </div>
+          </section>
         </div>
-
-        <!-- RUN OPTIONS VIEW (START DEFAULT OR SEE PREV SESSIONS) -->
-        <section id="view-run-options" class="view hidden">
-          <h2>Run Options</h2>
-          <p class="view-lead">
-            Welcome back, <span id="run-welcome-name">friend</span>. Choose how
-            you want to start the session.
-          </p>
-
-          <div class="inline-stats">
-            <div>
-              <span class="label">Last trained subject</span>
-              <span id="run-last-subject" class="value">—</span>
-            </div>
-            <div>
-              <span class="label">Model status</span>
-              <span id="run-model-status" class="value">—</span>
-            </div>
-          </div>
-
-          <div class="button-row" style="margin-top: 14px">
-            <button id="btn-run-start-default" class="btn primary">
-              Start with latest model
-            </button>
-            <button id="btn-run-saved-sessions" class="btn ghost">
-              Choose saved session…
-            </button>
-          </div>
-        </section>
 
         <!-- HARDWARE CHECKS VIEW -->
         <section id="view-hardware-checks" class="view hidden">
@@ -181,7 +251,6 @@
             per-channel signal quality indicators and live EEG trace.
           </p>
           <br />
-
           <!-- Quality indicators row -->
           <!-- Health header -->
           <div class="hw-health">
@@ -224,33 +293,6 @@
           </div>
         </section>
 
-        <!-- SESSIONS PAGE VIEW -->
-        <section id="view-saved-sessions" class="view hidden">
-          <h2>Saved Sessions</h2>
-          <p class="view-lead">
-            Select a previous session to load its trained model, or start a new
-            one.
-          </p>
-
-          <!-- Placeholder list; filled from GET /state as calib sessions are run -->
-          <!-- will be made clickable in css -->
-          <div id="sessions-empty" class="label" style="margin-bottom: 8px">
-            No saved sessions yet.
-          </div>
-          <ul id="sessions-list" class="sessions-list">
-            <!-- <li> items injected by JS -->
-          </ul>
-
-          <div class="button-row" style="margin-top: 14px">
-            <button id="btn-sessions-new" class="btn primary">
-              Start new session
-            </button>
-            <button id="btn-sessions-back" class="btn ghost">
-              Back to run options
-            </button>
-          </div>
-        </section>
-
         <!-- MODAL OVERLAY (popups) -->
         <div id="modal-backdrop" class="modal-backdrop hidden">
           <div class="modal">
@@ -261,6 +303,7 @@
             </p>
             <div class="button-row" style="margin-top: 10px">
               <button id="modal-ok" class="btn primary">OK</button>
+              <button id="modal-cancel" class="btn ghost hidden">Cancel</button>
             </div>
           </div>
         </div>

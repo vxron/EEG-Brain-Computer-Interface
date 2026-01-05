@@ -62,6 +62,7 @@ const elModalBackdrop = document.getElementById("modal-backdrop");
 const elModalTitle = document.getElementById("modal-title");
 const elModalBody = document.getElementById("modal-body");
 const btnModalOk = document.getElementById("modal-ok"); // ack btn for user to accept popup
+const btnModalCancel = document.getElementById("modal-cancel"); // alternate ack btn for popups w 2 options
 // Track whether popup is currently visible
 let modalVisible = false;
 
@@ -91,6 +92,13 @@ let hwSamplesPerCycle = 0; // how many single eeg samples fit across the plot wi
 let hwSampleIdxInCycle = 0; // circular index 0... hwSamplesPerCycle-1
 let hwGlobalIndex = 0; // global time idx (in samples) -> keep track of total time
 
+// Calib Options DOM elements
+const viewCalibOptions = document.getElementById("view-calib-options");
+const inpCalibName = document.getElementById("calib-name");
+const selEpilepsy = document.getElementById("calib-epilepsy");
+const btnCalibSubmit = document.getElementById("btn-calib-submit");
+const btnCalibBack = document.getElementById("btn-calib-back");
+
 // ==================== 2) LOGGING HELPER =============================
 function logLine(msg) {
   const time = new Date().toLocaleTimeString();
@@ -112,6 +120,7 @@ function showView(name) {
     viewRunOptions,
     viewSavedSessions,
     viewHardware,
+    viewCalibOptions,
   ];
 
   for (const v of allViews) {
@@ -139,6 +148,9 @@ function showView(name) {
       break;
     case "hardware_checks":
       viewHardware.classList.remove("hidden");
+      break;
+    case "calib_options":
+      viewCalibOptions.classList.remove("hidden");
       break;
     default:
       viewHome.classList.remove("hidden");
@@ -183,9 +195,24 @@ function stopHardwareMode() {
 }
 
 // (4) popup handling (helpers to show and hide popup)
-function showModal(title, body) {
+// displays 1 button only ('OK') by default if no opts given
+function showModal(title, body, opts = {}) {
   if (elModalTitle && title) elModalTitle.textContent = title;
   if (elModalBody && body) elModalBody.textContent = body;
+
+  // if opts are given... (to customize modal w 2 buttons)
+  const okText = opts.okText ?? "OK";
+  const cancelText = opts.cancelText ?? "Cancel";
+  const showCancel = opts.showCancel ?? false;
+
+  if (btnModalOk) btnModalOk.textContent = okText;
+
+  if (btnModalCancel) {
+    btnModalCancel.textContent = cancelText;
+    // Only show cancel when explicitly requested
+    btnModalCancel.classList.toggle("hidden", !showCancel);
+  }
+  // ................. end opts.............
 
   if (elModalBackdrop) {
     elModalBackdrop.classList.remove("hidden");
@@ -237,6 +264,8 @@ function intToLabel(enumType, integer) {
         case 6:
           return "UIState_Hardware_Checks";
         case 7:
+          return "UIState_Calib_Options";
+        case 8:
           return "UIState_None";
         default:
           return `Unknown (${integer})`;
@@ -255,6 +284,14 @@ function intToLabel(enumType, integer) {
           return "TestFreq_11_Hz";
         case 5:
           return "TestFreq_12_Hz";
+        case 6:
+          return "TestFreq_20_Hz";
+        case 7:
+          return "TestFreq_25_Hz";
+        case 8:
+          return "TestFreq_30_Hz";
+        case 9:
+          return "TestFreq_35_Hz";
         default:
           return `Unknown (${integer})`;
       }
@@ -308,8 +345,8 @@ function updateUiFromState(data) {
   // View routing based on stim_window value
   const stimState = data.stim_window;
   // MUST MATCH UISTATE_E
-  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = None
-  if (stimState === 3 /* Home */ || stimState === 7 /* None */) {
+  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = None
+  if (stimState === 3 /* Home */ || stimState === 8 /* None */) {
     stopCalibFlicker();
     stopRunFlicker();
     stopHardwareMode();
@@ -334,8 +371,8 @@ function updateUiFromState(data) {
     // set run mode flag for css to max separability btwn stimuli blocks :)
     document.body.classList.add("run-mode");
     // default to freq_hz if undef right/left
-    const runLeftHz = data.freq_right_hz ?? data.freq_hz ?? 0;
-    const runRightHz = data.freq_left_hz ?? data.freq_hz ?? 0;
+    const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
+    const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
     startRunFlicker(runLeftHz, runRightHz);
   } else if (stimState === 4 /* Saved Sessions */) {
     stopCalibFlicker();
@@ -362,11 +399,14 @@ function updateUiFromState(data) {
     setFullScreenMode(true);
     startHardwareMode();
     showView("hardware_checks");
+  } else if (stimState == 7) {
+    stopCalibFlicker();
+    setFullScreenMode(false);
+    showView("calib_options");
   }
 
-  // HANDLE POPUPS
+  // HANDLE POPUPS TRIGGERED BY BACKEND:
   const popupEnumIdx = data.popup ?? 0; // 0 is fallback
-
   // if backend says "show popup" and it's not visible, open it
   if (popupEnumIdx != 0 && !modalVisible) {
     switch (popupEnumIdx) {
@@ -382,6 +422,25 @@ function updateUiFromState(data) {
           "Please check headset placement and rerun hardware checks to verify signal."
         );
         break;
+      case 5: // UIPopup_ConfirmOverwriteCalib
+        showModal(
+          "Calibration already exists",
+          `A calibration for "${
+            data.pending_subject_name || "this user"
+          }" already exists. Overwrite it?`,
+          {
+            showCancel: true,
+            okText: "Overwrite",
+            cancelText: "Cancel",
+          }
+        );
+        break;
+      case 6: // UIPopup_ConfirmHighFreqOk
+        showModal(
+          "High frequency SSVEP decoding (>20Hz) will be attempted",
+          "The final model's performance may be poor, and device functionality may be limited."
+        );
+        break;
       default:
         showModal(
           "DEBUG MSG",
@@ -389,12 +448,6 @@ function updateUiFromState(data) {
         );
         break;
     }
-  }
-
-  // probably never need this since js handles hidemodal from ack btn press, but just in case:
-  // hide popup if backend says its time to hide (e.g. state change)
-  if (popupEnumIdx == 0 && modalVisible) {
-    hideModal();
   }
 }
 
@@ -927,6 +980,55 @@ async function sendSessionEvent(kind) {
   }
 }
 
+// special post event for calib options
+// payload: { action, subject name, epilepsy risk }
+async function sendCalibOptionsAndStart() {
+  const name = (inpCalibName?.value || "").trim();
+  const raw = selEpilepsy?.value ?? "4"; // 4 = select... (default)
+  const epilepsy = parseInt(raw, 10);
+
+  // basic UI-side validation (backend still enforces)
+  if (name.length < 3) {
+    showModal("Name too short", "Please enter at least 3 characters.");
+    return;
+  }
+
+  // treat 4 (select..) as invalid
+  if (raw === "4" || Number.isNaN(epilepsy)) {
+    showModal("Missing selection", "Please select an epilepsy risk option.");
+    return;
+  }
+
+  if (raw === "2" || raw === "3") {
+    showModal(
+      "Cannot proceed",
+      "This device is not safe for use for individuals with photosensitivity."
+    );
+    return;
+  }
+
+  const payload = {
+    action: "start_calib_from_options",
+    subject_name: name,
+    epilepsy: epilepsy,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      logLine(`POST /event failed (${res.status}) for calib submit`);
+      return;
+    }
+    logLine(`Submitted calib options for ${name}`);
+  } catch (err) {
+    logLine(`POST /event error for calib submit: ${err}`);
+  }
+}
+
 // ================== 14) INIT ON PAGE LOAD ===================
 async function init() {
   logLine("Initializing UI…");
@@ -981,12 +1083,34 @@ async function init() {
     });
   }
 
+  if (btnCalibSubmit) {
+    btnCalibSubmit.addEventListener("click", () => {
+      // specialized sender because we need more than {action} back...
+      // post { action, subject_name, epilepsy risk }
+      sendCalibOptionsAndStart();
+    });
+  }
+
+  if (btnCalibBack) {
+    btnCalibBack.addEventListener("click", () => {
+      sendSessionEvent("exit");
+    });
+  }
+
   if (btnModalOk) {
     // if a popup is visible, wait for user ack
     btnModalOk.addEventListener("click", () => {
       hideModal();
       // tell backend to clear popup in statestore
       sendSessionEvent("ack_popup");
+    });
+  }
+
+  if (btnModalCancel) {
+    btnModalCancel.addEventListener("click", () => {
+      hideModal();
+      // If canceling overwrite, tell backend to clear popup + stay put
+      sendSessionEvent("cancel_popup"); // TODO: clear popup/handle on backend...
     });
   }
 }

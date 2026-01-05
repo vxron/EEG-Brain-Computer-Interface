@@ -19,7 +19,8 @@
 #include "RingBuffer.hpp"
 #include <deque>
 #include "../classifier/ONNXClassifier.hpp"
-#include "SWTimer.hpp"
+#include <filesystem>
+namespace fs = std::filesystem;
 
 // _T for type
 // Use steady clock for time measurements (monotonic, not affected by system clock changes)
@@ -62,7 +63,11 @@ enum TestFreq_E {
 	TestFreq_9_Hz,
 	TestFreq_10_Hz,
 	TestFreq_11_Hz,
-	TestFreq_12_Hz
+	TestFreq_12_Hz,
+	TestFreq_20_Hz,
+	TestFreq_25_Hz,
+	TestFreq_30_Hz,
+	TestFreq_35_Hz,
 };
 
 enum ActuatorState_E {
@@ -72,14 +77,15 @@ enum ActuatorState_E {
 };
 
 enum UIState_E {
-	UIState_Active_Run, // selects most recent session as default
-	UIState_Active_Calib,
-	UIState_Instructions, // also for calib
-	UIState_Home,
-	UIState_Saved_Sessions, // from run mode -> can press another button to select saved session 
-	UIState_Run_Options,
-	UIState_Hardware_Checks, // Hadeel this is ur state
-	UIState_None,
+	UIState_Active_Run, // 0 selects most recent session as default
+	UIState_Active_Calib, // 1
+	UIState_Instructions, // 2 also for calib
+	UIState_Home, // 3
+	UIState_Saved_Sessions, // 4 from run mode -> can press another button to select saved session 
+	UIState_Run_Options, // 5
+	UIState_Hardware_Checks, // 6
+	UIState_Calib_Options, // 7
+	UIState_None, // 8
 };
 
 enum StimShapes_E {
@@ -88,28 +94,41 @@ enum StimShapes_E {
 	StimShape_Arrow,
 };
 
+enum EpilepsyRisk_E {
+	EpilepsyRisk_No,
+	EpilepsyRisk_YesButHighFreqOk,
+	EpilepsyRisk_Yes,
+	EpilepsyRisk_Unknown,
+};
+
 enum UIStateEvent_E {
 	UIStateEvent_StimControllerTimeout, // switch btwn instructions/active during calib
-	UIStateEvent_StimControllerTimeoutEndCalib,
-	UIStateEvent_UserPushesStartRun,
-	UIStateEvent_UserPushesStartRunInvalid,
-	UIStateEvent_UserPushesStartCalib,
-	UIStateEvent_LostConnection,
-	UIStateEvent_UserPushesExit,
-	UIStateEvent_ConnectionSuccessful,
-	UIStateEvent_UserPushesSessions,
-	UIStateEvent_UserSelectsSession,
-	UIStateEvent_UserSelectsNewSession,
-	UIStateEvent_UserPushesStartDefault,
-	UIStateEvent_UserPushesHardwareChecks, // Hadeel this is ur state transition
-	UIStateEvent_None,
+	UIStateEvent_StimControllerTimeoutEndCalib, // 1
+	UIStateEvent_UserPushesStartRun, // 2
+	UIStateEvent_UserPushesStartRunInvalid, // 3
+	UIStateEvent_UserPushesStartCalib, // 4
+	UIStateEvent_LostConnection, // 5
+	UIStateEvent_UserPushesExit, // 6
+	UIStateEvent_ConnectionSuccessful, // 7
+	UIStateEvent_UserPushesSessions, // 8
+	UIStateEvent_UserSelectsSession, // 9
+	UIStateEvent_UserSelectsNewSession, // 10
+	UIStateEvent_UserPushesStartDefault, // 11
+	UIStateEvent_UserPushesHardwareChecks, // 12
+	UIStateEvent_UserPushesStartCalibFromOptions, // 13
+	UIStateEvent_UserCancelsPopup, // 14
+	UIStateEvent_UserAcksPopup, // 15
+	UIStateEvent_None, // 16
 };
 
 enum UIPopup_E {
-	UIPopup_None,
-	UIPopup_MustCalibBeforeRun,
-	UIPopup_ModelFailedToLoad,
-	UIPopup_TooManyBadWindowsInRun,
+	UIPopup_None, // 0
+	UIPopup_MustCalibBeforeRun, // 1
+	UIPopup_ModelFailedToLoad, // 2
+	UIPopup_TooManyBadWindowsInRun, // 3
+	UIPopup_InvalidCalibOptions, // 4
+	UIPopup_ConfirmOverwriteCalib, // 5
+	UIPopup_ConfirmHighFreqOk, // 6
 };
 
 enum BitOperation_E {
@@ -137,6 +156,14 @@ inline int TestFreqEnumToInt(TestFreq_E enumVal){
 			return 12;
 		case TestFreq_9_Hz:
 			return 9;
+		case TestFreq_20_Hz:
+			return 20;
+		case TestFreq_25_Hz:
+			return 25;
+		case TestFreq_30_Hz:
+			return 30;
+		case TestFreq_35_Hz:
+			return 35;
 		case TestFreq_None:
 			return 0;
 		default:
@@ -205,7 +232,7 @@ struct sessionConfigs_S {
 	stimulus_s right_stimulus;
 };
 
-// Window level stats
+/* SIGNAL STATS */
 struct Stats_s {
 	// value init all arrays to 0
     std::array<float, NUM_CH_CHUNK> mean_uv{};
@@ -228,5 +255,16 @@ struct SignalStats_s {
     size_t num_win_in_rolling = 0;
 };
 
+/* SESSION INFO */
+// - Consumer logging uses data_session_dir.
+// - Training outputs use model_session_dir.
+// - Both share the same subject_id + session_id.
+struct SessionPaths {
+    fs::path project_root;      // .../CapstoneProject
+    std::string subject_id;     // "hadeel" or "person3"
+    std::string session_id;     // "2025-12-22_14-31-08"
+    fs::path data_session_dir;  // .../data/<subject>/<session>/
+    fs::path model_session_dir; // .../models/<subject>/<session>/
+};
 
 /* END STRUCTS */
