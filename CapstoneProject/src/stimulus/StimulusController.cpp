@@ -21,6 +21,7 @@ static const state_transition state_transition_table[] = {
     {UIState_Active_Calib,     UIStateEvent_StimControllerTimeout,          UIState_Instructions},
     {UIState_Active_Calib,     UIStateEvent_StimControllerTimeoutEndCalib,  UIState_Pending_Training},
     {UIState_Pending_Training, UIStateEvent_ModelReady,                     UIState_Home},
+    {UIState_Pending_Training, UIStateEvent_TrainingFailed,                 UIState_Home},
     {UIState_Instructions,     UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
        
     {UIState_Active_Calib,     UIStateEvent_UserPushesExit,                 UIState_Home},
@@ -308,6 +309,13 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
                 }
             }
             // TODO: any fault cases
+            break;
+
+        case UIState_Pending_Training:
+            if(ev == UIStateEvent_TrainingFailed){
+                // want to show popup saying training failed
+                stateStoreRef_->g_ui_popup.store(UIPopup_TrainJobFailed);
+            }
             break;
     
         case UIState_Active_Run:

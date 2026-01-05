@@ -461,6 +461,12 @@ function updateUiFromState(data) {
           "The final model's performance may be poor, and device functionality may be limited."
         );
         break;
+      case 7: // UIPopup_TrainJobFailed
+        showModal(
+          "Training job failed",
+          "There was an internal error. Please try calibration again."
+        );
+        break;
       default:
         showModal(
           "DEBUG MSG",

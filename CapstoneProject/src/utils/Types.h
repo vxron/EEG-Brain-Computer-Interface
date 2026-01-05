@@ -120,7 +120,8 @@ enum UIStateEvent_E {
 	UIStateEvent_UserCancelsPopup, // 14
 	UIStateEvent_UserAcksPopup, // 15
 	UIStateEvent_ModelReady, // 16
-	UIStateEvent_None, // 17
+	UIStateEvent_TrainingFailed, // 17
+	UIStateEvent_None, // 18
 };
 
 enum UIPopup_E {
@@ -131,6 +132,7 @@ enum UIPopup_E {
 	UIPopup_InvalidCalibOptions, // 4
 	UIPopup_ConfirmOverwriteCalib, // 5
 	UIPopup_ConfirmHighFreqOk, // 6
+	UIPopup_TrainJobFailed, // 7
 };
 
 enum BitOperation_E {

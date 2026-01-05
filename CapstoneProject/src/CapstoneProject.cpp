@@ -771,8 +771,8 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
             stateStoreRef.currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
             LOG_ALWAYS("Training job failed (rc=" << rc << ")");
             // TODO: FAULT HANDLING... TELL STIM CONTROLLER WERE FAULTED AND RETURN TO HOME WITH POPUP
+            stateStoreRef.g_ui_event.store(UIStateEvent_TrainingFailed);
         }
-
     }
 }
 
