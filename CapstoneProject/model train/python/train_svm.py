@@ -6,7 +6,21 @@ train_svm.py
 
 Script for training an SSVEP model from calibration data.
 This script is called automatically by the C++ backend after a calibration
-session. It MUST match the CLI interface expected by C++.
+session. It MUST match the CLI interface expected by C++. 
+(see training manager thread in CapstoneProject.cpp for details)
+
+- Loads windowed EEG from CSVs with columns:
+  window_idx, is_trimmed, is_bad, sample_idx, eeg1..eeg8, testfreq_hz
+- Trains either:
+  --arch svm     : linear SVM (HADEEL)
+  --arch eegnet  : compact CNN (EEGNet) in PyTorch
+- Selects best frequencies:
+  1) compute per-class (per-frequency) validation accuracy
+  2) pick top-K freqs (--pick_top_k_freqs)
+  3) evaluate all pairs among top-K and choose best pair
+- Saves:
+  - model artifact (onnx)
+  - metadata.json (freq list, mappings, top-K, best pair)
 
 Expected args:
     --data <path>      directory containing calibration data
