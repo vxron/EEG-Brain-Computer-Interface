@@ -2,6 +2,8 @@
 #include "../utils/Logger.hpp"
 
 // from FilterDesign.py
+
+// TODO: these taps work ok but we could probably optimize even more (hamming appears better)
 static constexpr float fir_blackman_201_b[201] = {
     8.6551515e-35f, -1.3211498e-07f, -8.11674399e-07f, -1.53406191e-06f, -5.02471764e-07f,
     4.41199228e-06f, 1.39520925e-05f, 2.60886511e-05f, 3.61068915e-05f, 3.86300447e-05f,
