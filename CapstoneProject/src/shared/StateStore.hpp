@@ -105,6 +105,7 @@ struct StateStore_s{
     sessionInfo_s currentSessionInfo{};
 
     // LIST OF SAVED SESSIONS
+    // USE SAVED SESSION TYPE IN RUNMODE; NOT CURRENTSESSIONINFO^
     struct SavedSession_s {
         std::string id;          // unique ID (e.g. "veronica_2025-11-25T14-20")
         std::string label;       // human label for UI list ("Nov 25, 14:20 (Veronica)")
@@ -159,8 +160,8 @@ struct StateStore_s{
     // (3) train done (model ready) notif from training manager -> stim controller
     // (device becomes operable), can update sessionInfo model_ready bool
     std::mutex mtx_model_ready;
-    std::condition_variable cv_model_ready;
-
+    // std::condition_variable cv_model_ready; <- add back if you need to block another thread on it but for rn we only POLL in stim controller for model being ready
+    bool model_just_ready = false;
 };
 
 

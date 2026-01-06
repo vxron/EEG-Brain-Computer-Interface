@@ -11,30 +11,33 @@ struct state_transition{
 
 static const state_transition state_transition_table[] = {
     // from                           event                                     to
-    {UIState_None,            UIStateEvent_ConnectionSuccessful,           UIState_Home},
-
-    {UIState_Home,            UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
-    {UIState_Calib_Options,   UIStateEvent_UserPushesStartCalibFromOptions,UIState_Instructions},
-    {UIState_Home,            UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
-    {UIState_Home,            UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
-    
-    {UIState_Active_Calib,    UIStateEvent_StimControllerTimeout,          UIState_Instructions},
-    {UIState_Active_Calib,    UIStateEvent_StimControllerTimeoutEndCalib,  UIState_Home},
-    {UIState_Instructions,    UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
-      
-    {UIState_Active_Calib,    UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Calib_Options,   UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Instructions,    UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Active_Run,      UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Saved_Sessions,  UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Run_Options,     UIStateEvent_UserPushesExit,                 UIState_Home},
-    {UIState_Hardware_Checks, UIStateEvent_UserPushesExit,                 UIState_Home},
-
-    {UIState_Run_Options,     UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
-    {UIState_Saved_Sessions,  UIStateEvent_UserSelectsSession,             UIState_Active_Run},
-    {UIState_Saved_Sessions,  UIStateEvent_UserSelectsNewSession,          UIState_Instructions},
-    {UIState_Saved_Sessions,  UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
-    {UIState_Run_Options,     UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
+    {UIState_None,             UIStateEvent_ConnectionSuccessful,           UIState_Home},
+ 
+    {UIState_Home,             UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Calib_Options,    UIStateEvent_UserPushesStartCalibFromOptions,UIState_Instructions},
+    {UIState_Home,             UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Home,             UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+     
+    {UIState_Active_Calib,     UIStateEvent_StimControllerTimeout,          UIState_Instructions},
+    {UIState_Active_Calib,     UIStateEvent_StimControllerTimeoutEndCalib,  UIState_Pending_Training},
+    {UIState_Pending_Training, UIStateEvent_ModelReady,                     UIState_Home},
+    {UIState_Pending_Training, UIStateEvent_TrainingFailed,                 UIState_Home},
+    {UIState_Instructions,     UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
+       
+    {UIState_Active_Calib,     UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Calib_Options,    UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Instructions,     UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Active_Run,       UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Run_Options,      UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Hardware_Checks,  UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Pending_Training, UIStateEvent_UserPushesExit,                 UIState_Home},
+ 
+    {UIState_Run_Options,      UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Active_Run},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_Instructions},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Run_Options,      UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
     
 };
 // ^todo: add popup if switching: r u sure u want to exit???
@@ -246,6 +249,16 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             break;
         }
 
+        case UIState_Pending_Training: {
+            // start to display loading bar with "training completing, this may take several minutes..." until model ready event is detected
+            stateStoreRef_->g_ui_state.store(UIState_Pending_Training, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+            stateStoreRef_->g_block_id.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
+            break;
+        }
+
         case UIState_None: {
             // “offline” / not connected / shut down
             stateStoreRef_->g_ui_state.store(UIState_None, std::memory_order_release);
@@ -273,7 +286,7 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
                     std::lock_guard<std::mutex> lock(stateStoreRef_->mtx_finalize_request);
                     stateStoreRef_->finalize_requested = true;
                 }
-                stateStoreRef_->cv_finalize_request.notify_one();
+                stateStoreRef_->cv_finalize_request.notify_one();                
             }
             if(ev == UIStateEvent_UserPushesExit) {
                 // calib incomplete... delete session (if still __IN_PROGRESS)
@@ -296,6 +309,13 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
                 }
             }
             // TODO: any fault cases
+            break;
+
+        case UIState_Pending_Training:
+            if(ev == UIStateEvent_TrainingFailed){
+                // want to show popup saying training failed
+                stateStoreRef_->g_ui_popup.store(UIPopup_TrainJobFailed);
+            }
             break;
     
         case UIState_Active_Run:
@@ -436,7 +456,7 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
         return currEvent;
     }
 
-    // responsible for detecting three INTERNAL events:
+    // responsible for detecting some INTERNAL events:
     // (2) check if window timer is exceeded and we've reached the end of a training bout
     // only emit end in active calib 
     if ((state_ == UIState_Active_Calib) && 
@@ -464,6 +484,20 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     if (state_==UIState_None && refresh_val > 0)
     {
         return UIStateEvent_ConnectionSuccessful;
+    }
+    // (5) check if training is done (model ready)
+    if(state_ == UIState_Pending_Training){
+        bool ready = false;
+        // poll condition var
+        {
+            std::lock_guard<std::mutex> lock4(stateStoreRef_->mtx_model_ready);
+            if(stateStoreRef_->model_just_ready){
+                ready = true;
+                stateStoreRef_->model_just_ready = false;
+            }
+        }
+        if(ready){ return UIStateEvent_ModelReady; }
+        return std::nullopt; // if not ready
     }
 
     return std::nullopt;  // no event this iteration
