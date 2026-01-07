@@ -10,8 +10,8 @@ session. It MUST match the CLI interface expected by C++.
 - Loads windowed EEG from CSVs with columns:
   window_idx, is_trimmed, is_bad, sample_idx, eeg1..eeg8, testfreq_hz
 - Trains either:
-  --arch svm     : linear SVM (HADEEL)
-  --arch eegnet  : compact CNN (EEGNet) in PyTorch
+  --arch SVM     : linear SVM (HADEEL)
+  --arch CNN     : compact CNN (EEGNet) in PyTorch
 - Selects best frequencies:
   1) compute per-class (per-frequency) validation accuracy
   2) pick top-K freqs (--pick_top_k_freqs)
@@ -45,7 +45,7 @@ from __future__ import annotations
 
 # Trainers live in trainers/
 from trainers.cnn_trainer import train_cnn, export_cnn_onnx
-from trainers.svm_trainer import train_svm_and_export
+from trainers.svm_trainer import train_svm, export_svm_onnx
 
 # ------------------------------
 # CLI ARG PARSER
@@ -91,16 +91,47 @@ def get_args():
         help="Choice of ML model (SVM or CNN).",
     )
 
-    # shared pipeline knobs
+    # Shared pipeline knobs (regardless of model)
     parser.add_argument("--val_ratio", type=float, default=0.2) # 20% val, 80% train
     parser.add_argument("--seed", type=int, default=0)
 
-    # CNN knobs (passed through)
+    # CNN specific knobs
     parser.add_argument("--max_epochs", type=int, default=300)
-    parser.add_argument("--patience", type=int, default=30)
-    parser.add_argument("--min_delta", type=float, default=1e-4)
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    
+    parser.add_argument(
+        "--patience", 
+        type=int, 
+        default=30,
+        help="Number of successive iterations we'll continue for when seeing no improvement.",
+    )
+
+    parser.add_argument(
+        "--min_delta", 
+        type=float, 
+        default=1e-4,
+        help="numerical change in loss func necessary to consider real improvement",
+    ) 
+    
+    # TODO: should choose batch_size based on number of training windows if arg is not given
+    parser.add_argument(
+        "--batch_size", 
+        type=int, 
+        default=16,
+        help = "how many training windows the CNN sees at once before updating its weights (1 optimizer step)",
+    ) 
+    # greater batch sizes produce a more stable, accurate gradient (more of training set being used at once) and faster per-epoch compute times on GPUs, at the cost of less frequent weight updates (slower learning dynamics)
+    # greater batch sizes (toward whole train set) are also at a greater risk of overfitting because gradient is more stable (tends towards sharp minima)...
+    #  whereas small batch w diff gradients per step adds intrinsic regularization/stochastic noise (flatter minima, small input noise doesn't matter)
+    # for small eeg datasets -> small batch sizes preferred
+
+    parser.add_argument(
+        "--learning_rate", 
+        type=float, 
+        default=1e-3,
+        help="magnitude of gradient descent steps. smaller batches require smaller LR.",
+    ) 
+
+    # SVM specific knobs HERE (if any)
 
     return parser.parse_args()
 
@@ -256,7 +287,7 @@ def main():
             seed=args.seed,
             val_ratio=args.val_ratio,
             batch_size=args.batch_size,
-            lr=args.lr,
+            learning_rate=args.learning_rate,
             max_epochs=args.max_epochs,
             patience=args.patience,
             min_delta=args.min_delta,

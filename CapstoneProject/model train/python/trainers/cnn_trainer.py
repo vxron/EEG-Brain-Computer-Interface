@@ -252,7 +252,7 @@ def train_cnn(
     seed: int,
     val_ratio: float,
     batch_size: int,
-    lr: float,
+    learning_rate: float,
     max_epochs: int,
     patience: int,
     min_delta: float,
@@ -311,7 +311,7 @@ def train_cnn(
     #   logits (current 'scores'): (B, K)
     #   labels: (B,) with values 0..K-1
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), learning_rate=learning_rate)
 
     best_state, history = run_training_to_convergence(
         model, train_loader, val_loader,
