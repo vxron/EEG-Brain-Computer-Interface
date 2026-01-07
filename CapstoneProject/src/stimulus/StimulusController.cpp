@@ -40,7 +40,14 @@ static const state_transition state_transition_table[] = {
     {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_Instructions},
     {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
     {UIState_Run_Options,      UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
-    
+
+    // Non full screen pages where buttons remain visible (therefore transitions can happen)
+    {UIState_Calib_Options,    UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Settings,         UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Calib_Options,    UIStateEvent_UserPushesSettings,             UIState_Settings},
+    {UIState_Settings,         UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Calib_Options,    UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Settings,         UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
 };
 // ^todo: add popup if switching: r u sure u want to exit???
 
