@@ -103,6 +103,16 @@ const btnCalibBack = document.getElementById("btn-calib-back");
 const elTrainingOverlay = document.getElementById("training-overlay");
 const btnCancelTraining = document.getElementById("btn-cancel-training");
 
+// Settings Page DOM elements
+const viewSettings = document.getElementById("view-settings");
+const btnOpenSettings = document.getElementById("btn-open-settings");
+const btnSettingsBack = document.getElementById("btn-settings-back");
+const btnSettingsSave = document.getElementById("btn-settings-save");
+const selTrainArch = document.getElementById("set-train-arch");
+const selCalibData = document.getElementById("set-calib-data");
+const elSettingsStatus = document.getElementById("settings-status");
+let settingsInitiallyUpdated = false;
+
 // ===================== 2) LOGGING HELPER =============================
 function logLine(msg) {
   const time = new Date().toLocaleTimeString();
@@ -125,6 +135,7 @@ function showView(name) {
     viewSavedSessions,
     viewHardware,
     viewCalibOptions,
+    viewSettings,
   ];
 
   for (const v of allViews) {
@@ -155,6 +166,9 @@ function showView(name) {
       break;
     case "calib_options":
       viewCalibOptions.classList.remove("hidden");
+      break;
+    case "settings":
+      viewSettings.classList.remove("hidden");
       break;
     default:
       viewHome.classList.remove("hidden");
@@ -239,6 +253,19 @@ function showTrainingOverlay(show) {
   document.body.classList.toggle("is-busy", show);
 }
 
+// (6) update settings from backend when we first enter settings page (rising edge trigger)
+function updateSettingsFromState(data) {
+  const arch = data.settings.train_arch_setting;
+  const calib = data.settings.calib_data_setting;
+
+  if (selTrainArch && arch != null) selTrainArch.value = String(arch);
+  if (selCalibData && calib != null) selCalibData.value = String(calib);
+
+  settingsInitiallyUpdated = true; // rising edge
+
+  if (elSettingsStatus) elSettingsStatus.textContent = "";
+}
+
 // ==================== 4) CONNECTION STATUS HELPER =====================
 // UI should show red/green based on C++ server connection status
 function setConnectionStatus(ok) {
@@ -280,6 +307,8 @@ function intToLabel(enumType, integer) {
         case 8:
           return "UIState_Pending_Training";
         case 9:
+          return "UIState_Settings";
+        case 10:
           return "UIState_None";
         default:
           return `Unknown (${integer})`;
@@ -359,12 +388,13 @@ function updateUiFromState(data) {
   // View routing based on stim_window value (MUST MATCH UISTATE_E)
   const stimState = data.stim_window;
 
-  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = None
-  if (stimState === 3 /* Home */ || stimState === 9 /* None */) {
+  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = None
+  if (stimState === 3 /* Home */ || stimState === 10 /* None */) {
     stopCalibFlicker();
     stopRunFlicker();
     stopHardwareMode();
     setFullScreenMode(false);
+    settingsInitiallyUpdated = false; // reset flag
     showView("home");
   } else if (stimState === 2 /* Instructions */) {
     stopCalibFlicker();
@@ -420,6 +450,12 @@ function updateUiFromState(data) {
   } else if (stimState == 8) {
     stopCalibFlicker();
     setFullScreenMode(false);
+  } else if (stimState == 9) {
+    setFullScreenMode(false);
+    if (!settingsInitiallyUpdated) {
+      updateSettingsFromState(data);
+    }
+    showView("settings");
   }
 
   // pending training overlay driven purely by state
@@ -1055,6 +1091,61 @@ async function sendCalibOptionsAndStart() {
   }
 }
 
+// special post event for settings save
+// payload: { action, train_arch, calib_data }
+async function sendSettingsAndSave() {
+  const trainArchRaw = selTrainArch?.value ?? "";
+  const calibDataRaw = selCalibData?.value ?? "";
+
+  const trainArch = parseInt(trainArchRaw, 10);
+  const calibData = parseInt(calibDataRaw, 10);
+
+  // basic UI-side validation (backend still enforces)
+  if (Number.isNaN(trainArch) || Number.isNaN(calibData)) {
+    showModal(
+      "Missing selection",
+      "Please select both training architecture and calibration data options."
+    );
+    return;
+  }
+
+  const payload = {
+    action: "set_settings",
+    train_arch_setting: trainArch,
+    calib_data_setting: calibData,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      logLine(`POST /event failed (${res.status}) for set_settings`);
+      if (elSettingsStatus)
+        elSettingsStatus.textContent = `Save failed (HTTP ${res.status})`;
+      return;
+    }
+
+    logLine(
+      `Settings saved (train_arch=${trainArch}, calib_data=${calibData})`
+    );
+    if (elSettingsStatus) {
+      elSettingsStatus.textContent = "Saved ✓";
+      setTimeout(() => {
+        if (elSettingsStatus.textContent === "Saved ✓")
+          elSettingsStatus.textContent = "";
+      }, 2500);
+    }
+  } catch (err) {
+    logLine(`POST /event error for set_settings: ${err}`);
+    if (elSettingsStatus)
+      elSettingsStatus.textContent = "Save failed (network)";
+  }
+}
+
 // ================== 14) INIT ON PAGE LOAD ===================
 async function init() {
   logLine("Initializing UI…");
@@ -1119,6 +1210,24 @@ async function init() {
 
   if (btnCalibBack) {
     btnCalibBack.addEventListener("click", () => {
+      sendSessionEvent("exit");
+    });
+  }
+
+  if (btnSettingsSave) {
+    btnSettingsSave.addEventListener("click", () => {
+      sendSettingsAndSave();
+    });
+  }
+
+  if (btnOpenSettings) {
+    btnOpenSettings.addEventListener("click", () => {
+      sendSessionEvent("open_settings");
+    });
+  }
+
+  if (btnSettingsBack) {
+    btnSettingsBack.addEventListener("click", () => {
       sendSessionEvent("exit");
     });
   }

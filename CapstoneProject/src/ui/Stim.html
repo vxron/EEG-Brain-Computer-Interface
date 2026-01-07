@@ -42,7 +42,12 @@
           <div class="button-row">
             <button id="btn-start-calib" class="btn ghost">Calibration</button>
             <button id="btn-start-run" class="btn primary">Run Mode</button>
-            <button id="btn-start-hw" class="btn ghost">Hardware Setup</button>
+          </div>
+          <div class="button-row" style="margin-top: 10px">
+            <button id="btn-start-hw" class="btn primary">
+              Hardware Setup
+            </button>
+            <button id="btn-open-settings" class="btn ghost">Settings</button>
           </div>
         </section>
       </aside>
@@ -194,6 +199,7 @@
 
               <label class="field">
                 <span>Epilepsy / Photosensitivity risk</span>
+                <!-- values MUST match backend enum EpilepsyRisk_E -->
                 <select id="calib-epilepsy">
                   <option value="4">Select…</option>
                   <option value="0">No known risk</option>
@@ -210,6 +216,56 @@
                 <button id="btn-calib-submit" class="btn primary">
                   Start Calibration
                 </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- SETTINGS VIEW -->
+          <section id="view-settings" class="view hidden">
+            <h2>Settings</h2>
+            <p class="view-lead">Personalize your BCI experience.</p>
+
+            <div class="settings-grid">
+              <div class="settings-card">
+                <h3>Training Architecture</h3>
+                <p class="muted">
+                  Choose which AI model pipeline the Python entrypoint runs.
+                </p>
+
+                <label class="field">
+                  <span>Architecture</span>
+                  <select id="set-train-arch">
+                    <!-- values MUST match backend enum SettingTrainArch_E -->
+                    <option value="1">Support Vector Machine (SVM)</option>
+                    <option value="0">Convolutional Neural Net (CNN)</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="settings-card">
+                <h3>Calibration Data Policy</h3>
+                <p class="muted">
+                  Choose what data Python should use during training.
+                </p>
+
+                <label class="field">
+                  <span>Calibration data</span>
+                  <select id="set-calib-data">
+                    <!-- values MUST match backend enum SettingCalibData_E -->
+                    <option value="0">Latest session only</option>
+                    <option value="1">All sessions for subject</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div class="settings-foot">
+              <div id="settings-status" class="pill pill-soft">—</div>
+              <div class="button-row">
+                <button id="btn-settings-back" class="btn secondary">
+                  Back
+                </button>
+                <button id="btn-settings-save" class="btn primary">Save</button>
               </div>
             </div>
           </section>
@@ -358,6 +414,6 @@
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-16"></script>
+    <script src="Stim.js?v=20251119-17"></script>
   </body>
 </html>

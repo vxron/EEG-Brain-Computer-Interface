@@ -695,8 +695,16 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
             // Mark "not ready" while training
             stateStoreRef.currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
         }
+        // poll current settings to pass to Python
+        SettingTrainArch_E train_arch = stateStoreRef.settings.train_arch_setting.load(std::memory_order_acquire);
+        SettingCalibData_E calib_data = stateStoreRef.settings.calib_data_setting.load(std::memory_order_acquire);
+        std::string arch_str  = TrainArchEnumToString(train_arch);
+        std::string cdata_str = CalibDataEnumToString(calib_data);
+        LOG_ALWAYS("Training settings snapshot: train_arch=" << TrainArchEnumToString(train_arch)
+          << ", calib_data=" << CalibDataEnumToString(calib_data));
+
         // (2) Validate inputs (don’t launch if missing)
-        if (data_dir.empty() || model_dir.empty() || subject_id.empty() || session_id.empty()) {
+        if (data_dir.empty() || model_dir.empty() || subject_id.empty() || session_id.empty() || arch_str == "Unknown" || cdata_str == "Unknown") {
             LOG_ALWAYS("Training request missing session info; skipping.");
             continue;
         }
@@ -711,16 +719,19 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
                 continue;
             }
         }
+        
         // (3) Launch training script (should block here)
         std::stringstream ss;
         
-        // TODO: MUST MATCH PYTHON TRAINING SCRIPT PATH AND ARGS (HADEEL)
+        // TODO: MUST MATCH PYTHON TRAINING SCRIPT PATH AND ARGS
         ss << "python "
                << "\"" << scriptPath.string() << "\""
-               << " --data \""     << data_dir  << "\""
+               << " --data \""     << data_dir   << "\""
                << " --model \""    << model_dir  << "\""
-               << " --subject \""  << subject_id          << "\""
-               << " --session \""  << session_id          << "\"";
+               << " --subject \""  << subject_id << "\""
+               << " --session \""  << session_id << "\""
+               << " --arch \""     << arch_str   << "\""
+               << " --calibsetting \""<< cdata_str  << "\"";
 
         const std::string cmd = ss.str();
         /* std::system executes the cmd string using host shell
@@ -765,9 +776,6 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
                 // set idx to it
                 lastIdx = static_cast<int>(stateStoreRef.saved_sessions.size() - 1);
             }
-            
-            // unlock mtx
-            lock.unlock();
 
             stateStoreRef.currentSessionIdx.store(lastIdx, std::memory_order_release);
             LOG_ALWAYS("Training SUCCESS.");
