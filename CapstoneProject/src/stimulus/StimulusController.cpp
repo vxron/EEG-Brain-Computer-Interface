@@ -17,6 +17,7 @@ static const state_transition state_transition_table[] = {
     {UIState_Calib_Options,    UIStateEvent_UserPushesStartCalibFromOptions,UIState_Instructions},
     {UIState_Home,             UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
     {UIState_Home,             UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Home,             UIStateEvent_UserPushesSettings,             UIState_Settings},
      
     {UIState_Active_Calib,     UIStateEvent_StimControllerTimeout,          UIState_Instructions},
     {UIState_Active_Calib,     UIStateEvent_StimControllerTimeoutEndCalib,  UIState_Pending_Training},
@@ -32,13 +33,21 @@ static const state_transition state_transition_table[] = {
     {UIState_Run_Options,      UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Hardware_Checks,  UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Pending_Training, UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Settings,         UIStateEvent_UserPushesExit,                 UIState_Home},
  
     {UIState_Run_Options,      UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
     {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Active_Run},
     {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_Instructions},
     {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
     {UIState_Run_Options,      UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
-    
+
+    // Non full screen pages where buttons remain visible (therefore transitions can happen)
+    {UIState_Calib_Options,    UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Settings,         UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Calib_Options,    UIStateEvent_UserPushesSettings,             UIState_Settings},
+    {UIState_Settings,         UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Calib_Options,    UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Settings,         UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
 };
 // ^todo: add popup if switching: r u sure u want to exit???
 
@@ -242,6 +251,15 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
 
         case UIState_Hardware_Checks: {
             stateStoreRef_->g_ui_state.store(UIState_Hardware_Checks, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+            stateStoreRef_->g_block_id.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
+            stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
+            break;
+        }
+
+        case UIState_Settings: {
+            stateStoreRef_->g_ui_state.store(UIState_Settings, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);

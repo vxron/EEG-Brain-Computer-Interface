@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include "Logger.hpp"
 
 namespace JSON {
 
@@ -37,4 +38,13 @@ bool extract_json_int(const std::string& body, const char* key, int& out) {
     out = neg ? -val : val;
     return true;
 }
+
+void json_extract_fail(const char* context,
+                              const char* field)
+{
+    LOG_ALWAYS("[JSON] extract failed | context="
+               << context << " field=" << field);
+}
+
+
 }

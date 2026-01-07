@@ -155,7 +155,8 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     using namespace std::chrono_literals;
     logger::tlabel = "consumer";
     LOG_ALWAYS("consumer start");
-    size_t tick_count = 0;
+    size_t tick_count = 0; // global
+    size_t tick_count_per_session = 0; // per session for logging
     size_t run_mode_bad_windows = 0;
     size_t run_mode_bad_window_count = 0;
     size_t run_mode_clean_window_count = 0;
@@ -200,6 +201,9 @@ try{
         // Session changed - close old files and reset flags
         if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); chunk_opened = false; }
         if (win_opened)   { csv_win.flush();   csv_win.close();   win_opened   = false; }
+
+        // reset per session window tick
+        tick_count_per_session = 0;
 
         active_session_id = sid;
         active_data_dir   = ddir;
@@ -505,6 +509,7 @@ try{
         // verified it's an ok window
         ++tick_count;
         window.tick=tick_count;
+        ++tick_count_per_session;
 
         // reset before looking at state store vals
         window.isTrimmed = false;
@@ -690,8 +695,16 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
             // Mark "not ready" while training
             stateStoreRef.currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
         }
+        // poll current settings to pass to Python
+        SettingTrainArch_E train_arch = stateStoreRef.settings.train_arch_setting.load(std::memory_order_acquire);
+        SettingCalibData_E calib_data = stateStoreRef.settings.calib_data_setting.load(std::memory_order_acquire);
+        std::string arch_str  = TrainArchEnumToString(train_arch);
+        std::string cdata_str = CalibDataEnumToString(calib_data);
+        LOG_ALWAYS("Training settings snapshot: train_arch=" << TrainArchEnumToString(train_arch)
+          << ", calib_data=" << CalibDataEnumToString(calib_data));
+
         // (2) Validate inputs (don’t launch if missing)
-        if (data_dir.empty() || model_dir.empty() || subject_id.empty() || session_id.empty()) {
+        if (data_dir.empty() || model_dir.empty() || subject_id.empty() || session_id.empty() || arch_str == "Unknown" || cdata_str == "Unknown") {
             LOG_ALWAYS("Training request missing session info; skipping.");
             continue;
         }
@@ -706,16 +719,19 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
                 continue;
             }
         }
+        
         // (3) Launch training script (should block here)
         std::stringstream ss;
         
-        // TODO: MUST MATCH PYTHON TRAINING SCRIPT PATH AND ARGS (HADEEL)
+        // TODO: MUST MATCH PYTHON TRAINING SCRIPT PATH AND ARGS
         ss << "python "
                << "\"" << scriptPath.string() << "\""
-               << " --data \""     << data_dir  << "\""
+               << " --data \""     << data_dir   << "\""
                << " --model \""    << model_dir  << "\""
-               << " --subject \""  << subject_id          << "\""
-               << " --session \""  << session_id          << "\"";
+               << " --subject \""  << subject_id << "\""
+               << " --session \""  << session_id << "\""
+               << " --arch \""     << arch_str   << "\""
+               << " --calibsetting \""<< cdata_str  << "\"";
 
         const std::string cmd = ss.str();
         /* std::system executes the cmd string using host shell
@@ -760,9 +776,6 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
                 // set idx to it
                 lastIdx = static_cast<int>(stateStoreRef.saved_sessions.size() - 1);
             }
-            
-            // unlock mtx
-            lock.unlock();
 
             stateStoreRef.currentSessionIdx.store(lastIdx, std::memory_order_release);
             LOG_ALWAYS("Training SUCCESS.");

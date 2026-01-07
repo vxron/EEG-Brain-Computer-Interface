@@ -42,6 +42,25 @@ void HttpServer_C::handle_options_and_set(const httplib::Request& req, httplib::
     res.status = 200;
 }
 
+static inline void write_json_error(httplib::Response& res,
+                                    int status,
+                                    const char* error,
+                                    const char* field = nullptr)
+{
+    set_cors_headers(res);
+    res.status = status;
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"ok\":false,"
+        << "\"error\":\"" << error << "\"";
+    if (field) oss << ",\"field\":\"" << field << "\"";
+    oss << "}";
+
+    res.set_content(oss.str(), "application/json");
+}
+
+
 // ============== Handlers ==================
 
 void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Response& res){
@@ -53,16 +72,20 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
 
     // 1) "snapshot" read of current statestore_s
     int seq = stateStoreRef_.g_ui_seq.load(std::memory_order_acquire); // stimcontroller is only one who touches this
-    // cast enum -> int
     int stim_window = static_cast<int>(stateStoreRef_.g_ui_state.load(std::memory_order_acquire));
+
+    // Calib freqs (training protocol)
     int block_id = stateStoreRef_.g_block_id.load(std::memory_order_acquire);
     int freq_hz_e = static_cast<int>(stateStoreRef_.g_freq_hz_e.load(std::memory_order_acquire));
     int freq_hz = stateStoreRef_.g_freq_hz.load(std::memory_order_acquire);
     
     // Run-mode pair
-    // mtx protect
     std::lock_guard<std::mutex> lock(stateStoreRef_.saved_sessions_mutex);
     int currIdx = stateStoreRef_.currentSessionIdx.load(std::memory_order_acquire);
+    int n = static_cast<int>(stateStoreRef_.saved_sessions.size());
+    // guard against out of range errors
+    if(currIdx < 0){currIdx = 0;}
+    if(currIdx >= n){currIdx = n-1;}
     int freq_left_hz   = stateStoreRef_.saved_sessions[currIdx].freq_left_hz;
     int freq_right_hz  = stateStoreRef_.saved_sessions[currIdx].freq_right_hz;
     int freq_left_hz_e = static_cast<int>(stateStoreRef_.saved_sessions[currIdx].freq_left_hz_e);
@@ -76,6 +99,10 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     // Pending session info
     std::lock_guard<std::mutex> lock2(stateStoreRef_.calib_options_mtx);
     std::string pending_subject_name = stateStoreRef_.pending_subject_name;
+
+    // Settings so JS renders correct toggle on entry
+    int calib_data_setting_e = stateStoreRef_.settings.calib_data_setting.load(std::memory_order_acquire);
+    int train_arch_e = stateStoreRef_.settings.train_arch_setting.load(std::memory_order_acquire);
 
     // 2) build json string manually
     std::ostringstream oss;
@@ -92,12 +119,14 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
         << "\"is_model_ready\":"         << (is_model_ready ? "true" : "false") << ","
         << "\"popup\":"                  << popup                               << ","
         << "\"pending_subject_name\":\"" << pending_subject_name                << "\","
-        << "\"active_subject_id\":\""    << active_subject_id                   << "\""
+        << "\"active_subject_id\":\""    << active_subject_id                   << "\","
+        << "\"settings\":{"
+            << "\"calib_data_setting\":" << calib_data_setting_e << ","
+            << "\"train_arch_setting\":" << train_arch_e
+        << "}"
         << "}";
 
     std::string json_snapshot = oss.str();
-
-    //LOG_ALWAYS("HTTP /state snapshot: " << json_snapshot);
     
     // 3) send json back to client through res
     write_json(res, json_snapshot);
@@ -108,9 +137,8 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
     // Basic content-type check
     auto it = req.headers.find("Content-Type");
     if (it == req.headers.end() || it->second.find("application/json") == std::string::npos) {
-        set_cors_headers(res);
-        res.status = 415;
-        res.set_content("{\"error\":\"content_type\"}", "application/json");
+        JSON::json_extract_fail("http_server", "Content-Type");
+        write_json_error(res, 415, "unsupported_media_type", "Content-Type");
         return;
     }
     
@@ -118,6 +146,11 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
     UIStateEvent_E ev = UIStateEvent_None;
 
     auto p = body.find("\"action\"");
+    if (p == std::string::npos) {
+        JSON::json_extract_fail("http_server", "action");
+        write_json_error(res, 400, "missing_or_invalid_field", "action");
+        return;
+    }
     if (p != std::string::npos) {
         p = body.find(':', p);
         if (p != std::string::npos) {
@@ -139,23 +172,35 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserSelectsNewSession;
                 } else if (action == "back_to_run_options"){
                     ev = UIStateEvent_UserPushesStartRun;
-                } else if (action == "ack_popup"){
+                } 
+                else if (action == "ack_popup"){
                     // clear popup when user presses OK
                     ev = UIStateEvent_UserAcksPopup;
                     stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
-                } else if (action == "cancel_popup") {
+                } 
+                else if (action == "cancel_popup") {
                     // clear popup (and event should be swallowed)
                     ev = UIStateEvent_UserCancelsPopup;
                     stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
-                } else if (action == "hardware_checks"){
+                } 
+                else if (action == "hardware_checks"){
                     ev = UIStateEvent_UserPushesHardwareChecks;
-                } else if (action == "start_calib_from_options") {
+                } 
+                else if (action == "start_calib_from_options") {
                     
                     // read form fields from JSON
                     std::string subj;
                     int epilepsy_i = static_cast<int>(EpilepsyRisk_Unknown);
-                    JSON::extract_json_string(body, "\"subject_name\"", subj);
-                    JSON::extract_json_int(body, "\"epilepsy\"", epilepsy_i);
+                    if (!(JSON::extract_json_string(body, "\"subject_name\"", subj))) {
+                        JSON::json_extract_fail("http_server", "subject_name");
+                        write_json_error(res, 400, "missing_or_invalid_field", "subject_name");
+                        return;
+                    }
+                    if(!(JSON::extract_json_int(body, "\"epilepsy\"", epilepsy_i))){
+                        JSON::json_extract_fail("http_server", "epilepsy");
+                        write_json_error(res, 400, "missing_or_invalid_field", "epilepsy");
+                        return;
+                    };
                     // publish to statestore
                     {
                         std::lock_guard<std::mutex> lock(stateStoreRef_.calib_options_mtx);
@@ -163,7 +208,32 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                         stateStoreRef_.pending_epilepsy = static_cast<EpilepsyRisk_E>(epilepsy_i);
                     }
                     ev = UIStateEvent_UserPushesStartCalibFromOptions;
+                } 
+                else if (action == "open_settings") {
+                    ev = UIStateEvent_UserPushesSettings;
+                }
+                else if (action == "set_settings") {
+                    int setting_i = static_cast<int>(CalibData_MostRecentOnly); // default
+                    if (!JSON::extract_json_int(body, "\"calib_data_setting\"", setting_i)) {
+                        JSON::json_extract_fail("http_server", "calib_data_setting");
+                        write_json_error(res, 400, "missing_or_invalid_field", "calib_data_setting");
+                        return;
+                    }
+                    stateStoreRef_.settings.calib_data_setting.store(static_cast<SettingCalibData_E>(setting_i), std::memory_order_release);
                     
+                    int arch_i = static_cast<int>(TrainArch_CNN); // default
+                    if (!JSON::extract_json_int(body, "\"train_arch_setting\"", arch_i)) {
+                        JSON::json_extract_fail("http_server", "train_arch_setting");
+                        write_json_error(res, 400, "missing_or_invalid_field", "train_arch");
+                        return;
+                    }
+                    stateStoreRef_.settings.train_arch_setting.store(static_cast<SettingTrainArch_E>(arch_i), std::memory_order_release);
+                }
+                else {
+                    // Unknown action (error)
+                    JSON::json_extract_fail("http_server", action.c_str());
+                    write_json_error(res, 400, "unknown_action", action.c_str());
+                    return;
                 }
             }
         }

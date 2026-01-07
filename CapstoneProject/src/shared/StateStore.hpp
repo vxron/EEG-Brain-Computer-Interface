@@ -13,68 +13,66 @@
 
 struct StateStore_s{
 
-    // General info about active channels
+    // =============== General info about active channels ==================
     std::atomic<int> g_n_eeg_channels{NUM_CH_CHUNK};
     // per-channel names (size fixed at compile time)
     std::array<std::string, NUM_CH_CHUNK> eeg_channel_labels;
     // channel enabled mask
     std::array<bool, NUM_CH_CHUNK> eeg_channel_enabled;
 
+    // =================== UI State Machine Info ==================================== 
     std::atomic<bool> g_is_calib{false};
     std::atomic<UIState_E> g_ui_state{UIState_None}; // which "screen" should showing
     std::atomic<int> g_ui_seq{0}; // increment each time a new state is published by server so html can detect quickly
-
-    std::atomic<int> g_block_id{0}; // block index in protocol
     
-    std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None};
-    std::atomic<int> g_freq_hz{0};
-    std::atomic<int> g_refresh_hz{0}; // monitor screen's refresh rate 
-    // ^WHEN THIS IS SET -> we know UI has successfully connected (use this to determine start state)
-    //std::atomic<bool> g_passed_start_guard{false};
-
     // So that UI can POST events to stimulus controller state machine:
     std::atomic<UIStateEvent_E> g_ui_event{UIStateEvent_None};
-
+    
     std::atomic<UIPopup_E> g_ui_popup{UIPopup_None};
-
-    // For displaying signal in real-time on UI
-    std::atomic<bool> g_hasEegChunk{false};
-
-    // custom type requires mutex protection
-    mutable std::mutex last_chunk_mutex;
-    bufferChunk_S g_lastEegChunk;
-
-    // UI reads last chunk
-    bufferChunk_S get_lastEegChunk() const {
-        std::lock_guard<std::mutex> lock(last_chunk_mutex);
-        return g_lastEegChunk;  // return by value (copy)
-    }
-
-    // backend (producer) sets last chunk
-    void set_lastEegChunk(const bufferChunk_S& v) {
-        std::lock_guard<std::mutex> lock(last_chunk_mutex);
-        g_lastEegChunk = v;
-    }
-
-    // Running statistic measures of signals (rolling 45s)
-    // AFTER bandpass + CAR + artifact rejection
-    SignalStats_s SignalStats;
-    mutable std::mutex signal_stats_mtx;
-
-    // Helper: get copy of signal stats for HTTP to read safely 
-    SignalStats_s get_signal_stats(){
-        std::lock_guard<std::mutex> lock(signal_stats_mtx);
-        return SignalStats;
-    }
+    
+    std::atomic<int> g_refresh_hz{0}; // monitor screen's refresh rate 
+    // ^WHEN THIS IS SET -> we know UI has successfully connected (use this to determine start state)
 
     // Pending name / epilepsy risk from front end (UIState_Calib_Options) (disclaimer form)
     std::mutex calib_options_mtx;
     std::string pending_subject_name;
     EpilepsyRisk_E pending_epilepsy;
 
+    // ==================== Training Protocol Info (Used during CALIB ONLY) ========================================
+    std::atomic<int> g_block_id{0}; // block index in protocol
+    std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None};
+    std::atomic<int> g_freq_hz{0};
+
+    // ============ For displaying signal in real-time on UI (hardware checks page) ============
+    std::atomic<bool> g_hasEegChunk{false};
+    // custom types require mutex protection
+    mutable std::mutex last_chunk_mutex;
+    bufferChunk_S g_lastEegChunk;
+    // helper so UI reads last chunk
+    bufferChunk_S get_lastEegChunk() const {
+        std::lock_guard<std::mutex> lock(last_chunk_mutex);
+        return g_lastEegChunk;  // return by value (copy)
+    }
+    // helper so backend (producer) sets last chunk
+    void set_lastEegChunk(const bufferChunk_S& v) {
+        std::lock_guard<std::mutex> lock(last_chunk_mutex);
+        g_lastEegChunk = v;
+    }
+
+    // ============= Running statistic measures of EEG (rolling 45s) for bad window detection/removal ============================
+    // AFTER bandpass + CAR + artifact rejection
+    SignalStats_s SignalStats;
+    mutable std::mutex signal_stats_mtx;
+    // Helper: get copy of signal stats for HTTP to read safely 
+    SignalStats_s get_signal_stats(){
+        std::lock_guard<std::mutex> lock(signal_stats_mtx);
+        return SignalStats;
+    }
+
+    // ======================= Template for any user session ====================
     struct sessionInfo_s {
         std::atomic<bool> g_isModelReady{0};
-        // strings must be mutex-protected (proceed 1 at a time)
+
         mutable std::mutex mtx_;
         std::string g_active_model_path = "";
         std::string g_active_subject_id = "";
@@ -84,7 +82,7 @@ struct StateStore_s{
 
         std::string get_active_model_path() const {
             std::lock_guard<std::mutex> lock(mtx_);
-            return g_active_model_path; // automatically unlocks mtx_
+            return g_active_model_path;
         }
 
         std::string get_active_subject_id() const {
@@ -102,10 +100,11 @@ struct StateStore_s{
             return g_active_data_path;
         }
     };
+    // Current session info for fast access
     sessionInfo_s currentSessionInfo{};
 
-    // LIST OF SAVED SESSIONS
-    // USE SAVED SESSION TYPE IN RUNMODE; NOT CURRENTSESSIONINFO^
+    // ======================== LIST OF SAVED SESSIONS ================================
+    // this is what we use IN RUNMODE (NOT CURRENTSESSIONINFO^, we use that for calib, args to pass Python script)
     struct SavedSession_s {
         std::string id;          // unique ID (e.g. "veronica_2025-11-25T14-20")
         std::string label;       // human label for UI list ("Nov 25, 14:20 (Veronica)")
@@ -146,6 +145,7 @@ struct StateStore_s{
         return saved_sessions;
     }
 
+    // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success
     // conditional variable! 
     std::mutex mtx_finalize_request;
@@ -162,6 +162,15 @@ struct StateStore_s{
     std::mutex mtx_model_ready;
     // std::condition_variable cv_model_ready; <- add back if you need to block another thread on it but for rn we only POLL in stim controller for model being ready
     bool model_just_ready = false;
+
+    // ========================== SETTINGS PAGE =========================
+    struct Settings_s {
+        std::atomic<SettingCalibData_E> calib_data_setting{CalibData_MostRecentOnly};
+        std::atomic<SettingTrainArch_E> train_arch_setting{TrainArch_CNN};
+        // ... todo :,)
+    };
+    Settings_s settings{}; // instantiate
+
 };
 
 

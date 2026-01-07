@@ -41,15 +41,6 @@ inline constexpr std::size_t NUM_SAMPLES_CHUNK = NUM_CH_CHUNK * NUM_SCANS_CHUNK;
 
 /* START ENUMS */
 
-// use enum CLASS to avoid name collisions & strongly typed (no implicit conversion to/from int)
-enum AppState_E {
-	AppState_Calibrate,
-	AppState_Idle,
-	AppState_Run,
-	AppState_Shutdown,
-	AppState_Error
-}; // AppMode_E
-
 enum SSVEPState_E {
 	SSVEP_Left,
 	SSVEP_Right,
@@ -86,13 +77,8 @@ enum UIState_E {
 	UIState_Hardware_Checks, // 6
 	UIState_Calib_Options, // 7
 	UIState_Pending_Training, // 8 when we're waiting for training to complete after calib
-	UIState_None, // 9
-};
-
-enum StimShapes_E {
-	StimShape_Circle,
-	StimShape_Square,
-	StimShape_Arrow,
+	UIState_Settings, // 9
+	UIState_None, // 10
 };
 
 enum EpilepsyRisk_E {
@@ -121,7 +107,9 @@ enum UIStateEvent_E {
 	UIStateEvent_UserAcksPopup, // 15
 	UIStateEvent_ModelReady, // 16
 	UIStateEvent_TrainingFailed, // 17
-	UIStateEvent_None, // 18
+	UIStateEvent_UserPushesSettings, // 18
+	UIStateEvent_UserSavesSettings, // 19
+	UIStateEvent_None, // 20
 };
 
 enum UIPopup_E {
@@ -135,12 +123,29 @@ enum UIPopup_E {
 	UIPopup_TrainJobFailed, // 7
 };
 
-enum BitOperation_E {
-	BitOp_Toggle,
-	BitOp_Set,
-	BitOp_Clear,
-	BitOp_Read
-}; // BitOperation_E
+// SETTINGS PAGE ENUMS
+enum SettingStimShape_E {
+	// TODO IF TIME;
+	StimShape_Circle,
+	StimShape_Square,
+	StimShape_Arrow,
+};
+
+enum SettingCalibData_E {
+    CalibData_MostRecentOnly,
+    CalibData_UsePastUpTo3
+};
+
+enum SettingTrainArch_E {
+	TrainArch_CNN,
+	TrainArch_SVM,
+	TrainArch_RNN, 
+};
+
+enum SettingFreqRange_E {
+	// TODO IF TIME;
+};
+
 
 /* END ENUMS */
 
@@ -173,6 +178,22 @@ inline int TestFreqEnumToInt(TestFreq_E enumVal){
 		default:
 			return 0;
 	}
+}
+
+inline std::string TrainArchEnumToString(SettingTrainArch_E e){
+	switch (e) {
+        case TrainArch_SVM: return "SVM";
+        case TrainArch_CNN: return "CNN";
+        default:            return "Unknown";
+    }
+}
+
+inline std::string CalibDataEnumToString(SettingCalibData_E e){
+	switch (e) {
+        case CalibData_MostRecentOnly: return "most_recent_only";
+        case CalibData_UsePastUpTo3:   return "all_sessions";
+        default:                       return "Unknown";
+    }
 }
 
 /* END HELPERS */
@@ -221,13 +242,13 @@ struct color_s {
 
 struct stimulus_s {
 
-	stimulus_s(int freq, TestFreq_E freq_e, color_s color, StimShapes_E shape)
+	stimulus_s(int freq, TestFreq_E freq_e, color_s color, SettingStimShape_E shape)
 		: freq_hz_(freq), freq_hz_e_(freq_e), color_(color), shape_(shape) {}
 
 	int freq_hz_;
 	TestFreq_E freq_hz_e_;
 	color_s color_{255, 255, 255};  // default white; use Color struct above
-	StimShapes_E shape_;
+	SettingStimShape_E shape_;
 };
 
 // individual person run mode setup that gets formed after calibration

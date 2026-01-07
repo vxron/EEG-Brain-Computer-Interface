@@ -32,9 +32,24 @@ body {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr);
+  grid-template-columns: clamp(260px, 28vw, 380px) minmax(0, 1fr);
   gap: 24px;
   padding: 24px;
+  min-width: 0;
+}
+
+/* Let grid/flex children shrink instead of overflowing */
+.sidebar,
+.main-panel,
+.view-stack,
+.view,
+.settings-grid,
+.settings-card,
+.hw-health,
+.hw-health-left,
+.hw-health-meta,
+.meta-item {
+  min-width: 0;
 }
 
 /* SIDEBAR */
@@ -301,6 +316,9 @@ body {
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-soft);
   opacity: 1;
+
+  /* Default: views scroll vertically only when needed */
+  overflow: hidden;
 
   /*TRANSITION*/
   pointer-events: auto;
@@ -758,6 +776,15 @@ body {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  padding-right: 10px; /* space so scrollbar doesn't sit on text */
+}
+
+@media (max-width: 1100px) {
+  #view-calib-options {
+    justify-content: flex-start; /* top align if too narrow */
+    overflow-y: auto; /* allow scroll ONLY when necessary */
+    padding-top: 20px;
+  }
 }
 
 /* Center card */
@@ -831,6 +858,82 @@ body {
 .btn.secondary {
   background: rgba(15, 23, 42, 0.9);
   border-color: #1d293b;
+}
+
+/* SETTINGS VIEW */
+#view-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 10px; /* space so scrollbar doesn't sit on text */
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 6px;
+}
+
+@media (max-width: 900px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1100px) {
+  #view-settings {
+    justify-content: flex-start; /* top align if too narrow */
+    overflow-y: auto; /* allow scroll ONLY when necessary */
+    padding-top: 20px;
+  }
+}
+
+.settings-card {
+  background: rgba(2, 6, 23, 0.92);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+  padding: 14px 14px 12px;
+  overflow: hidden;
+}
+
+.settings-card h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  overflow: hidden;
+}
+
+.settings-card .muted {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.settings-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-card select,
+.settings-card input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-card select {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#settings-status {
+  border: 1px solid rgba(99, 102, 241, 0.25);
 }
 
 /* PENDING TRAINING LOADING BAR & POPUP OVERLAY */
