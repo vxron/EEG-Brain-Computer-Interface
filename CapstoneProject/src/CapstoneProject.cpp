@@ -155,7 +155,8 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     using namespace std::chrono_literals;
     logger::tlabel = "consumer";
     LOG_ALWAYS("consumer start");
-    size_t tick_count = 0;
+    size_t tick_count = 0; // global
+    size_t tick_count_per_session = 0; // per session for logging
     size_t run_mode_bad_windows = 0;
     size_t run_mode_bad_window_count = 0;
     size_t run_mode_clean_window_count = 0;
@@ -200,6 +201,9 @@ try{
         // Session changed - close old files and reset flags
         if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); chunk_opened = false; }
         if (win_opened)   { csv_win.flush();   csv_win.close();   win_opened   = false; }
+
+        // reset per session window tick
+        tick_count_per_session = 0;
 
         active_session_id = sid;
         active_data_dir   = ddir;
@@ -505,6 +509,7 @@ try{
         // verified it's an ok window
         ++tick_count;
         window.tick=tick_count;
+        ++tick_count_per_session;
 
         // reset before looking at state store vals
         window.isTrimmed = false;
