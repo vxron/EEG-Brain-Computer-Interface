@@ -1,4 +1,4 @@
-# trainers/eegnet_trainer.py
+# trainers/cnn_trainer.py
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader, random_split
+
+import utils.utils as utils
 
 
 # EEGNET (CNN) MODEL DEFINITION
@@ -145,7 +147,7 @@ class EEGNet(nn.Module):
         return logits
 
 
-# STEP 5: TRAINING LOOP FUNCTION
+# TRAINING LOOP FUNCTION
 def run_epoch(model, loader, train: bool, *, device, optimizer, criterion):
     if train:
         model.train()
@@ -311,7 +313,7 @@ def train_cnn(
     #   logits (current 'scores'): (B, K)
     #   labels: (B,) with values 0..K-1
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), learning_rate=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     best_state, history = run_training_to_convergence(
         model, train_loader, val_loader,
@@ -327,6 +329,71 @@ def train_cnn(
         print("logits shape:", tuple(out.shape), " (should be (B,K))")
 
     return model, best_state, history
+
+
+def train_cnn_on_split(
+    *,
+    X_train: np.ndarray, y_train: np.ndarray,
+    X_val: np.ndarray,   y_val: np.ndarray,
+    n_ch: int, n_time: int,
+    seed: int,
+    batch_size: int,
+    learning_rate: float,
+    max_epochs: int,
+    patience: int,
+    min_delta: float,
+    device: torch.device,
+) -> tuple[float, float]:
+    """
+    Trains CNN on a specific split and returns (val_bal_acc, val_acc).
+    This avoids random_split so we can do proper CV.
+    """
+    # Make training more repeatable across runs
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+
+    # reshape: (N,C,T) -> (N,1,C,T)
+    Xtr = torch.from_numpy(X_train[:, None, :, :]).float()
+    ytr = torch.from_numpy(y_train.astype(np.int64)).long()
+    Xva = torch.from_numpy(X_val[:, None, :, :]).float()
+    yva = torch.from_numpy(y_val.astype(np.int64)).long()
+
+    train_ds = TensorDataset(Xtr, ytr)
+    val_ds   = TensorDataset(Xva, yva)
+
+    # deterministic shuffling
+    g = torch.Generator().manual_seed(seed)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=g)
+    val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False)
+
+    model = EEGNet(n_ch=n_ch, n_time=n_time, n_classes=2).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    run_training_to_convergence(
+        model, train_loader, val_loader,
+        device=device, optimizer=optimizer, criterion=criterion,
+        max_epochs=max_epochs, patience=patience, min_delta=min_delta,
+    )
+
+    # Evaluate on val
+    model.eval()
+    preds = []
+    trues = []
+    with torch.no_grad():
+        for xb, yb in val_loader:
+            xb = xb.to(device)
+            logits = model(xb)
+            p = torch.argmax(logits, dim=1).cpu().numpy()
+            preds.append(p)
+            trues.append(yb.numpy())
+    y_pred = np.concatenate(preds)
+    y_true = np.concatenate(trues)
+
+    val_acc = float((y_pred == y_true).mean())
+    val_bal = utils.balanced_accuracy(y_true, y_pred)
+    return val_bal, val_acc
 
 
 def export_cnn_onnx(

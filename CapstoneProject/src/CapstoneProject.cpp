@@ -650,7 +650,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         projectRoot /= "CapstoneProject";
     }
     // Script lives at: <CapstoneProject>/model train/python/train_svm.py
-    fs::path scriptPath = projectRoot / "model train" / "python" / "train_svm.py";
+    fs::path scriptPath = projectRoot / "model train" / "python" / "train_ssvep.py";
 
     std::error_code ec;
     scriptPath = fs::weakly_canonical(scriptPath, ec); // normalize path (non-throwing)
