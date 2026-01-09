@@ -32,6 +32,7 @@ private:
     SW_Timer_C currentWindowTimer_;
     std::chrono::milliseconds activeBlockDur_ms_{0};
     std::chrono::milliseconds restBlockDur_ms_{0};
+    std::chrono::milliseconds noSSVEPBlockDur_ms_{0};
 
     std::string pending_subject_name_ = ""; // for calib mode quick access
     EpilepsyRisk_E pending_epilepsy_ = EpilepsyRisk_Unknown; 

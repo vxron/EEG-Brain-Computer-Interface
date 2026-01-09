@@ -59,6 +59,7 @@ enum TestFreq_E {
 	TestFreq_25_Hz, // 7
 	TestFreq_30_Hz, // 8
 	TestFreq_35_Hz, // 9
+	TestFreq_NoSSVEP = 99
 };
 
 enum ActuatorState_E {
@@ -78,7 +79,8 @@ enum UIState_E {
 	UIState_Calib_Options, // 7
 	UIState_Pending_Training, // 8 when we're waiting for training to complete after calib
 	UIState_Settings, // 9
-	UIState_None, // 10
+	UIState_NoSSVEP_Test, // 10 collect 'no ssvep' data
+	UIState_None, // 11
 };
 
 enum EpilepsyRisk_E {
@@ -173,11 +175,29 @@ inline int TestFreqEnumToInt(TestFreq_E enumVal){
 			return 30;
 		case TestFreq_35_Hz:
 			return 35;
+		case TestFreq_NoSSVEP:
+			return -1; // CSV marker
 		case TestFreq_None:
 			return 0;
 		default:
 			return 0;
 	}
+}
+
+inline TestFreq_E IntToTestFreqEnum(int hz) {
+    switch(hz) {
+        case 8: return TestFreq_8_Hz;
+        case 9: return TestFreq_9_Hz;
+        case 10: return TestFreq_10_Hz;
+        case 11: return TestFreq_11_Hz;
+        case 12: return TestFreq_12_Hz;
+        case 20: return TestFreq_20_Hz;
+        case 25: return TestFreq_25_Hz;
+        case 30: return TestFreq_30_Hz;
+        case 35: return TestFreq_35_Hz;
+        case -1: return TestFreq_NoSSVEP;
+        default: return TestFreq_None;
+    }
 }
 
 inline std::string TrainArchEnumToString(SettingTrainArch_E e){
@@ -222,12 +242,13 @@ struct bufferChunk_S {
 }; // bufferChunk_S
 
 struct trainingProto_S {
-	std::size_t numActiveBlocks; // number of blocks in this trial (1..N), assumes same number of L/R
-	std::size_t activeBlockDuration_s; // duration of each active block in s
-	std::size_t restDuration_s;  // rest duration between blocks in s
-	bool displayInPairs; // whether or not the stimuli under test should be displayed in pairs or alone for 1 window
+	std::size_t numActiveBlocks;         // number of blocks in this trial (1..N), assumes same number of L/R
+	std::size_t activeBlockDuration_s;   // duration of each active block in s
+	std::size_t restDuration_s;          // rest duration between blocks in s
+	std::size_t noSSVEPDuration_s;       // duration of no-ssvep blocks
+    std::size_t noSSVEPBlocksPerFreq;    // how many no-ssvep blocks per freq
+	bool displayInPairs;                 // whether or not the stimuli under test should be displayed in pairs or alone for 1 window
 	std::deque<TestFreq_E> freqsToTest;  // TODO: make this stimulus_s instead of testFreq_E
-
 }; // trainingProto_S
 
 // STIMULUS OBJECT FACTORY

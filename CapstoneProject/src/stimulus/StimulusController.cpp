@@ -14,17 +14,18 @@ static const state_transition state_transition_table[] = {
     {UIState_None,             UIStateEvent_ConnectionSuccessful,           UIState_Home},
  
     {UIState_Home,             UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
-    {UIState_Calib_Options,    UIStateEvent_UserPushesStartCalibFromOptions,UIState_Instructions},
+    {UIState_Calib_Options,    UIStateEvent_UserPushesStartCalibFromOptions,UIState_NoSSVEP_Test},
     {UIState_Home,             UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
     {UIState_Home,             UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
     {UIState_Home,             UIStateEvent_UserPushesSettings,             UIState_Settings},
      
-    {UIState_Active_Calib,     UIStateEvent_StimControllerTimeout,          UIState_Instructions},
+    {UIState_Instructions,     UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
+    {UIState_Active_Calib,     UIStateEvent_StimControllerTimeout,          UIState_NoSSVEP_Test},
+    {UIState_NoSSVEP_Test,     UIStateEvent_StimControllerTimeout,          UIState_Instructions},
     {UIState_Active_Calib,     UIStateEvent_StimControllerTimeoutEndCalib,  UIState_Pending_Training},
     {UIState_Pending_Training, UIStateEvent_ModelReady,                     UIState_Home},
     {UIState_Pending_Training, UIStateEvent_TrainingFailed,                 UIState_Home},
-    {UIState_Instructions,     UIStateEvent_StimControllerTimeout,          UIState_Active_Calib},
-       
+    
     {UIState_Active_Calib,     UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Calib_Options,    UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Instructions,     UIStateEvent_UserPushesExit,                 UIState_Home},
@@ -34,10 +35,11 @@ static const state_transition state_transition_table[] = {
     {UIState_Hardware_Checks,  UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Pending_Training, UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Settings,         UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_NoSSVEP_Test,     UIStateEvent_UserPushesExit,                 UIState_Home},
  
     {UIState_Run_Options,      UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
     {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Active_Run},
-    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_Instructions},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_NoSSVEP_Test},
     {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
     {UIState_Run_Options,      UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
 
@@ -61,15 +63,19 @@ StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::opt
         // default protocol
         trainingProtocol_.activeBlockDuration_s = 15;
         trainingProtocol_.displayInPairs = false;
-        trainingProtocol_.freqsToTest = {TestFreq_8_Hz, TestFreq_9_Hz, TestFreq_10_Hz, TestFreq_11_Hz, TestFreq_12_Hz};
+        trainingProtocol_.freqsToTest = {TestFreq_8_Hz, TestFreq_9_Hz, TestFreq_10_Hz, TestFreq_11_Hz, TestFreq_12_Hz, 
+                                         TestFreq_8_Hz, TestFreq_9_Hz, TestFreq_10_Hz, TestFreq_11_Hz, TestFreq_12_Hz}; // Two times
         trainingProtocol_.numActiveBlocks = trainingProtocol_.freqsToTest.size();
-        trainingProtocol_.restDuration_s = 10;
+        trainingProtocol_.restDuration_s = 8;
+        trainingProtocol_.noSSVEPDuration_s = 12; // interleaved after each testfreq 
+        // fix to add rest protocol 
     }
      activeBlockQueue_ = trainingProtocol_.freqsToTest;
      activeBlockDur_ms_ = std::chrono::milliseconds{
      trainingProtocol_.activeBlockDuration_s * 1000 };
      restBlockDur_ms_ = std::chrono::milliseconds{
-     trainingProtocol_.restDuration_s * 1000 };     
+     trainingProtocol_.restDuration_s * 1000 }; 
+     noSSVEPBlockDur_ms_ = std::chrono::milliseconds{trainingProtocol_.noSSVEPDuration_s * 1000};    
 
 }
 
@@ -176,7 +182,20 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_freq_hz.store(freq, std::memory_order_release);
             LOG_ALWAYS("SC: stored a freq=" << static_cast<int>(freq));
 
-            // instructions state is entered from Calib_Options or Saved_Sessions
+            // start timer
+            currentWindowTimer_.start_timer(restBlockDur_ms_);
+            break;
+        }
+
+        case UIState_NoSSVEP_Test: {
+            stateStoreRef_->g_ui_state.store(UIState_NoSSVEP_Test, std::memory_order_release);
+
+            // storing
+            stateStoreRef_->g_freq_hz_e.store(TestFreq_NoSSVEP, std::memory_order_release);
+            stateStoreRef_->g_freq_hz.store(-1, std::memory_order_release);
+            LOG_ALWAYS("SC: stored NoSSVEP label testfreq_e=" << (int)TestFreq_NoSSVEP << " testfreq_hz=-1");
+
+            // no ssvep state is entered from Calib_Options or Saved_Sessions
             // need to create new session if we're just entering calib for the first time
             // TODO: delete csv log after if it doesn't include full calib session
             bool isCalib = stateStoreRef_->g_is_calib.load(std::memory_order_acquire);
@@ -227,8 +246,9 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
             // start timer
-            currentWindowTimer_.start_timer(restBlockDur_ms_);
+            currentWindowTimer_.start_timer(noSSVEPBlockDur_ms_);
             break;
+
         }
 
         case UIState_Run_Options: {
@@ -294,6 +314,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
 void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
     switch(state){
         case UIState_Active_Calib:
+        case UIState_NoSSVEP_Test:
         case UIState_Instructions:
             currentWindowTimer_.stop_timer();
             if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
@@ -360,7 +381,7 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
             prevState_ = state_;
 			state_ = t.to;
 			onStateEnter(prevState_, state_);
-            break;
+            return;
 		}
 	}
     LOG_ALWAYS("SC: NO TRANSITION for state=" << (int)state_ << " event=" << (int)ev);
@@ -578,24 +599,6 @@ void StimulusController_C::runUIStateMachine(){
             LOG_ALWAYS("SC: now in state " << static_cast<int>(state_));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
-
-        // might not even need this
-        switch(state_){
-            case UIState_None:
-                // waiting for g_refresh_hz to get set
-                break;
-            case UIState_Active_Calib:
-                break;
-            case UIState_Instructions:
-                break;
-            case UIState_Active_Run:
-                break;
-            case UIState_Home:
-                break;
-            default:
-                break;
-
-        }
     }
 }
 
