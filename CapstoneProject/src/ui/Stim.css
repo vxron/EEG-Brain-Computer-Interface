@@ -376,25 +376,111 @@ body {
   gap: 36px;
 }
 
-.flicker-block {
+/* Shared left/right target layout used by BOTH Run and Neutral */
+.targets-stage.dual {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--targets-gap, 36px);
+  padding: 0 var(--targets-pad-x, 8vw);
+  width: 100%;
+  min-height: var(--targets-min-h, 260px);
+}
+
+/* Shared sizing primitive */
+.targets-stage .target {
+  width: var(--target-size, 220px);
+  height: var(--target-size, 220px);
+}
+
+/* Default non-fullscreen can be smaller */
+body:not(.fullscreen-mode) {
+  --targets-pad-x: 3vw;
+  --target-size: 170px;
+}
+
+/* FLICKER BLOCKS */
+
+/* Calibration uses a target wrapper so flicker-block can stay 100% */
+.calib-target {
   width: 140px;
   height: 140px;
-  border-radius: 24px;
-  background: radial-gradient(circle at top left, #38bdf8, #1d4ed8);
+}
+.calib-flicker {
+  width: 100%;
+  height: 100%;
+}
+
+.flicker-block {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: clamp(18px, 18%, 28px);
   display: flex;
   justify-content: center;
   align-items: center;
-  font-size: 2.2rem;
-  font-weight: 500;
+  font-size: clamp(1.2rem, 3.2vw, 2.2rem);
+  font-weight: 650;
+  user-select: none;
+  -webkit-user-select: none;
+
+  --g1: #38bdf8;
+  --g2: #1d4ed8;
+
+  /* flicker brightness target (JS drives this) */
+  --stim-brightness: 1;
+}
+
+.flicker-block::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+
+  background: radial-gradient(circle at top left, var(--g1), var(--g2));
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.9);
+
+  /* Flicker only the background layer */
+  filter: brightness(var(--stim-brightness));
+  transition: filter 0s;
+}
+
+.flicker-block > * {
+  position: relative;
+  z-index: 1;
 }
 
 .arrow-left {
-  background: radial-gradient(circle at top left, #f97316, #c026d3);
+  --g1: #60a5fa;
+  --g2: #2563eb;
 }
 
 .arrow-right {
-  background: radial-gradient(circle at top right, #22c55e, #6366f1);
+  --g1: #93c5fd;
+  --g2: #4f46e5;
+}
+
+.freq-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+
+  padding: 4px 10px;
+  border-radius: 999px;
+
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(2, 6, 23, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 /* PILLS & LOG */
@@ -936,6 +1022,243 @@ body {
   border: 1px solid rgba(99, 102, 241, 0.25);
 }
 
+/* NoSSVEP / Neutral Runtime Mimic */
+
+#view-neutral {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+#view-neutral .viewHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+#view-neutral .viewTitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+#view-neutral .viewSubtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* --- TRIPLE STAGE LAYOUT FOR NO_SSVEP_STATE only --- */
+.targets-stage.triple {
+  /* Keep same “targets-mode” behavior/variables as dual stage */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--targets-gap, 36px);
+  padding: 0 var(--targets-pad-x, 8vw);
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: var(--targets-min-h, 260px);
+}
+
+.targets-stage.triple .target {
+  width: var(--target-size, 220px);
+  height: var(--target-size, 220px);
+  flex: 0 0 auto;
+}
+
+/* Center instruction card sizing */
+#neutral-instructions * {
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: auto;
+}
+
+#neutral-instructions.neutral-instructions {
+  flex: 1 1 auto;
+  min-width: 260px;
+  max-width: min(640px, 44vw);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(167, 139, 250, 0.16);
+  background: rgba(2, 6, 23, 0.55);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.5);
+  padding: 14px 16px 12px;
+  overflow: hidden;
+  text-align: center;
+}
+
+#neutral-instruction-list .instructionEmphasis {
+  color: var(--text-main);
+}
+
+#neutral-note.instructionNote {
+  margin: 12px 0 0;
+  font-size: 0.82rem;
+  color: rgba(203, 213, 225, 0.72);
+}
+
+#neutral-note.instructionNote b,
+#neutral-note.instructionNote strong {
+  color: rgba(236, 72, 153, 0.9);
+}
+
+.targets-stage.triple #neutral-instructions {
+  position: relative;
+}
+
+.targets-stage.triple #neutral-instructions::before,
+.targets-stage.triple #neutral-instructions::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  width: 1px;
+  background: rgba(148, 163, 184, 0.12);
+  pointer-events: none;
+}
+.targets-stage.triple #neutral-instructions::before {
+  left: 0;
+}
+.targets-stage.triple #neutral-instructions::after {
+  right: 0;
+}
+
+/* Neutral center card: nicer glass + cleaner typography */
+.neutral-alert {
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.14),
+    rgba(236, 72, 153, 0.06)
+  );
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+}
+
+.neutral-alert-title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(236, 72, 153, 0.1);
+  border: 1px solid rgba(236, 72, 153, 0.22);
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.neutral-alert-sub {
+  margin-top: 8px;
+  font-size: 0.88rem;
+  color: rgba(226, 232, 240, 0.8);
+  line-height: 1.35;
+}
+
+/* Custom purple dot bullets */
+#neutral-instruction-list.instructionList {
+  list-style: none;
+  padding-left: 0;
+  margin: 10px auto 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: rgba(226, 232, 240, 0.82);
+  text-align: left;
+  display: inline-block;
+}
+
+#neutral-instruction-list.instructionList li {
+  position: relative;
+  padding-left: 18px;
+  margin: 8px 0;
+}
+
+#neutral-instruction-list.instructionList li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.62em;
+
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+
+  background: rgba(167, 139, 250, 0.95);
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.12);
+}
+
+/* --- RESPONSIVE BEHAVIOR --- */
+
+/* only allow scrolling if viewport height is tight */
+@media (max-height: 720px) {
+  #neutral-instructions.neutral-instructions {
+    max-height: 60vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+}
+
+/* if it does scroll, make the scrollbar subtle */
+#neutral-instructions.neutral-instructions::-webkit-scrollbar {
+  width: 10px;
+}
+#neutral-instructions.neutral-instructions::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  border: 2px solid rgba(2, 6, 23, 0.5);
+}
+#neutral-instructions.neutral-instructions::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Medium widths: keep targets big-ish but tighten padding */
+@media (max-width: 1100px) {
+  .targets-stage.triple {
+    padding: 0 4vw;
+    gap: 20px;
+  }
+  #neutral-instructions.neutral-instructions {
+    max-width: min(520px, 56vw);
+  }
+}
+
+/* Small widths: stack (targets row + instructions card) to avoid squish/overflow */
+@media (max-width: 900px) {
+  .targets-stage.triple {
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    padding: 0 18px 12px;
+    gap: 14px;
+  }
+
+  #no-left-arrow,
+  #no-right-arrow {
+    order: 1;
+  }
+
+  #neutral-instructions.neutral-instructions {
+    order: 2;
+    width: min(680px, 100%);
+    max-width: none;
+    max-height: none;
+  }
+
+  /* In stacked mode, remove the vertical divider lines */
+  .targets-stage.triple #neutral-instructions::before,
+  .targets-stage.triple #neutral-instructions::after {
+    display: none;
+  }
+}
+
 /* PENDING TRAINING LOADING BAR & POPUP OVERLAY */
 
 /* when overlay is visible, prevent scroll & clicks */
@@ -1201,37 +1524,32 @@ body.fullscreen-mode .app-shell {
   padding: 0; /* no outer margin */
 }
 
-/* Remove inner padding/borders for the run view in fullscreen so it truly spans edge to edge */
-body.fullscreen-mode.run-mode #view-active-run {
+/* Fullscreen target-based views (Run + Neutral) share the same behavior */
+body.fullscreen-mode.targets-mode #view-active-run,
+body.fullscreen-mode.targets-mode #view-neutral {
   border-radius: 0;
   border: none;
   box-shadow: none;
-
-  /* keep nice padding like other views */
   padding: 18px 24px 24px;
-
-  /* let header sit on top, flicker area grow below */
   display: flex;
   flex-direction: column;
+  /* caps size so ultrawide monitors don't create huge stimuli */
+  --target-size: clamp(76px, 8.5vw, 128px);
+  --targets-gap: clamp(22px, 8vw, 96px);
+  --targets-pad-x: clamp(14px, 5.5vw, 110px);
 }
 
-/* Title + lead text: natural size at top */
-body.fullscreen-mode.run-mode #view-active-run h2,
-body.fullscreen-mode.run-mode #view-active-run .view-lead {
+/* Keep header sized naturally */
+body.fullscreen-mode.targets-mode #view-neutral .viewHeader,
+body.fullscreen-mode.targets-mode #view-active-run h2,
+body.fullscreen-mode.targets-mode #view-active-run .view-lead {
   flex: 0 0 auto;
 }
 
-/* Flicker stage fills the remaining area and pushes blocks apart */
-body.fullscreen-mode.run-mode .flicker-stage.dual {
+/* Let the stage fill remaining space */
+body.fullscreen-mode.targets-mode #view-active-run .targets-stage.dual,
+body.fullscreen-mode.targets-mode #view-neutral .targets-stage.triple {
   flex: 1 1 auto;
   width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 8vw; /* horizontal margin; tweak if needed */
-}
-
-/* Keep blocks large but responsive */
-body.fullscreen-mode.run-mode .flicker-block {
-  width: min(20vw, 220px);
-  height: min(20vw, 220px);
+  min-height: 0;
 }

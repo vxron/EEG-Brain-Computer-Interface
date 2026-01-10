@@ -15,9 +15,8 @@ const elStatusModel = document.getElementById("status-model");
 const elCalibBlock = document.getElementById("calib-block");
 const elLeftArrow = document.getElementById("left-arrow");
 const elRightArrow = document.getElementById("right-arrow");
-
-// UI Pills (rounded elements that show short pieces of info like labels/statuses)
-const elFreqCodePill = document.getElementById("freq-code-pill");
+const elRunLeftFreq = document.getElementById("run-left-freq");
+const elRunRightFreq = document.getElementById("run-right-freq");
 
 // VIEW CONTAINERS FOR DIFF WINDOWS
 const viewHome = document.getElementById("view-home");
@@ -75,9 +74,10 @@ let calibStimulus = null;
 let leftStimulus = null;
 let rightStimulus = null;
 let stimAnimId = null;
+let neutralLeftStimulus = null;
+let neutralRightStimulus = null;
 
 // Hardware checks DOM elements
-const hwQualityRow = document.getElementById("hw-quality-row");
 const hwPlotsContainer = document.getElementById("hw-plots-container");
 // Hardware checks plotting configs
 const HW_MAX_WINDOW_SEC = 9; // seconds visible on screen
@@ -113,6 +113,20 @@ const selCalibData = document.getElementById("set-calib-data");
 const elSettingsStatus = document.getElementById("settings-status");
 let settingsInitiallyUpdated = false;
 
+// No SSVEP Block DOM elements
+const viewNoSSVEP = document.getElementById("view-neutral");
+const elNeutralLeftArrow = document.getElementById("no-left-arrow");
+const elNeutralRightArrow = document.getElementById("no-right-arrow");
+const elNoSSVEPLeftFreq = document.getElementById("no-left-freq");
+const elNoSSVEPRightFreq = document.getElementById("no-right-freq");
+
+// Handle random frequency pairs in no_ssvep_test mode
+let prevStimState = null;
+// freq pair should be sticky for the duration of the Neutral state
+let neutralLeftHz = 0;
+let neutralRightHz = 0;
+let neutralPairChosen = false;
+
 // ===================== 2) LOGGING HELPER =============================
 function logLine(msg) {
   const time = new Date().toLocaleTimeString();
@@ -136,6 +150,7 @@ function showView(name) {
     viewHardware,
     viewCalibOptions,
     viewSettings,
+    viewNoSSVEP,
   ];
 
   for (const v of allViews) {
@@ -170,6 +185,9 @@ function showView(name) {
     case "settings":
       viewSettings.classList.remove("hidden");
       break;
+    case "no_ssvep":
+      viewNoSSVEP.classList.remove("hidden");
+      break;
     default:
       viewHome.classList.remove("hidden");
       break;
@@ -177,12 +195,18 @@ function showView(name) {
 }
 
 // (2) set full screen in calib/run modes (hide side bar & log panel)
-function setFullScreenMode(enabled) {
-  // Toggle a class on <body> so CSS can handle layout
-  document.body.classList.toggle("fullscreen-mode", enabled);
+// and then also targets mode for flickering stimuli pages, and run mode
+function applyBodyMode({
+  fullscreen = false,
+  targets = false,
+  run = false,
+} = {}) {
+  document.body.classList.toggle("fullscreen-mode", fullscreen);
+  document.body.classList.toggle("targets-mode", targets);
+  document.body.classList.toggle("run-mode", run);
 
   if (btnExit) {
-    if (enabled) {
+    if (fullscreen) {
       btnExit.classList.remove("hidden");
     } else {
       btnExit.classList.add("hidden");
@@ -309,6 +333,8 @@ function intToLabel(enumType, integer) {
         case 9:
           return "UIState_Settings";
         case 10:
+          return "UIState_NoSSVEP_Test";
+        case 11:
           return "UIState_None";
         default:
           return `Unknown (${integer})`;
@@ -335,6 +361,8 @@ function intToLabel(enumType, integer) {
           return "TestFreq_30_Hz";
         case 9:
           return "TestFreq_35_Hz";
+        case 99:
+          return "TestFreq_NoSSVEP";
         default:
           return `Unknown (${integer})`;
       }
@@ -362,6 +390,54 @@ function fmtFreqEnumLabel(enumType, intVal) {
   return label;
 }
 
+// HELPER FOR CHOOSING freq pair randomly in NEUTRAL (NO_SSVEP)
+// Allowed TestFreq enums for randomly selecting neutral targets
+// (exclude 0=None and 99=NoSSVEP because those are not flicker freqs)
+const NEUTRAL_TESTFREQ_ENUMS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+function testFreqEnumToHz(e) {
+  switch (e) {
+    case 1:
+      return 8;
+    case 2:
+      return 9;
+    case 3:
+      return 10;
+    case 4:
+      return 11;
+    case 5:
+      return 12;
+    case 6:
+      return 20;
+    case 7:
+      return 25;
+    case 8:
+      return 30;
+    case 9:
+      return 35;
+    default:
+      return 0; // None / invalid / NoSSVEP etc.
+  }
+}
+
+// Pick one random element from the array
+function pickOne(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+// Pick two distinct TestFreq enums and return Hz values
+function pickRandomNeutralHzPair() {
+  const leftEnum = pickOne(NEUTRAL_TESTFREQ_ENUMS);
+  let rightEnum = pickOne(NEUTRAL_TESTFREQ_ENUMS);
+  // Ensure distinct
+  while (rightEnum === leftEnum && NEUTRAL_TESTFREQ_ENUMS.length > 1) {
+    rightEnum = pickOne(NEUTRAL_TESTFREQ_ENUMS);
+  }
+  return {
+    leftHz: testFreqEnumToHz(leftEnum),
+    rightHz: testFreqEnumToHz(rightEnum),
+  };
+}
+
 // ============= 6) MAP STIM_WINDOW FROM STATESTORE-> view + labels in UI ===============
 function updateUiFromState(data) {
   // Status card summary
@@ -382,53 +458,61 @@ function updateUiFromState(data) {
       : "No trained model";
   }
 
-  // run mode flag cleared by default
-  document.body.classList.remove("run-mode");
-
   // View routing based on stim_window value (MUST MATCH UISTATE_E)
   const stimState = data.stim_window;
 
-  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = None
-  if (stimState === 3 /* Home */ || stimState === 10 /* None */) {
+  // capture no_ssvep_test state transitions so we only randomize freq pair ONCE per entry
+  const enteringNeutral = stimState === 10 && prevStimState !== 10;
+  const leavingNeutral = prevStimState === 10 && stimState !== 10;
+  // on falling edge (exit), reset
+  if (leavingNeutral) {
+    stopNeutralFlicker();
+    neutralPairChosen = false;
+  }
+
+  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = no_ssvep, 11 = None
+  if (stimState === 3 /* Home */ || stimState === 11 /* None */) {
     stopCalibFlicker();
     stopRunFlicker();
     stopHardwareMode();
-    setFullScreenMode(false);
+    applyBodyMode({ fullscreen: false, targets: false, run: false });
     settingsInitiallyUpdated = false; // reset flag
     showView("home");
   } else if (stimState === 2 /* Instructions */) {
     stopCalibFlicker();
-    setFullScreenMode(true);
+    stopRunFlicker();
+    applyBodyMode({ fullscreen: true, targets: false, run: false });
     showView("instructions");
     // Update text based on block and freq
     elInstrBlockId.textContent = data.block_id ?? "-";
     elInstrFreqHz.textContent = fmtFreqHz(data.freq_hz) + " Hz";
     // TODO: customize elInstructionsText based on block / upcoming freq
   } else if (stimState === 1 /* Active_Calib */) {
-    setFullScreenMode(true);
     showView("active_calib");
+    applyBodyMode({ fullscreen: true, targets: true, run: false });
     const calibFreqHz = data.freq_hz ?? 0;
     startCalibFlicker(calibFreqHz);
   } else if (stimState === 0 /* Active_Run */) {
-    setFullScreenMode(true);
+    applyBodyMode({ fullscreen: true, targets: true, run: true });
     showView("active_run");
-    // set run mode flag for css to max separability btwn stimuli blocks :)
-    document.body.classList.add("run-mode");
     // default to freq_hz if undef right/left
     const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
     const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
     startRunFlicker(runLeftHz, runRightHz);
+    if (elRunLeftFreq) elRunLeftFreq.textContent = `${fmtFreqHz(runLeftHz)} Hz`;
+    if (elRunRightFreq)
+      elRunRightFreq.textContent = `${fmtFreqHz(runRightHz)} Hz`;
   } else if (stimState === 4 /* Saved Sessions */) {
     stopCalibFlicker();
     stopRunFlicker();
-    setFullScreenMode(false);
+    applyBodyMode({ fullscreen: false, targets: false, run: false });
     showView("saved_sessions");
 
     // TODO: render session list from backend
   } else if (stimState === 5 /* Run Options */) {
     stopCalibFlicker();
     stopRunFlicker();
-    setFullScreenMode(false);
+    applyBodyMode({ fullscreen: false, targets: false, run: false });
     showView("run_options");
 
     // TODO: SET THIS UP (populating welcome info from state store)
@@ -440,22 +524,39 @@ function updateUiFromState(data) {
       ? "Model ready"
       : "No trained model yet, please run calibration";
   } else if (stimState == 6) {
-    setFullScreenMode(true);
+    applyBodyMode({ fullscreen: true, targets: false, run: false });
     startHardwareMode();
     showView("hardware_checks");
   } else if (stimState == 7) {
-    stopCalibFlicker();
-    setFullScreenMode(false);
+    applyBodyMode({ fullscreen: false, targets: false, run: false });
     showView("calib_options");
   } else if (stimState == 8) {
     stopCalibFlicker();
-    setFullScreenMode(false);
+    stopRunFlicker();
+    applyBodyMode({ fullscreen: false, targets: false, run: false });
   } else if (stimState == 9) {
-    setFullScreenMode(false);
+    applyBodyMode({ fullscreen: false, targets: false, run: false });
     if (!settingsInitiallyUpdated) {
       updateSettingsFromState(data);
     }
     showView("settings");
+  } else if (stimState == 10) {
+    // on rising edge, need to choose new freq pair
+    stopCalibFlicker();
+    if (enteringNeutral || !neutralPairChosen) {
+      const pair = pickRandomNeutralHzPair();
+      neutralLeftHz = pair.leftHz;
+      neutralRightHz = pair.rightHz;
+      neutralPairChosen = true;
+    }
+
+    applyBodyMode({ fullscreen: true, targets: true, run: false });
+    showView("no_ssvep");
+    startNeutralFlicker(neutralLeftHz, neutralRightHz);
+    if (elNoSSVEPLeftFreq)
+      elNoSSVEPLeftFreq.textContent = `${neutralLeftHz} Hz`;
+    if (elNoSSVEPRightFreq)
+      elNoSSVEPRightFreq.textContent = `${neutralRightHz} Hz`;
   }
 
   // pending training overlay driven purely by state
@@ -511,6 +612,8 @@ function updateUiFromState(data) {
         break;
     }
   }
+  // update state
+  prevStimState = stimState;
 }
 
 // ============= 6) START POLLING FOR GET/STATE ===============
@@ -542,14 +645,6 @@ function startPolling() {
   }
   // repetitive polling calls (send GET requests every 100ms)
   pollInterval = setInterval(pollStateOnce, polling_period_ms);
-}
-
-function stopPolling() {
-  if (pollActive == false) {
-    return false;
-  }
-  clearInterval(pollInterval);
-  pollInterval = null;
 }
 
 // =========== 7) MONITOR REFRESH MEASUREMENT (POST /ready) ==========================
@@ -618,10 +713,6 @@ class FlickerStimulus {
     this.enabled = false;
     this.frameIdx = 0;
     this.framesPerCycle = 1;
-    // base styles declarations so we can modulate later via filter
-    if (this.el) {
-      this.el.style.transition = "filter 0.0s";
-    }
   }
 
   // methods
@@ -651,7 +742,7 @@ class FlickerStimulus {
     this.frameIdx = 0;
     if (this.el) {
       this.el.style.visibility = "visible";
-      this.el.style.filter = "brightness(1.0)";
+      this.el.style.setProperty("--stim-brightness", "1.0");
     }
   }
   stop() {
@@ -659,7 +750,7 @@ class FlickerStimulus {
     this.frameIdx = 0;
     if (this.el) {
       // Reset to neutral appearance when not flickering
-      this.el.style.filter = "brightness(1.0)";
+      this.el.style.setProperty("--stim-brightness", "1.0");
     }
   }
   // frequencymodulator
@@ -671,11 +762,7 @@ class FlickerStimulus {
     const on = this.frameIdx < half;
 
     // square wave: ON = bright, OFF = dim
-    if (on) {
-      this.el.style.filter = "brightness(1.6)";
-    } else {
-      this.el.style.filter = "brightness(0.2)";
-    }
+    this.el.style.setProperty("--stim-brightness", on ? "1.3" : "0.4");
   }
 }
 
@@ -685,6 +772,8 @@ function stimAnimationLoop() {
   if (calibStimulus) calibStimulus.onePeriod();
   if (leftStimulus) leftStimulus.onePeriod();
   if (rightStimulus) rightStimulus.onePeriod();
+  if (neutralLeftStimulus) neutralLeftStimulus.onePeriod();
+  if (neutralRightStimulus) neutralRightStimulus.onePeriod();
 
   stimAnimId = requestAnimationFrame(stimAnimationLoop);
 }
@@ -719,6 +808,24 @@ function startRunFlicker(leftFreqHz, rightFreqHz) {
 function stopRunFlicker() {
   if (leftStimulus) leftStimulus.stop();
   if (rightStimulus) rightStimulus.stop();
+}
+
+function startNeutralFlicker(leftHz, rightHz) {
+  if (neutralLeftStimulus) {
+    neutralLeftStimulus.setRefreshHz(measuredRefreshHz);
+    neutralLeftStimulus.setFrequency(leftHz);
+    neutralLeftStimulus.start();
+  }
+  if (neutralRightStimulus) {
+    neutralRightStimulus.setRefreshHz(measuredRefreshHz);
+    neutralRightStimulus.setFrequency(rightHz);
+    neutralRightStimulus.start();
+  }
+}
+
+function stopNeutralFlicker() {
+  if (neutralLeftStimulus) neutralLeftStimulus.stop();
+  if (neutralRightStimulus) neutralRightStimulus.stop();
 }
 
 // ================ 11) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
@@ -1157,6 +1264,14 @@ async function init() {
   calibStimulus = new FlickerStimulus(elCalibBlock, measuredRefreshHz);
   leftStimulus = new FlickerStimulus(elLeftArrow, measuredRefreshHz);
   rightStimulus = new FlickerStimulus(elRightArrow, measuredRefreshHz);
+  neutralLeftStimulus = new FlickerStimulus(
+    elNeutralLeftArrow,
+    measuredRefreshHz
+  );
+  neutralRightStimulus = new FlickerStimulus(
+    elNeutralRightArrow,
+    measuredRefreshHz
+  );
 
   stimAnimationLoop();
   startPolling();
