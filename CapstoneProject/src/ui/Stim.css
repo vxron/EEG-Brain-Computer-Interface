@@ -527,6 +527,62 @@ body:not(.fullscreen-mode) {
   color: var(--text-muted);
 }
 
+/* RUN MODE: two columns with label above each stimulus */
+
+/* column wrapper */
+#view-active-run .target-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* label above stimulus */
+#view-active-run .target-action-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 6px 12px;
+  border-radius: 999px;
+
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+
+  color: rgba(226, 232, 240, 0.92);
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.25);
+
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
+  user-select: none;
+  white-space: nowrap;
+}
+
+#view-active-run .target-col:first-child .target-action-label {
+  border-color: rgba(99, 102, 241, 0.28);
+}
+#view-active-run .target-col:last-child .target-action-label {
+  border-color: rgba(236, 72, 153, 0.22);
+}
+
+#view-active-run .freq-badge {
+  display: none !important;
+}
+
+@media (max-width: 700px) {
+  #view-active-run .target-action-label {
+    font-size: 0.78rem;
+    padding: 5px 10px;
+  }
+  #view-active-run .target-col {
+    gap: 8px;
+  }
+}
+
 /* HARDWARE CHECKS PAGE & PLOTTING */
 
 /* Container for the hardware view */
