@@ -64,6 +64,7 @@ const btnModalOk = document.getElementById("modal-ok"); // ack btn for user to a
 const btnModalCancel = document.getElementById("modal-cancel"); // alternate ack btn for popups w 2 options
 // Track whether popup is currently visible
 let modalVisible = false;
+let popupAckInFlight = false; // prevent races ie. give time to backend to clear (don't allow new popup to raise on state/ poll during popAckInFlight true)
 
 // Timer for browser requests to server
 let pollInterval = null;
@@ -563,7 +564,20 @@ function updateUiFromState(data) {
   showTrainingOverlay(stimState === 8); // uistate_pending_training
 
   // HANDLE POPUPS TRIGGERED BY BACKEND:
-  const popupEnumIdx = data.popup ?? 0; // 0 is fallback
+  const popupEnumIdx = data.popup ?? 0; // 0 is fallback (popup NONE)
+
+  // track popup to clear in-flight when backend clears it
+  if (popupEnumIdx === 0) {
+    popupAckInFlight = false;
+  }
+
+  // if popup ack is in flight and it's not none, backend hasn't cleared yet, so we don't want to retrigger
+  if (popupEnumIdx !== 0 && popupAckInFlight) {
+    // keep modal hidden
+    prevStimState = stimState;
+    return;
+  }
+
   // if backend says "show popup" and it's not visible, open it
   if (popupEnumIdx != 0 && !modalVisible) {
     switch (popupEnumIdx) {
@@ -1358,6 +1372,8 @@ async function init() {
     // if a popup is visible, wait for user ack
     btnModalOk.addEventListener("click", () => {
       hideModal();
+      // Prevent the same popup from re-opening while we're waiting for backend to clear it
+      popupAckInFlight = true;
       // tell backend to clear popup in statestore
       sendSessionEvent("ack_popup");
     });
@@ -1366,8 +1382,9 @@ async function init() {
   if (btnModalCancel) {
     btnModalCancel.addEventListener("click", () => {
       hideModal();
+      popupAckInFlight = true;
       // If canceling overwrite, tell backend to clear popup + stay put
-      sendSessionEvent("cancel_popup"); // TODO: clear popup/handle on backend...
+      sendSessionEvent("cancel_popup");
     });
   }
 }

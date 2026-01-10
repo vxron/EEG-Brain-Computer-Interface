@@ -88,7 +88,7 @@ std::chrono::milliseconds StimulusController_C::getCurrentBlockTime() const {
     return time;
 }
 
-void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState){
+void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState, UIStateEvent_E ev){
     // placeholders for state store variables
     int currSeq = 0;
     int currId = 0;
@@ -116,10 +116,15 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState)
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz.store(0, std::memory_order_release);
             stateStoreRef_->g_freq_hz_e.store(TestFreq_None, std::memory_order_release);
-            //stateStoreRef_->g_ui_popup.store(UIPopup_None);
             // reset hardware page
             std::lock_guard<std::mutex> lock(stateStoreRef_->signal_stats_mtx);
             stateStoreRef_->SignalStats = SignalStats_s{}; //reset 
+
+            // only transition from pending training is to home, so this covers all cases
+            if(ev == UIStateEvent_TrainingFailed){
+                // want to show popup saying training failed
+                stateStoreRef_->g_ui_popup.store(UIPopup_TrainJobFailed);
+            }
             break;
         }
         
@@ -350,13 +355,6 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             // TODO: any fault cases
             break;
 
-        case UIState_Pending_Training:
-            if(ev == UIStateEvent_TrainingFailed){
-                // want to show popup saying training failed
-                stateStoreRef_->g_ui_popup.store(UIPopup_TrainJobFailed);
-            }
-            break;
-    
         case UIState_Active_Run:
         // idk yet whether or not we want to be clearing here !
             //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
@@ -380,7 +378,7 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
 			onStateExit(state_, ev);
             prevState_ = state_;
 			state_ = t.to;
-			onStateEnter(prevState_, state_);
+			onStateEnter(prevState_, state_, ev);
             return;
 		}
 	}
@@ -394,7 +392,7 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     UIStateEvent_E currEvent = stateStoreRef_->g_ui_event.exchange(UIStateEvent_None, std::memory_order_acq_rel);
     if(currEvent != UIStateEvent_None){
         LOG_ALWAYS("SC: detected UI event=" << static_cast<int>(currEvent));
-        
+
         // special case where user is trying to press a btn that they shouldn't be allowed yet
         // want to rtn event w 'invalid' tag
         if(currEvent == UIStateEvent_UserPushesStartRun){
@@ -470,26 +468,41 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
             
         }
 
-        if(currEvent == UIStateEvent_UserCancelsPopup && awaiting_calib_overwrite_confirm_){
-            // popup in question is for 'session name already exists' detected
-            // cancels means don't transition to calib
-            awaiting_calib_overwrite_confirm_ = false; 
-            return std::nullopt; // swallow transition from calib options -> calib 
+        // repoll current popup val to make sure we don't break on stale awaiting_* vals
+        auto popup = stateStoreRef_->g_ui_popup.load(std::memory_order_acquire);
+
+        if(currEvent == UIStateEvent_UserCancelsPopup){
+            // always hide popup on user cancel
+            stateStoreRef_->g_ui_popup.store(UIPopup_None, std::memory_order_release);
+            
+            // handling special cases
+            if(popup == UIPopup_ConfirmOverwriteCalib && awaiting_calib_overwrite_confirm_){
+                // popup in question is for 'session name already exists' detected
+                // cancels in this context means don't transition to calib from calib_options
+                awaiting_calib_overwrite_confirm_ = false; 
+            }
+            return std::nullopt; // swallow transition 
         }
 
-        if(currEvent == UIStateEvent_UserAcksPopup && awaiting_calib_overwrite_confirm_){
-            // clear flag
-            awaiting_calib_overwrite_confirm_ = false;
-            // proceed into Instructions exactly like the original submit would have
-            LOG_ALWAYS("SC: popup ack -> remap to StartCalibFromOptions (awaiting_highfreq_confirm_)");
-            return UIStateEvent_UserPushesStartCalibFromOptions; // corresponding to state transition row
-        }
-
-        // check other popup on calib options page
-        if(currEvent == UIStateEvent_UserAcksPopup && awaiting_highfreq_confirm_){
-            awaiting_highfreq_confirm_ = false;
-            LOG_ALWAYS("SC: popup ack -> remap to StartCalibFromOptions (awaiting_highfreq_confirm_)");
-            return UIStateEvent_UserPushesStartCalibFromOptions;
+        if(currEvent == UIStateEvent_UserAcksPopup){
+            // always clear popup on user ack or cancel, regardless of transition
+            stateStoreRef_->g_ui_popup.store(UIPopup_None, std::memory_order_release);
+            
+            // handling special cases
+            if(popup == UIPopup_ConfirmOverwriteCalib && awaiting_calib_overwrite_confirm_){
+                // clear flag
+                awaiting_calib_overwrite_confirm_ = false;
+                // proceed into Instructions exactly like the original submit would have
+                return UIStateEvent_UserPushesStartCalibFromOptions; // corresponding to state transition row
+            }
+            else if (popup == UIPopup_ConfirmHighFreqOk && awaiting_highfreq_confirm_){
+                awaiting_highfreq_confirm_ = false;
+                return UIStateEvent_UserPushesStartCalibFromOptions;
+            }
+            else {
+                // no transition needed
+                return std::nullopt;
+            }
         }
 
         return currEvent;
@@ -542,12 +555,11 @@ std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     return std::nullopt;  // no event this iteration
 }
 
-// if it's calib -> return -1 if the freq doesn't match and just skip that freq in training protocol. 
 int StimulusController_C::checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int desiredTestFreq){
     int flag = 0;
-    // require state to be transitional (don't want to be checking in middle of active mode) but connection must be established
-    if(state_ == UIState_Active_Calib || state_ == UIState_Active_Run || state_ == UIState_None){
-        return -1;
+    // only call from instructions in calib mode
+    if (state_ != UIState_Instructions && state_ != UIState_Run_Options) {
+        return -1; // not a safe time/state to adjust or validate
     }
     int refresh = stateStoreRef_->g_refresh_hz.load(std::memory_order_acquire);
     while(refresh % desiredTestFreq != 0){
@@ -585,7 +597,7 @@ void StimulusController_C::runUIStateMachine(){
     logger::tlabel = "StimulusController";
     LOG_ALWAYS("SC: starting in state=" << static_cast<int>(state_));
     // Optional: publish initial state
-    onStateEnter(UIState_None, state_);
+    //onStateEnter(UIState_None, state_);
 
     // is_stopped_ lets us cleanly exit loop operation
     while(!is_stopped_){

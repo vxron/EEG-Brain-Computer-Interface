@@ -44,7 +44,7 @@ private:
 
     std::optional<UIStateEvent_E> detectEvent();
     void processEvent(UIStateEvent_E ev);
-    void onStateEnter(UIState_E prevState, UIState_E newState);
+    void onStateEnter(UIState_E prevState, UIState_E newState, UIStateEvent_E ev);
     void onStateExit(UIState_E state, UIStateEvent_E ev);
     void runHomeWindow();
     void runActiveCalibWindow();
