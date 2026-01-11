@@ -21,6 +21,7 @@
 #include <fstream>
 #include "utils/SignalQualityAnalyzer.h"
 #include <filesystem>
+#include <ctime>
 #include "utils/SessionPaths.hpp"
 
 #ifdef USE_EEG_FILTERS
@@ -31,7 +32,7 @@
 #include "acq/FakeAcquisition.h"
 #endif
 
-constexpr bool TEST_MODE = 1;
+constexpr bool TEST_MODE = 0;
 
 // Global "please stop" flag set by Ctrl+C (SIGINT) to shut down cleanly
 static std::atomic<bool> g_stop{false};
@@ -181,6 +182,8 @@ try{
     // Track which session these files belong to so we can reopen when session changes
     std::string active_session_id;
     std::string active_data_dir;
+    bool settings_written = false;
+    std::string settings_written_session_id;
     
     // follow the session the stim controller created
     auto refresh_active_session_paths = [&]() -> bool {
@@ -204,11 +207,170 @@ try{
 
         active_session_id = sid;
         active_data_dir   = ddir;
+        settings_written = false; // need to write
+        settings_written_session_id.clear();
 
         LOG_ALWAYS("consumer: switched logging session to "
                    << "session_id=" << active_session_id
                    << " data_dir=" << active_data_dir);
 
+        return true;
+    };
+
+    auto ensure_settings_meta_written = [&]() -> bool {
+        if (settings_written && settings_written_session_id == active_session_id) return true;
+
+        if (!refresh_active_session_paths()) return false;
+        if (active_session_id.empty() || active_data_dir.empty()) return false;
+
+        namespace fs = std::filesystem;
+        fs::path out_path = fs::path(active_data_dir) / "settings_meta.json";
+
+        std::ofstream js(out_path, std::ios::out | std::ios::trunc);
+        if (!js.is_open()) {
+            LOG_ALWAYS("ERROR: failed to open " << out_path.string());
+            return false;
+        }
+
+        // Timestamp
+        const std::time_t now = std::time(nullptr);
+
+        // Snapshot key session info
+        std::string subject_id, session_id;
+        {
+            std::lock_guard<std::mutex> lock(stateStoreRef.currentSessionInfo.mtx_);
+            subject_id = stateStoreRef.currentSessionInfo.g_active_subject_id;
+            session_id = stateStoreRef.currentSessionInfo.g_active_session_id;
+        }
+
+        // Snapshot settings (atomics)
+        SettingTrainArch_E train_arch =
+            stateStoreRef.settings.train_arch_setting.load(std::memory_order_acquire);
+
+        SettingCalibData_E calib_data =
+            stateStoreRef.settings.calib_data_setting.load(std::memory_order_acquire);
+
+        SettingStimMode_E stim_mode =
+            stateStoreRef.settings.stim_mode.load(std::memory_order_acquire);
+
+        SettingWaveform_E waveform =
+            stateStoreRef.settings.waveform.load(std::memory_order_acquire);
+
+        // snapshot selected frequency pool 
+        std::array<TestFreq_E, 6> selected_freqs_e{};
+        int selected_n = 0;
+        {
+            std::lock_guard<std::mutex> lk(stateStoreRef.settings.selected_freq_array_mtx);
+            selected_freqs_e = stateStoreRef.settings.selected_freqs_e;
+            selected_n = stateStoreRef.settings.selected_freqs_n.load(std::memory_order_acquire);
+        }
+
+        // Channels
+        int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
+        if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
+
+        // Window config
+        const std::size_t winLen = window.winLen;
+        const std::size_t winHop = window.winHop;
+
+        // Trim
+        const std::size_t trim_scans_each_side = 40;
+        const std::size_t trim_samples_each_side = trim_scans_each_side * static_cast<std::size_t>(n_ch_local);
+
+        // Backend flags
+#ifdef ACQ_BACKEND_FAKE
+        const char* backend = "FAKE";
+#else
+        const char* backend = "HARDWARE";
+#endif
+
+#ifdef USE_EEG_FILTERS
+        const bool use_filters = true;
+#else
+        const bool use_filters = false;
+#endif
+
+        // Write JSON manually
+        js << "{\n";
+        js << "  \"subject_id\": " << std::quoted(subject_id) << ",\n";
+        js << "  \"session_id\": " << std::quoted(session_id) << ",\n";
+        js << "  \"written_unix\": " << static_cast<long long>(now) << ",\n";
+
+        js << "  \"acq\": {\n";
+        js << "    \"backend\": " << std::quoted(backend) << ",\n";
+        js << "    \"test_mode\": " << (TEST_MODE ? "true" : "false") << ",\n";
+        js << "    \"use_eeg_filters\": " << (use_filters ? "true" : "false") << "\n";
+        js << "  },\n";
+
+        js << "  \"settings\": {\n";
+        js << "    \"train_arch\": " << std::quoted(TrainArchEnumToString(train_arch)) << ",\n";
+        js << "    \"calib_data_policy\": " << std::quoted(CalibDataEnumToString(calib_data)) << ",\n";
+        js << "    \"stim_mode\": " << std::quoted(StimModeEnumToString(stim_mode)) << ",\n";
+        js << "    \"waveform\": " << std::quoted(WaveformEnumToString(waveform)) << ",\n";
+        js << "    \"selected_freqs_n\": " << selected_n << ",\n";
+        js << "    \"selected_freqs_e\": [";
+        {
+            bool first = true;
+            int emitted = 0;
+            for (int i = 0; i < 6 && emitted < selected_n; ++i) {
+                TestFreq_E f = selected_freqs_e[static_cast<size_t>(i)];
+                if (f == TestFreq_None) continue;
+                if (!first) js << ", ";
+                js << static_cast<int>(f);
+                first = false;
+                ++emitted;
+            }
+        }
+        js << "],\n";
+        js << "    \"selected_freqs_hz\": [";
+        {
+            bool first = true;
+            int emitted = 0;
+            for (int i = 0; i < 6 && emitted < selected_n; ++i) {
+                TestFreq_E f = selected_freqs_e[static_cast<size_t>(i)];
+                if (f == TestFreq_None) continue;
+                if (!first) js << ", ";
+                js << TestFreqEnumToInt(f);
+                first = false;
+                ++emitted;
+            }
+        }
+        js << "]\n";
+        js << "  },\n";
+
+
+        js << "  \"channels\": {\n";
+        js << "    \"n_channels\": " << n_ch_local << ",\n";
+        js << "    \"labels\": [";
+        for (int ch = 0; ch < n_ch_local; ++ch) {
+            if (ch) js << ", ";
+            js << std::quoted(stateStoreRef.eeg_channel_labels[ch]);
+        }
+        js << "],\n";
+
+        js << "    \"enabled\": [";
+        for (int ch = 0; ch < n_ch_local; ++ch) {
+            if (ch) js << ", ";
+            js << (stateStoreRef.eeg_channel_enabled[ch] ? "true" : "false");
+        }
+        js << "]\n";
+        js << "  },\n";
+
+        js << "  \"windowing\": {\n";
+        js << "    \"win_len_samples\": " << winLen << ",\n";
+        js << "    \"win_hop_samples\": " << winHop << ",\n";
+        js << "    \"trim_samples_each_side\": " << trim_samples_each_side << "\n";
+        js << "  }\n";
+
+        js << "}\n";
+
+        js.flush();
+        js.close();
+
+        settings_written = true;
+        settings_written_session_id = active_session_id;
+
+        LOG_ALWAYS("wrote " << out_path.string());
         return true;
     };
 
@@ -519,6 +681,9 @@ try{
         if(currState == UIState_Active_Calib || currState == UIState_NoSSVEP_Test) {
             if (!ensure_csv_open_window()) {
                 continue; // must be open for logging
+            }
+            if (!ensure_settings_meta_written()) {
+                LOG_ALWAYS("WARN: could not write settings_meta.json");
             }
 
             ++tick_count_per_session; // these are the ticks we log in the calib data file

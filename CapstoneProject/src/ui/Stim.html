@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-9" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-10" />
   </head>
   <body>
     <div class="app-shell">
@@ -310,49 +310,313 @@
           <!-- SETTINGS VIEW -->
           <section id="view-settings" class="view hidden">
             <h2>Settings</h2>
-            <p class="view-lead">Personalize your BCI experience.</p>
+            <p class="view-lead">
+              Configure your BCI training parameters and stimulus frequencies
+            </p>
 
             <div class="settings-grid">
+              <!-- Left Column: Training Settings -->
               <div class="settings-card">
-                <h3>Training Architecture</h3>
-                <p class="muted">
-                  Choose which AI model pipeline the Python entrypoint runs.
-                </p>
+                <h3>Training Configuration</h3>
 
-                <label class="field">
-                  <span>Architecture</span>
-                  <select id="set-train-arch">
-                    <!-- values MUST match backend enum SettingTrainArch_E -->
-                    <option value="1">Support Vector Machine (SVM)</option>
-                    <option value="0">Convolutional Neural Net (CNN)</option>
+                <div class="setting-group">
+                  <label for="set-train-arch">
+                    Model Architecture
+                    <span class="help-text"
+                      >AI model structure for classification</span
+                    >
+                  </label>
+                  <select id="set-train-arch" class="setting-select">
+                    <option value="1">SVM (Support Vector Machine)</option>
+                    <option value="0">
+                      CNN (Convolutional Neural Network)
+                    </option>
                   </select>
-                </label>
+                </div>
+
+                <div class="setting-group">
+                  <label for="set-calib-data">
+                    Calibration Data
+                    <span class="help-text"
+                      >Which data to use for training</span
+                    >
+                  </label>
+                  <select id="set-calib-data" class="setting-select">
+                    <option value="0">Most Recent Session Only</option>
+                    <option value="1">All Sessions (Up to 3)</option>
+                  </select>
+                </div>
+
+                <div class="setting-group">
+                  <label class="settings-label" for="set-waveform">
+                    Waveform
+                    <span class="help-text">How the oscillation is shaped</span>
+                  </label>
+                  <select id="set-waveform" class="setting-select">
+                    <option value="square">Square</option>
+                    <option value="sine">Sinusoid</option>
+                  </select>
+                </div>
+
+                <div class="setting-group">
+                  <label class="settings-label" for="set-modulation">
+                    Modulation
+                    <span class="help-text">What property is modulated</span>
+                  </label>
+                  <select id="set-modulation" class="setting-select">
+                    <option value="flicker">Flicker (Brightness)</option>
+                    <option value="grow">Grow / Shrink (Scale)</option>
+                  </select>
+                </div>
               </div>
 
+              <!-- Right Column: Frequency Selection -->
               <div class="settings-card">
-                <h3>Calibration Data Policy</h3>
-                <p class="muted">
-                  Choose what data Python should use during training.
+                <h3>Calibration Frequencies</h3>
+
+                <p class="freq-instruction">
+                  Select <strong>up to 6 frequencies</strong> for calibration.
+                  Choose well-separated values for best accuracy.
                 </p>
 
-                <label class="field">
-                  <span>Calibration data</span>
-                  <select id="set-calib-data">
-                    <!-- values MUST match backend enum SettingCalibData_E -->
-                    <option value="0">Latest session only</option>
-                    <option value="1">All sessions for subject</option>
-                  </select>
-                </label>
+                <div class="freq-grid">
+                  <!-- 8-12 Hz: Low/Alpha band -->
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="0"
+                      data-hz="8"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">8 Hz</span>
+                      <span class="freq-tag band-low">Low</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="1"
+                      data-hz="9"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">9 Hz</span>
+                      <span class="freq-tag band-low">Low</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="2"
+                      data-hz="10"
+                      checked
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">10 Hz</span>
+                      <span class="freq-tag recommended">Peak</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="3"
+                      data-hz="11"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">11 Hz</span>
+                      <span class="freq-tag band-low">Low</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="4"
+                      data-hz="12"
+                      checked
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">12 Hz</span>
+                      <span class="freq-tag band-med">Med</span>
+                    </span>
+                  </label>
+
+                  <!-- 13-18 Hz: Medium band -->
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="5"
+                      data-hz="13"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">13 Hz</span>
+                      <span class="freq-tag band-med">Med</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="6"
+                      data-hz="14"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">14 Hz</span>
+                      <span class="freq-tag band-med">Med</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="7"
+                      data-hz="15"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">15 Hz</span>
+                      <span class="freq-tag recommended">Peak</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="8"
+                      data-hz="16"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">16 Hz</span>
+                      <span class="freq-tag band-med">Med</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="9"
+                      data-hz="17"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">17 Hz</span>
+                      <span class="freq-tag band-med">Med</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="10"
+                      data-hz="18"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">18 Hz</span>
+                      <span class="freq-tag band-med">Med</span>
+                    </span>
+                  </label>
+
+                  <!-- 20-35 Hz: High band -->
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="11"
+                      data-hz="20"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">20 Hz</span>
+                      <span class="freq-tag band-high">High</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="12"
+                      data-hz="25"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">25 Hz</span>
+                      <span class="freq-tag band-high">High</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="13"
+                      data-hz="30"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">30 Hz</span>
+                      <span class="freq-tag band-high">High</span>
+                    </span>
+                  </label>
+
+                  <label class="freq-checkbox">
+                    <input
+                      type="checkbox"
+                      name="freq-select"
+                      value="14"
+                      data-hz="35"
+                    />
+                    <span class="freq-label">
+                      <span class="freq-hz">35 Hz</span>
+                      <span class="freq-tag band-high">High</span>
+                    </span>
+                  </label>
+                </div>
+
+                <div id="freq-warning" class="freq-warning">2 selected</div>
               </div>
             </div>
 
-            <div class="settings-foot">
-              <div id="settings-status" class="pill pill-soft">—</div>
+            <!-- Compact Research Tips -->
+            <div class="settings-card tips-card">
+              <h3>Frequency Selection Tips</h3>
+              <div class="tips-grid">
+                <div class="tip">
+                  <strong>Best Response:</strong> 10 Hz (low band) and 15-18 Hz
+                  (medium band)
+                </div>
+                <div class="tip">
+                  <strong>Avoid Harmonics:</strong> Don't pair 7 Hz with 14 Hz,
+                  or 10 Hz with 20 Hz
+                </div>
+                <div class="tip">
+                  <strong>Comfortable:</strong> Higher frequencies (20+ Hz) are
+                  less visible and more comfortable
+                </div>
+                <div class="tip">
+                  <strong>Good Sets:</strong> Try 9/14/22 Hz or 10/15/20 Hz for
+                  balanced performance
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-footer">
+              <div id="settings-status" class="settings-status"></div>
               <div class="button-row">
                 <button id="btn-settings-back" class="btn secondary">
                   Back
                 </button>
-                <button id="btn-settings-save" class="btn primary">Save</button>
+                <button id="btn-settings-save" class="btn primary">
+                  Save Settings
+                </button>
               </div>
             </div>
           </section>
@@ -504,6 +768,6 @@
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-18"></script>
+    <script src="Stim.js?v=20251119-19"></script>
   </body>
 </html>
