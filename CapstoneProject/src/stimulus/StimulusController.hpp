@@ -15,7 +15,7 @@ STIMULUS CONTROLLER : writer
 // SINGLETON
 class StimulusController_C{
 public:
-    explicit StimulusController_C(StateStore_s* stateStoreRef, std::optional<trainingProto_S> trainingProtocol = std::nullopt);
+    explicit StimulusController_C(StateStore_s* stateStoreRef);
     UIState_E getUIState() const {return state_;};
     std::chrono::milliseconds getCurrentBlockTime() const;
     void runUIStateMachine();
@@ -42,6 +42,7 @@ private:
     bool awaiting_calib_overwrite_confirm_ = false; // do we need to double check w user to enter calib sess?
     bool awaiting_highfreq_confirm_ = false;
 
+    void rebuild_protocol_from_settings();
     std::optional<UIStateEvent_E> detectEvent();
     void processEvent(UIStateEvent_E ev);
     void onStateEnter(UIState_E prevState, UIState_E newState, UIStateEvent_E ev);
