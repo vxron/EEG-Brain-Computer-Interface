@@ -47,4 +47,65 @@ void json_extract_fail(const char* context,
 }
 
 
+
+// Parse int array from JSON body for input like "selected_freqs_e":[1,2,3]
+bool extract_json_int_array_limited(const std::string& body,
+                                          const char* key_with_quotes,
+                                          std::vector<int>& out,
+                                          int max_elems)
+{
+    out.clear();
+    if (max_elems <= 0) return true;
+
+    auto p = body.find(key_with_quotes);
+    if (p == std::string::npos) return false;
+
+    p = body.find('[', p);
+    if (p == std::string::npos) return false;
+
+    auto q = body.find(']', p);
+    if (q == std::string::npos || q <= p) return false;
+
+    int val = 0;
+    bool in_num = false;
+    bool neg = false;
+
+    for (size_t i = p + 1; i < q; ++i) {
+        char c = body[i];
+
+        if (c == '-' && !in_num) {
+            neg = true;
+            in_num = true;
+            val = 0;
+            continue;
+        }
+
+        if (std::isdigit((unsigned char)c)) {
+            if (!in_num) {
+                in_num = true;
+                neg = false;
+                val = 0;
+            }
+            val = val * 10 + (c - '0');
+        } else {
+            if (in_num) {
+                out.push_back(neg ? -val : val);
+                if ((int)out.size() >= max_elems) return true;
+                in_num = false;
+                neg = false;
+                val = 0;
+            }
+        }
+    }
+
+    if (in_num) {
+        out.push_back(neg ? -val : val);
+    }
+
+    if ((int)out.size() > max_elems) out.resize(max_elems);
+    return true;
+}
+
+
+
 }
