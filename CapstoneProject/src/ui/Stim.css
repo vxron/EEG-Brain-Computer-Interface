@@ -192,18 +192,21 @@ body {
   top: 1.5rem;
   right: 1.5rem;
   z-index: 1000;
+  pointer-events: auto;
 
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  max-width: min(240px, 42vw);
+  white-space: nowrap;
 
   flex: 0 0 auto; /* override .btn flex */
   padding: 0.6rem 1.4rem;
   border-radius: 999px;
   border: none;
 
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: clamp(0.82rem, 1.6vw, 0.95rem);
+  padding: clamp(0.5rem, 1.6vw, 0.6rem) clamp(1rem, 3vw, 1.4rem);
   letter-spacing: 0.03em;
 
   background: linear-gradient(135deg, #f973b7, #8b5cf6);
@@ -340,6 +343,17 @@ body {
   transform: translateY(6px); /* subtle slide down */
 }
 
+/* During stim swaps (calib/instructions/no_ssvep), DISABLE per-view transitions */
+body.stim-swap .view {
+  transition: none !important;
+  transform: none !important;
+}
+body.stim-swap .view.hidden {
+  display: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+
 .view h2 {
   margin: 0 0 6px;
   font-size: 1rem;
@@ -376,25 +390,111 @@ body {
   gap: 36px;
 }
 
-.flicker-block {
+/* Shared left/right target layout used by BOTH Run and Neutral */
+.targets-stage.dual {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--targets-gap, 36px);
+  padding: 0 var(--targets-pad-x, 8vw);
+  width: 100%;
+  min-height: var(--targets-min-h, 260px);
+}
+
+/* Shared sizing primitive */
+.targets-stage .target {
+  width: var(--target-size, 220px);
+  height: var(--target-size, 220px);
+}
+
+/* Default non-fullscreen can be smaller */
+body:not(.fullscreen-mode) {
+  --targets-pad-x: 3vw;
+  --target-size: 170px;
+}
+
+/* FLICKER BLOCKS */
+
+/* Calibration uses a target wrapper so flicker-block can stay 100% */
+.calib-target {
   width: 140px;
   height: 140px;
-  border-radius: 24px;
-  background: radial-gradient(circle at top left, #38bdf8, #1d4ed8);
+}
+.calib-flicker {
+  width: 100%;
+  height: 100%;
+}
+
+.flicker-block {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: clamp(18px, 18%, 28px);
   display: flex;
   justify-content: center;
   align-items: center;
-  font-size: 2.2rem;
-  font-weight: 500;
+  font-size: clamp(1.2rem, 3.2vw, 2.2rem);
+  font-weight: 650;
+  user-select: none;
+  -webkit-user-select: none;
+
+  --g1: #38bdf8;
+  --g2: #1d4ed8;
+
+  /* flicker brightness target (JS drives this) */
+  --stim-brightness: 1;
+}
+
+.flicker-block::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+
+  background: radial-gradient(circle at top left, var(--g1), var(--g2));
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.9);
+
+  /* Flicker only the background layer */
+  filter: brightness(var(--stim-brightness));
+  transition: filter 0s;
+}
+
+.flicker-block > * {
+  position: relative;
+  z-index: 1;
 }
 
 .arrow-left {
-  background: radial-gradient(circle at top left, #f97316, #c026d3);
+  --g1: #60a5fa;
+  --g2: #2563eb;
 }
 
 .arrow-right {
-  background: radial-gradient(circle at top right, #22c55e, #6366f1);
+  --g1: #93c5fd;
+  --g2: #4f46e5;
+}
+
+.freq-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+
+  padding: 4px 10px;
+  border-radius: 999px;
+
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(2, 6, 23, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 /* PILLS & LOG */
@@ -439,6 +539,62 @@ body {
 
 .log-entry {
   color: var(--text-muted);
+}
+
+/* RUN MODE: two columns with label above each stimulus */
+
+/* column wrapper */
+#view-active-run .target-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* label above stimulus */
+#view-active-run .target-action-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 6px 12px;
+  border-radius: 999px;
+
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+
+  color: rgba(226, 232, 240, 0.92);
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.25);
+
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
+  user-select: none;
+  white-space: nowrap;
+}
+
+#view-active-run .target-col:first-child .target-action-label {
+  border-color: rgba(99, 102, 241, 0.28);
+}
+#view-active-run .target-col:last-child .target-action-label {
+  border-color: rgba(236, 72, 153, 0.22);
+}
+
+#view-active-run .freq-badge {
+  display: none !important;
+}
+
+@media (max-width: 700px) {
+  #view-active-run .target-action-label {
+    font-size: 0.78rem;
+    padding: 5px 10px;
+  }
+  #view-active-run .target-col {
+    gap: 8px;
+  }
 }
 
 /* HARDWARE CHECKS PAGE & PLOTTING */
@@ -936,6 +1092,270 @@ body {
   border: 1px solid rgba(99, 102, 241, 0.25);
 }
 
+/* NoSSVEP / Neutral Runtime Mimic */
+
+#view-neutral {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+
+  background: radial-gradient(
+      circle at 20% 15%,
+      rgba(99, 102, 241, 0.1),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at 80% 30%,
+      rgba(236, 72, 153, 0.06),
+      transparent 60%
+    ),
+    var(--bg-elevated);
+}
+
+#view-neutral .viewHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+#view-neutral .viewTitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+#view-neutral .viewSubtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* Triple stage layout for no_ssvep state only */
+.targets-stage.triple {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--targets-gap, 36px);
+  padding: 0 var(--targets-pad-x, 8vw);
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: var(--targets-min-h, 260px);
+}
+
+.targets-stage.triple .target {
+  width: var(--target-size, 220px);
+  height: var(--target-size, 220px);
+  flex: 0 0 auto;
+}
+
+/* Center instruction card */
+#neutral-instructions * {
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: auto;
+}
+
+#neutral-instructions.neutral-instructions {
+  flex: 1 1 auto;
+  min-width: 260px;
+  max-width: min(640px, 44vw);
+  border-radius: var(--radius-lg);
+
+  /* flatter, cleaner surface */
+  background: rgba(2, 6, 23, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.45);
+
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
+  padding: 14px 16px 12px;
+  overflow: hidden;
+
+  text-align: left;
+}
+
+#neutral-instruction-list .instructionEmphasis {
+  color: var(--text-main);
+}
+
+/* Tip reads like a hint/footnote */
+#neutral-note.instructionNote {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  font-size: 0.82rem;
+  color: rgba(203, 213, 225, 0.7);
+}
+
+#neutral-note.instructionNote b,
+#neutral-note.instructionNote strong {
+  color: rgba(236, 72, 153, 0.9);
+}
+
+/* divider lines in triple layout */
+.targets-stage.triple #neutral-instructions {
+  position: relative;
+}
+
+.targets-stage.triple #neutral-instructions::before,
+.targets-stage.triple #neutral-instructions::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  width: 1px;
+  background: rgba(148, 163, 184, 0.12);
+  pointer-events: none;
+}
+.targets-stage.triple #neutral-instructions::before {
+  left: 0;
+}
+.targets-stage.triple #neutral-instructions::after {
+  right: 0;
+}
+
+.neutral-alert {
+  position: relative;
+  border-radius: 14px;
+  padding: 14px 14px 12px;
+  margin-bottom: 14px;
+
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.4);
+}
+
+.neutral-alert::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 4px;
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.85);
+  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.1);
+}
+
+.neutral-alert-title {
+  padding: 0;
+  border: none;
+  background: transparent;
+
+  font-size: 0.92rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.96);
+  margin-left: 10px; /* account for accent bar */
+}
+
+.neutral-alert-sub {
+  margin-top: 8px;
+  margin-left: 10px;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  color: rgba(226, 232, 240, 0.78);
+}
+
+#neutral-instruction-list.instructionList {
+  list-style: none;
+  padding-left: 0;
+  margin: 12px 0 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: rgba(226, 232, 240, 0.8);
+}
+
+#neutral-instruction-list.instructionList li {
+  position: relative;
+  padding-left: 18px;
+  margin: 10px 0;
+}
+
+#neutral-instruction-list.instructionList li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.62em;
+
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+
+  background: rgba(167, 139, 250, 0.8);
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.09);
+}
+
+/* --- RESPONSIVE BEHAVIOR --- */
+
+/* only allow scrolling if viewport height is tight */
+@media (max-height: 720px) {
+  #neutral-instructions.neutral-instructions {
+    max-height: 60vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+}
+
+/* if it does scroll, make the scrollbar subtle */
+#neutral-instructions.neutral-instructions::-webkit-scrollbar {
+  width: 10px;
+}
+#neutral-instructions.neutral-instructions::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  border: 2px solid rgba(2, 6, 23, 0.5);
+}
+#neutral-instructions.neutral-instructions::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Medium widths: keep targets big-ish but tighten padding */
+@media (max-width: 1100px) {
+  .targets-stage.triple {
+    padding: 0 4vw;
+    gap: 20px;
+  }
+  #neutral-instructions.neutral-instructions {
+    max-width: min(520px, 56vw);
+  }
+}
+
+/* Small widths: stack (targets row + instructions card) to avoid squish/overflow */
+@media (max-width: 600px) {
+  .targets-stage.triple {
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    padding: 0 18px 12px;
+    gap: 14px;
+  }
+
+  #no-left-arrow,
+  #no-right-arrow {
+    order: 1;
+  }
+
+  #neutral-instructions.neutral-instructions {
+    order: 2;
+    width: min(680px, 100%);
+    max-width: none;
+    max-height: none;
+  }
+
+  /* In stacked mode, remove the vertical divider lines */
+  .targets-stage.triple #neutral-instructions::before,
+  .targets-stage.triple #neutral-instructions::after {
+    display: none;
+  }
+}
+
 /* PENDING TRAINING LOADING BAR & POPUP OVERLAY */
 
 /* when overlay is visible, prevent scroll & clicks */
@@ -1201,37 +1621,57 @@ body.fullscreen-mode .app-shell {
   padding: 0; /* no outer margin */
 }
 
-/* Remove inner padding/borders for the run view in fullscreen so it truly spans edge to edge */
-body.fullscreen-mode.run-mode #view-active-run {
+/* Fullscreen target-based views (Run + Neutral) share the same behavior */
+body.fullscreen-mode.targets-mode #view-active-run,
+body.fullscreen-mode.targets-mode #view-neutral {
   border-radius: 0;
   border: none;
   box-shadow: none;
-
-  /* keep nice padding like other views */
   padding: 18px 24px 24px;
-
-  /* let header sit on top, flicker area grow below */
   display: flex;
   flex-direction: column;
+  /* caps size so ultrawide monitors don't create huge stimuli */
+  --target-size: clamp(76px, 8.5vw, 128px);
+  --targets-gap: clamp(22px, 8vw, 96px);
+  --targets-pad-x: clamp(14px, 5.5vw, 110px);
 }
 
-/* Title + lead text: natural size at top */
-body.fullscreen-mode.run-mode #view-active-run h2,
-body.fullscreen-mode.run-mode #view-active-run .view-lead {
+/* Keep header sized naturally */
+body.fullscreen-mode.targets-mode #view-neutral .viewHeader,
+body.fullscreen-mode.targets-mode #view-active-run h2,
+body.fullscreen-mode.targets-mode #view-active-run .view-lead {
   flex: 0 0 auto;
 }
 
-/* Flicker stage fills the remaining area and pushes blocks apart */
-body.fullscreen-mode.run-mode .flicker-stage.dual {
+/* Let the stage fill remaining space */
+body.fullscreen-mode.targets-mode #view-active-run .targets-stage.dual,
+body.fullscreen-mode.targets-mode #view-neutral .targets-stage.triple {
   flex: 1 1 auto;
   width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 8vw; /* horizontal margin; tweak if needed */
+  min-height: 0;
 }
 
-/* Keep blocks large but responsive */
-body.fullscreen-mode.run-mode .flicker-block {
-  width: min(20vw, 220px);
-  height: min(20vw, 220px);
+/* TRANSITION OVERLAY DIV */
+
+/* Overlay used only during view swaps */
+#view-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+
+  background: rgba(2, 6, 23, 0.1);
+
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+#view-transition.on {
+  opacity: 1;
+}
+#view-transition.hidden {
+  display: none;
 }

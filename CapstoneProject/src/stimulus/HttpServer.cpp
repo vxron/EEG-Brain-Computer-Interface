@@ -174,14 +174,10 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserPushesStartRun;
                 } 
                 else if (action == "ack_popup"){
-                    // clear popup when user presses OK
                     ev = UIStateEvent_UserAcksPopup;
-                    stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
                 } 
                 else if (action == "cancel_popup") {
-                    // clear popup (and event should be swallowed)
                     ev = UIStateEvent_UserCancelsPopup;
-                    stateStoreRef_.g_ui_popup.store(UIPopup_None, std::memory_order_release);
                 } 
                 else if (action == "hardware_checks"){
                     ev = UIStateEvent_UserPushesHardwareChecks;

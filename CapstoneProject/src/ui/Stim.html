@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-7" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-9" />
   </head>
   <body>
     <div class="app-shell">
@@ -131,7 +131,9 @@
               responses.
             </p>
             <div class="flicker-stage">
-              <div id="calib-block" class="flicker-block"></div>
+              <div class="target calib-target">
+                <div id="calib-block" class="flicker-block calib-flicker"></div>
+              </div>
             </div>
           </section>
 
@@ -141,9 +143,28 @@
             <p class="view-lead">
               Look at the left or right arrow to turn pages backward or forward.
             </p>
-            <div class="flicker-stage dual">
-              <div id="left-arrow" class="flicker-block arrow-left">←</div>
-              <div id="right-arrow" class="flicker-block arrow-right">→</div>
+            <div class="targets-stage dual">
+              <!-- LEFT -->
+              <div class="target-col">
+                <div class="target-action-label">Turn page back</div>
+
+                <div class="target">
+                  <div class="flicker-block arrow-left" id="run-left">
+                    <span class="arrow">←</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- RIGHT -->
+              <div class="target-col">
+                <div class="target-action-label">Turn page forward</div>
+
+                <div class="target">
+                  <div class="flicker-block arrow-right" id="run-right">
+                    <span class="arrow">→</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -216,6 +237,72 @@
                 <button id="btn-calib-submit" class="btn primary">
                   Start Calibration
                 </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- NoSSVEP / Neutral VIEW: mimic runtime -->
+          <section
+            id="view-neutral"
+            class="view hidden view-neutral neutral"
+            aria-label="Neutral / Rest state"
+          >
+            <header class="viewHeader">
+              <h2 class="viewTitle">Neutral (Rest)</h2>
+              <p class="viewSubtitle">Relax. Do anything non-flickering.</p>
+            </header>
+
+            <!-- Stage: 3-item flex row (Left target • Center instructions • Right target) -->
+            <div id="neutral-stage" class="targets-stage triple">
+              <div
+                id="no-left-arrow"
+                class="target runtime-target flicker-block arrow-left"
+                role="img"
+                aria-label="Left stimulus (do not focus)"
+              >
+                <span id="no-left-freq" class="freq-badge">— Hz</span>
+              </div>
+
+              <!-- CENTER instructions -->
+              <div
+                id="neutral-instructions"
+                class="neutral-instructions"
+                aria-label="Neutral instructions"
+              >
+                <div
+                  class="neutral-alert"
+                  role="note"
+                  aria-label="Critical instruction"
+                >
+                  <div class="neutral-alert-title">
+                    DO NOT FOCUS ON THE FLICKERS
+                  </div>
+                  <div class="neutral-alert-sub">
+                    Treat them like background. Look anywhere else.
+                  </div>
+                </div>
+
+                <ul id="neutral-instruction-list" class="instructionList">
+                  <li>
+                    Look anywhere you want: screen or not screen (but nothing
+                    flickering).
+                  </li>
+                  <li>Look around the room.</li>
+                  <li>Close your eyes.</li>
+                </ul>
+
+                <p id="neutral-note" class="instructionNote">
+                  Tip: Read a book!
+                </p>
+              </div>
+
+              <div
+                id="no-right-arrow"
+                class="target runtime-target flicker-block arrow-right"
+                role="img"
+                aria-label="Right stimulus (do not focus)"
+              >
+                <span id="no-right-freq" class="freq-badge">— Hz</span>
               </div>
             </div>
           </section>
@@ -411,9 +498,12 @@
       </main>
     </div>
 
+    <!-- Overlay div for clean transitions -->
+    <div id="view-transition" class="view-transition hidden"></div>
+
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-17"></script>
+    <script src="Stim.js?v=20251119-18"></script>
   </body>
 </html>

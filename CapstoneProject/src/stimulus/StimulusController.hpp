@@ -32,6 +32,7 @@ private:
     SW_Timer_C currentWindowTimer_;
     std::chrono::milliseconds activeBlockDur_ms_{0};
     std::chrono::milliseconds restBlockDur_ms_{0};
+    std::chrono::milliseconds noSSVEPBlockDur_ms_{0};
 
     std::string pending_subject_name_ = ""; // for calib mode quick access
     EpilepsyRisk_E pending_epilepsy_ = EpilepsyRisk_Unknown; 
@@ -43,7 +44,7 @@ private:
 
     std::optional<UIStateEvent_E> detectEvent();
     void processEvent(UIStateEvent_E ev);
-    void onStateEnter(UIState_E prevState, UIState_E newState);
+    void onStateEnter(UIState_E prevState, UIState_E newState, UIStateEvent_E ev);
     void onStateExit(UIState_E state, UIStateEvent_E ev);
     void runHomeWindow();
     void runActiveCalibWindow();
