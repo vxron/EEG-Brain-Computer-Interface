@@ -11,6 +11,9 @@ const elStatusUiState = document.getElementById("status-ui-state");
 const elStatusActiveSubject = document.getElementById("status-active-subject");
 const elStatusModel = document.getElementById("status-model");
 
+// Refresh info
+let measuredRefreshHz = 60; // updated in init()
+
 // Flicker animation DOM elements
 const elCalibBlock = document.getElementById("calib-block");
 const elRunLeft = document.getElementById("run-left");
@@ -316,9 +319,9 @@ function updateSettingsFromState(data) {
   });
 
   updateFreqCounterUI();
+  updateFreqCompatibilityIndicators();
 
   settingsInitiallyUpdated = true; // rising edge
-
   if (elSettingsStatus) elSettingsStatus.textContent = "";
 }
 
@@ -884,6 +887,12 @@ function startPolling() {
 }
 
 // =========== 7) MONITOR REFRESH MEASUREMENT (POST /ready) ==========================
+// Helper: check if freq is integer divisor of refresh
+function isFreqOptimalForRefresh(freqHz, refreshHz) {
+  if (!refreshHz || !freqHz) return true; // unknown = assume ok
+  return refreshHz % freqHz === 0;
+}
+
 // Avg durationMs takes in period which will be used to measure refresh freq
 // returned as a promise (from callback -> outer fn)
 function estimateRefreshHz(durationMs = 1000) {
@@ -937,9 +946,46 @@ async function sendRefresh(refreshHz) {
   }
 }
 
-// ===================== 9) FLICKER STIMULUS CLASS ===================================
-let measuredRefreshHz = 60; // will be overwritten by estimateRefreshHz() in init
+// Call this when settings page loads AND when refresh is measured
+function updateFreqCompatibilityIndicators() {
+  const refresh = measuredRefreshHz;
 
+  freqInputs.forEach((inp) => {
+    const hz = Number(inp.dataset.hz);
+    const checkbox = inp.closest(".freq-checkbox");
+    const isOptimal = isFreqOptimalForRefresh(hz, refresh);
+
+    // Add/remove visual indicator
+    if (isOptimal) {
+      checkbox.classList.add("freq-optimal");
+      checkbox.classList.remove("freq-suboptimal");
+    } else {
+      checkbox.classList.remove("freq-optimal");
+      checkbox.classList.add("freq-suboptimal");
+    }
+  });
+  // Update instruction text to mention refresh rate
+  const freqInstruction = document.querySelector(".freq-instruction");
+  if (freqInstruction) {
+    const optimal = [];
+    freqInputs.forEach((inp) => {
+      const hz = Number(inp.dataset.hz);
+      if (isFreqOptimalForRefresh(hz, refresh)) optimal.push(hz);
+    });
+
+    if (optimal.length < freqInputs.length) {
+      freqInstruction.innerHTML = `
+        Select <strong>up to 6 frequencies</strong> for calibration.
+        <br><small style="opacity: 0.7">
+          Your ${refresh} Hz display works best with: ${optimal.join(", ")} Hz
+          <span style="color: var(--accent)">●</span>
+        </small>
+      `;
+    }
+  }
+}
+
+// ===================== 9) FLICKER STIMULUS CLASS ===================================
 class FlickerStimulus {
   constructor(el, refreshHz) {
     // el = dom element
@@ -1560,6 +1606,10 @@ async function init() {
   const estimated_refresh = await estimateRefreshHz();
   measuredRefreshHz = estimated_refresh; // global write
   await sendRefresh(estimated_refresh);
+  // Update compatibility indicators now that we know refresh
+  if (viewSettings && !viewSettings.classList.contains("hidden")) {
+    updateFreqCompatibilityIndicators();
+  }
 
   // create stimulus objects now that we know refresh
   calibStimulus = new FlickerStimulus(elCalibBlock, measuredRefreshHz);
