@@ -10,6 +10,9 @@
 #include <sstream>
 #include <iomanip>
 #include <cctype>
+#include <vector>
+#include <algorithm>
+#include <mutex>
 #include "../utils/JsonUtils.hpp"
 
 // Constructor
@@ -36,6 +39,7 @@ void HttpServer_C::write_json(httplib::Response& res, std::string_view json_body
     res.status = 200;
 }
 
+// HTTP-Server SPECIFIC Json helpers...
 // Allow methods/headers letting UI make POST requests
 void HttpServer_C::handle_options_and_set(const httplib::Request& req, httplib::Response& res) {
     set_cors_headers(res);
@@ -103,7 +107,13 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     // Settings so JS renders correct toggle on entry
     int calib_data_setting_e = stateStoreRef_.settings.calib_data_setting.load(std::memory_order_acquire);
     int train_arch_e = stateStoreRef_.settings.train_arch_setting.load(std::memory_order_acquire);
+    int stim_mode_e = stateStoreRef_.settings.stim_mode.load(std::memory_order_acquire);
+    int waveform_e  = stateStoreRef_.settings.waveform.load(std::memory_order_acquire);
+    int sel_n = stateStoreRef_.settings.selected_freqs_n.load(std::memory_order_acquire);
+    if (sel_n < 0) sel_n = 0;
+    if (sel_n > 6) sel_n = 6;
 
+    std::unique_lock<std::mutex> lock3(stateStoreRef_.settings.selected_freq_array_mtx);
     // 2) build json string manually
     std::ostringstream oss;
     oss << "{"
@@ -122,10 +132,21 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
         << "\"active_subject_id\":\""    << active_subject_id                   << "\","
         << "\"settings\":{"
             << "\"calib_data_setting\":" << calib_data_setting_e << ","
-            << "\"train_arch_setting\":" << train_arch_e
+            << "\"train_arch_setting\":" << train_arch_e << ","
+            << "\"stim_mode\":"          << stim_mode_e << ","
+            << "\"waveform\":"           << waveform_e  << ","
+            << "\"selected_freqs_n\":"   << sel_n << ","
+            << "\"selected_freqs_e\":[";
+                for (int i = 0; i < sel_n; ++i) {
+                    int e = static_cast<int>(stateStoreRef_.settings.selected_freqs_e[i]);
+                    oss << e;
+                    if (i < sel_n - 1) oss << ",";
+                }
+            oss << "]"
         << "}"
-        << "}";
-
+    << "}";
+    
+    lock3.unlock();
     std::string json_snapshot = oss.str();
     
     // 3) send json back to client through res
@@ -224,6 +245,65 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                         return;
                     }
                     stateStoreRef_.settings.train_arch_setting.store(static_cast<SettingTrainArch_E>(arch_i), std::memory_order_release);
+
+                    int stim_mode_i = 0; // default flicker
+                    if (!JSON::extract_json_int(body, "\"stim_mode\"", stim_mode_i)) {
+                        stim_mode_i = 0; // it's fine we can continue
+                    }
+                    if (stim_mode_i < 0 || stim_mode_i > 1) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "stim_mode");
+                        return;
+                    }
+                    stateStoreRef_.settings.stim_mode.store(static_cast<SettingStimMode_E>(stim_mode_i), std::memory_order_release);
+
+                    int waveform_i = 0; // default square
+                    if (!JSON::extract_json_int(body, "\"waveform\"", waveform_i)) {
+                        waveform_i = 0; // it's fine we can continue
+                    }
+                    if (waveform_i < 0 || waveform_i > 1) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "waveform");
+                        return;
+                    }
+                    stateStoreRef_.settings.waveform.store(static_cast<SettingWaveform_E>(waveform_i), std::memory_order_release);
+
+                    std::vector<int> freq_es;
+                    if (!JSON::extract_json_int_array_limited(body, "\"selected_freqs_e\"", freq_es, 6)) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "selected_freqs_e");
+                        return;
+                    }
+                    if (freq_es.empty()) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "selected_freqs_e");
+                        return;
+                    }
+
+                    // basic validation: enum range + uniqueness
+                    auto is_valid_freq_e = [](int e) {
+                        return (e >= 1 && e <= 15); // TODO: adjust as enum grows
+                    };
+
+                    std::sort(freq_es.begin(), freq_es.end());
+                    freq_es.erase(std::unique(freq_es.begin(), freq_es.end()), freq_es.end());
+
+                    if ((int)freq_es.size() > 6) freq_es.resize(6);
+
+                    for (int e : freq_es) {
+                        if (!is_valid_freq_e(e)) {
+                            write_json_error(res, 400, "missing_or_invalid_field", "selected_freqs_e");
+                            return;
+                        }
+                    }
+
+                    // publish selected freqs to state store
+                    stateStoreRef_.settings.selected_freq_array_mtx.lock();
+                    for (int i = 0; i < 6; ++i) {
+                        if (i < (int)freq_es.size()) {
+                            stateStoreRef_.settings.selected_freqs_e[i] = static_cast<TestFreq_E>(freq_es[i]);
+                        } else {
+                            stateStoreRef_.settings.selected_freqs_e[i] = TestFreq_None;
+                        }
+                    }
+                    stateStoreRef_.settings.selected_freq_array_mtx.unlock();
+                    stateStoreRef_.settings.selected_freqs_n.store((int)freq_es.size(), std::memory_order_release);
                 }
                 else {
                     // Unknown action (error)

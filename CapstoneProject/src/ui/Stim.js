@@ -13,10 +13,8 @@ const elStatusModel = document.getElementById("status-model");
 
 // Flicker animation DOM elements
 const elCalibBlock = document.getElementById("calib-block");
-const elLeftArrow = document.getElementById("left-arrow");
-const elRightArrow = document.getElementById("right-arrow");
-const elRunLeftFreq = document.getElementById("run-left-freq");
-const elRunRightFreq = document.getElementById("run-right-freq");
+const elRunLeft = document.getElementById("run-left");
+const elRunRight = document.getElementById("run-right");
 
 // VIEW CONTAINERS FOR DIFF WINDOWS
 const viewHome = document.getElementById("view-home");
@@ -113,7 +111,16 @@ const btnSettingsBack = document.getElementById("btn-settings-back");
 const btnSettingsSave = document.getElementById("btn-settings-save");
 const selTrainArch = document.getElementById("set-train-arch");
 const selCalibData = document.getElementById("set-calib-data");
+const selWaveform = document.getElementById("set-waveform");
+const selModulation = document.getElementById("set-modulation");
 const elSettingsStatus = document.getElementById("settings-status");
+const elFreqWarning = document.getElementById("freq-warning");
+const freqInputs = Array.from(
+  document.querySelectorAll('input[name="freq-select"]')
+);
+const FREQ_MAX_SELECT = 6;
+let currentWaveform = "square"; // "square" | "sine"
+let currentModulation = "flicker"; // "flicker" | "grow"
 let settingsInitiallyUpdated = false;
 
 // No SSVEP Block DOM elements
@@ -339,6 +346,64 @@ async function transitionToView({
     document.body.classList.remove("stim-swap");
     viewTransitionInFlight = false;
   }
+}
+
+// (8) FREQUENCY GRID HELPERS (on settings page for selecting freqs) -> live counter
+function getSelectedHzFromGrid() {
+  return freqInputs
+    .filter((i) => i.checked)
+    .map((i) => Number(i.dataset.hz))
+    .filter((x) => Number.isFinite(x) && x > 0);
+}
+
+function setSelectedHzToGrid(selectedHz) {
+  const set = new Set((selectedHz || []).map(Number));
+  freqInputs.forEach((i) => {
+    const hz = Number(i.dataset.hz);
+    i.checked = set.has(hz);
+  });
+  updateFreqCounterUI();
+}
+
+function updateFreqCounterUI() {
+  if (!elFreqWarning) return;
+  const n = getSelectedHzFromGrid().length;
+
+  // text
+  elFreqWarning.textContent = n === 1 ? "1 selected" : `${n} selected`;
+
+  // color semantic
+  elFreqWarning.style.color =
+    n === 0
+      ? "rgba(250, 204, 21, 0.95)"
+      : n <= FREQ_MAX_SELECT
+      ? "var(--success)"
+      : "var(--danger)";
+}
+
+function attachFreqGridHandlers() {
+  freqInputs.forEach((inp) => {
+    inp.addEventListener("change", (e) => {
+      const n = getSelectedHzFromGrid().length;
+
+      // enforce max select
+      if (n > FREQ_MAX_SELECT) {
+        // undo this click
+        inp.checked = false;
+        updateFreqCounterUI();
+        showModal(
+          "Too many frequencies selected",
+          `Please select up to ${FREQ_MAX_SELECT} frequencies.`,
+          { okText: "OK" }
+        );
+        return;
+      }
+
+      updateFreqCounterUI();
+    });
+  });
+
+  updateFreqCounterUI();
 }
 
 // ==================== 4) CONNECTION STATUS HELPER =====================
@@ -568,9 +633,6 @@ function updateUiFromState(data) {
     const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
     const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
     startRunFlicker(runLeftHz, runRightHz);
-    if (elRunLeftFreq) elRunLeftFreq.textContent = `${fmtFreqHz(runLeftHz)} Hz`;
-    if (elRunRightFreq)
-      elRunRightFreq.textContent = `${fmtFreqHz(runRightHz)} Hz`;
   } else if (stimState === 4 /* Saved Sessions */) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
@@ -1368,8 +1430,8 @@ async function init() {
 
   // create stimulus objects now that we know refresh
   calibStimulus = new FlickerStimulus(elCalibBlock, measuredRefreshHz);
-  leftStimulus = new FlickerStimulus(elLeftArrow, measuredRefreshHz);
-  rightStimulus = new FlickerStimulus(elRightArrow, measuredRefreshHz);
+  leftStimulus = new FlickerStimulus(elRunLeft, measuredRefreshHz);
+  rightStimulus = new FlickerStimulus(elRunRight, measuredRefreshHz);
   neutralLeftStimulus = new FlickerStimulus(
     elNeutralLeftArrow,
     measuredRefreshHz
@@ -1381,6 +1443,7 @@ async function init() {
 
   stimAnimationLoop();
   startPolling();
+  attachFreqGridHandlers();
 
   // Add button event listeners
   btnStartCalib.addEventListener("click", () => {
