@@ -192,18 +192,21 @@ body {
   top: 1.5rem;
   right: 1.5rem;
   z-index: 1000;
+  pointer-events: auto;
 
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  max-width: min(240px, 42vw);
+  white-space: nowrap;
 
   flex: 0 0 auto; /* override .btn flex */
   padding: 0.6rem 1.4rem;
   border-radius: 999px;
   border: none;
 
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: clamp(0.82rem, 1.6vw, 0.95rem);
+  padding: clamp(0.5rem, 1.6vw, 0.6rem) clamp(1rem, 3vw, 1.4rem);
   letter-spacing: 0.03em;
 
   background: linear-gradient(135deg, #f973b7, #8b5cf6);
@@ -338,6 +341,17 @@ body {
   opacity: 0;
   pointer-events: none;
   transform: translateY(6px); /* subtle slide down */
+}
+
+/* During stim swaps (calib/instructions/no_ssvep), DISABLE per-view transitions */
+body.stim-swap .view {
+  transition: none !important;
+  transform: none !important;
+}
+body.stim-swap .view.hidden {
+  display: none !important;
+  opacity: 1 !important;
+  transform: none !important;
 }
 
 .view h2 {
@@ -1085,6 +1099,18 @@ body:not(.fullscreen-mode) {
   flex-direction: column;
   gap: 10px;
   overflow: hidden;
+
+  background: radial-gradient(
+      circle at 20% 15%,
+      rgba(99, 102, 241, 0.1),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at 80% 30%,
+      rgba(236, 72, 153, 0.06),
+      transparent 60%
+    ),
+    var(--bg-elevated);
 }
 
 #view-neutral .viewHeader {
@@ -1107,9 +1133,8 @@ body:not(.fullscreen-mode) {
   color: var(--text-muted);
 }
 
-/* --- TRIPLE STAGE LAYOUT FOR NO_SSVEP_STATE only --- */
+/* Triple stage layout for no_ssvep state only */
 .targets-stage.triple {
-  /* Keep same “targets-mode” behavior/variables as dual stage */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1126,7 +1151,7 @@ body:not(.fullscreen-mode) {
   flex: 0 0 auto;
 }
 
-/* Center instruction card sizing */
+/* Center instruction card */
 #neutral-instructions * {
   min-width: 0;
   overflow-wrap: break-word;
@@ -1139,22 +1164,32 @@ body:not(.fullscreen-mode) {
   min-width: 260px;
   max-width: min(640px, 44vw);
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(167, 139, 250, 0.16);
-  background: rgba(2, 6, 23, 0.55);
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.5);
+
+  /* flatter, cleaner surface */
+  background: rgba(2, 6, 23, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.45);
+
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
   padding: 14px 16px 12px;
   overflow: hidden;
-  text-align: center;
+
+  text-align: left;
 }
 
 #neutral-instruction-list .instructionEmphasis {
   color: var(--text-main);
 }
 
+/* Tip reads like a hint/footnote */
 #neutral-note.instructionNote {
-  margin: 12px 0 0;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
   font-size: 0.82rem;
-  color: rgba(203, 213, 225, 0.72);
+  color: rgba(203, 213, 225, 0.7);
 }
 
 #neutral-note.instructionNote b,
@@ -1162,6 +1197,7 @@ body:not(.fullscreen-mode) {
   color: rgba(236, 72, 153, 0.9);
 }
 
+/* divider lines in triple layout */
 .targets-stage.triple #neutral-instructions {
   position: relative;
 }
@@ -1183,58 +1219,63 @@ body:not(.fullscreen-mode) {
   right: 0;
 }
 
-/* Neutral center card: nicer glass + cleaner typography */
 .neutral-alert {
+  position: relative;
   border-radius: 14px;
-  padding: 12px 14px;
-  margin-bottom: 12px;
-  background: linear-gradient(
-    135deg,
-    rgba(139, 92, 246, 0.14),
-    rgba(236, 72, 153, 0.06)
-  );
-  border: 1px solid rgba(167, 139, 250, 0.22);
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+  padding: 14px 14px 12px;
+  margin-bottom: 14px;
+
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.4);
+}
+
+.neutral-alert::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 4px;
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.85);
+  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.1);
 }
 
 .neutral-alert-title {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(236, 72, 153, 0.1);
-  border: 1px solid rgba(236, 72, 153, 0.22);
-  font-size: 0.95rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
+  padding: 0;
+  border: none;
+  background: transparent;
+
+  font-size: 0.92rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.96);
+  margin-left: 10px; /* account for accent bar */
 }
 
 .neutral-alert-sub {
   margin-top: 8px;
+  margin-left: 10px;
   font-size: 0.88rem;
-  color: rgba(226, 232, 240, 0.8);
-  line-height: 1.35;
+  line-height: 1.4;
+  color: rgba(226, 232, 240, 0.78);
 }
 
-/* Custom purple dot bullets */
 #neutral-instruction-list.instructionList {
   list-style: none;
   padding-left: 0;
-  margin: 10px auto 0;
-  font-size: 0.92rem;
+  margin: 12px 0 0;
+  font-size: 0.9rem;
   line-height: 1.6;
-  color: rgba(226, 232, 240, 0.82);
-  text-align: left;
-  display: inline-block;
+  color: rgba(226, 232, 240, 0.8);
 }
 
 #neutral-instruction-list.instructionList li {
   position: relative;
   padding-left: 18px;
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 #neutral-instruction-list.instructionList li::before {
@@ -1247,8 +1288,8 @@ body:not(.fullscreen-mode) {
   height: 8px;
   border-radius: 999px;
 
-  background: rgba(167, 139, 250, 0.95);
-  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.12);
+  background: rgba(167, 139, 250, 0.8);
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.09);
 }
 
 /* --- RESPONSIVE BEHAVIOR --- */
@@ -1287,7 +1328,7 @@ body:not(.fullscreen-mode) {
 }
 
 /* Small widths: stack (targets row + instructions card) to avoid squish/overflow */
-@media (max-width: 900px) {
+@media (max-width: 600px) {
   .targets-stage.triple {
     flex-direction: column;
     justify-content: flex-start;
@@ -1608,4 +1649,29 @@ body.fullscreen-mode.targets-mode #view-neutral .targets-stage.triple {
   flex: 1 1 auto;
   width: 100%;
   min-height: 0;
+}
+
+/* TRANSITION OVERLAY DIV */
+
+/* Overlay used only during view swaps */
+#view-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+
+  background: rgba(2, 6, 23, 0.1);
+
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+#view-transition.on {
+  opacity: 1;
+}
+#view-transition.hidden {
+  display: none;
 }

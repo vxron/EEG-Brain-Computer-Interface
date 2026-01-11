@@ -26,6 +26,8 @@ const viewActiveRun = document.getElementById("view-active-run");
 const viewRunOptions = document.getElementById("view-run-options");
 const viewSavedSessions = document.getElementById("view-saved-sessions");
 const viewHardware = document.getElementById("view-hardware-checks");
+const elViewTransition = document.getElementById("view-transition"); // overlay div!!
+let viewTransitionInFlight = false;
 
 // Instructions specific fields for instruction windows (fillable by state store info)
 const elInstrBlockId = document.getElementById("instr-block-id");
@@ -68,7 +70,7 @@ let popupAckInFlight = false; // prevent races ie. give time to backend to clear
 
 // Timer for browser requests to server
 let pollInterval = null;
-let pollActive = true;
+let pollInFlight = false; // guard against pollStateOnce overlaps
 
 // FlickerStimulus instances
 let calibStimulus = null;
@@ -291,6 +293,54 @@ function updateSettingsFromState(data) {
   if (elSettingsStatus) elSettingsStatus.textContent = "";
 }
 
+// (7) handle transitions during calib protocol so it's smoother using overlay div
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+async function transitionToView({
+  viewName,
+  stopStimuli = () => {},
+  startStimuli = () => {},
+  fadeOutMs = 90, // hadeel if u wanna play with these bs numbers at some point i would love that bcuz i am going insane crazy :)
+  holdMs = 35,
+  fadeInDelayMs = 25,
+} = {}) {
+  if (viewTransitionInFlight) return;
+  viewTransitionInFlight = true;
+  try {
+    document.body.classList.add("stim-swap");
+    stopStimuli(); // stop any flicker BEFORE swapping
+
+    // show overlay + fade in
+    if (elViewTransition) {
+      elViewTransition.classList.remove("hidden");
+      requestAnimationFrame(() => elViewTransition.classList.add("on"));
+    }
+
+    await sleep(fadeOutMs);
+
+    // swap view underneath
+    showView(viewName);
+
+    await sleep(holdMs);
+
+    // start stimuli AFTER the UI is stable
+    await sleep(fadeInDelayMs);
+    startStimuli();
+
+    // fade overlay out
+    if (elViewTransition) {
+      elViewTransition.classList.remove("on");
+      await sleep(fadeOutMs);
+      elViewTransition.classList.add("hidden");
+    }
+  } finally {
+    // restore regular transitions
+    document.body.classList.remove("stim-swap");
+    viewTransitionInFlight = false;
+  }
+}
+
 // ==================== 4) CONNECTION STATUS HELPER =====================
 // UI should show red/green based on C++ server connection status
 function setConnectionStatus(ok) {
@@ -471,28 +521,46 @@ function updateUiFromState(data) {
     neutralPairChosen = false;
   }
 
+  // general detection of rising edges for any state
+  const stateChanged = prevStimState !== stimState;
+
   // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = no_ssvep, 11 = None
   if (stimState === 3 /* Home */ || stimState === 11 /* None */) {
-    stopCalibFlicker();
-    stopRunFlicker();
+    stopAllStimuli();
     stopHardwareMode();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     settingsInitiallyUpdated = false; // reset flag
     showView("home");
   } else if (stimState === 2 /* Instructions */) {
-    stopCalibFlicker();
-    stopRunFlicker();
+    stopAllStimuli();
     applyBodyMode({ fullscreen: true, targets: false, run: false });
-    showView("instructions");
     // Update text based on block and freq
     elInstrBlockId.textContent = data.block_id ?? "-";
     elInstrFreqHz.textContent = fmtFreqHz(data.freq_hz) + " Hz";
-    // TODO: customize elInstructionsText based on block / upcoming freq
-  } else if (stimState === 1 /* Active_Calib */) {
-    showView("active_calib");
+    if (stateChanged) {
+      transitionToView({
+        viewName: "instructions",
+        stopStimuli: stopAllStimuli,
+        startStimuli: () => {},
+      });
+    } else {
+      showView("instructions");
+    }
+  }
+  // TODO: customize elInstructionsText based on block / upcoming freq
+  else if (stimState === 1 /* Active_Calib */) {
     applyBodyMode({ fullscreen: true, targets: true, run: false });
     const calibFreqHz = data.freq_hz ?? 0;
-    startCalibFlicker(calibFreqHz);
+    if (stateChanged) {
+      transitionToView({
+        viewName: "active_calib",
+        stopStimuli: stopAllStimuli,
+        startStimuli: () => startCalibFlicker(calibFreqHz),
+      });
+    } else {
+      showView("active_calib");
+      startCalibFlicker(calibFreqHz); // keep it running
+    }
   } else if (stimState === 0 /* Active_Run */) {
     applyBodyMode({ fullscreen: true, targets: true, run: true });
     showView("active_run");
@@ -504,15 +572,13 @@ function updateUiFromState(data) {
     if (elRunRightFreq)
       elRunRightFreq.textContent = `${fmtFreqHz(runRightHz)} Hz`;
   } else if (stimState === 4 /* Saved Sessions */) {
-    stopCalibFlicker();
-    stopRunFlicker();
+    stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     showView("saved_sessions");
 
     // TODO: render session list from backend
   } else if (stimState === 5 /* Run Options */) {
-    stopCalibFlicker();
-    stopRunFlicker();
+    stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     showView("run_options");
 
@@ -532,8 +598,7 @@ function updateUiFromState(data) {
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     showView("calib_options");
   } else if (stimState == 8) {
-    stopCalibFlicker();
-    stopRunFlicker();
+    stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
   } else if (stimState == 9) {
     applyBodyMode({ fullscreen: false, targets: false, run: false });
@@ -552,12 +617,22 @@ function updateUiFromState(data) {
     }
 
     applyBodyMode({ fullscreen: true, targets: true, run: false });
-    showView("no_ssvep");
-    startNeutralFlicker(neutralLeftHz, neutralRightHz);
+
     if (elNoSSVEPLeftFreq)
       elNoSSVEPLeftFreq.textContent = `${neutralLeftHz} Hz`;
     if (elNoSSVEPRightFreq)
       elNoSSVEPRightFreq.textContent = `${neutralRightHz} Hz`;
+
+    if (stateChanged) {
+      transitionToView({
+        viewName: "no_ssvep",
+        stopStimuli: stopAllStimuli,
+        startStimuli: () => startNeutralFlicker(neutralLeftHz, neutralRightHz),
+      });
+    } else {
+      showView("no_ssvep");
+      startNeutralFlicker(neutralLeftHz, neutralRightHz);
+    }
   }
 
   // pending training overlay driven purely by state
@@ -632,22 +707,32 @@ function updateUiFromState(data) {
 
 // ============= 6) START POLLING FOR GET/STATE ===============
 async function pollStateOnce() {
+  // Guard: don't start a new poll if the previous one hasn't finished yet
+  // (prevents overlapping fetches, out-of-order UI updates)
+  if (pollInFlight) return;
+  pollInFlight = true;
+
   let res;
   try {
     // 5.1.) use fetch() to send GET request to '${API_BASE}/state'
     res = await fetch(`${API_BASE}/state`); // 'await' = non-blocking; comes back here from other tasks when ready
+
     // 5.2.) check/log response ok
     setConnectionStatus(res.ok);
     if (!res.ok) {
       logLine("GET /state failed.");
       return;
     }
+
     // 5.3.) parse json & update dom
     const data = await res.json();
     updateUiFromState(data);
     console.log("STATE:", data);
   } catch (err) {
     logLine("GET /state error: " + err);
+  } finally {
+    // Always clear the in-flight flag, even if we early-returned or threw
+    pollInFlight = false;
   }
 }
 
@@ -752,6 +837,7 @@ class FlickerStimulus {
     }
   }
   start() {
+    if (this.enabled) return; // don't reset phase every poll
     this.enabled = true;
     this.frameIdx = 0;
     if (this.el) {
@@ -778,6 +864,12 @@ class FlickerStimulus {
     // square wave: ON = bright, OFF = dim
     this.el.style.setProperty("--stim-brightness", on ? "1.3" : "0.4");
   }
+}
+
+function stopAllStimuli() {
+  stopCalibFlicker();
+  stopRunFlicker();
+  stopNeutralFlicker();
 }
 
 // ================== 10) Flicker animation starters/stoppers ==========================

@@ -202,9 +202,6 @@ try{
         if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); chunk_opened = false; }
         if (win_opened)   { csv_win.flush();   csv_win.close();   win_opened   = false; }
 
-        // reset per session window tick
-        tick_count_per_session = 0;
-
         active_session_id = sid;
         active_data_dir   = ddir;
 
@@ -271,6 +268,7 @@ try{
 
         win_opened = true;
         rows_written_win = 0;
+        tick_count_per_session = 0;   // reset index when starting this file
 
         LOG_ALWAYS("opened " << out_path.string());
         return true;
@@ -509,20 +507,26 @@ try{
         // verified it's an ok window
         ++tick_count;
         window.tick=tick_count;
-        ++tick_count_per_session;
 
         // reset before looking at state store vals
         window.isTrimmed = false;
         window.has_label = false;
         window.testFreq = TestFreq_None;
 
-        if(currState == UIState_Active_Calib ) {
+        // always check artifacts and flag bad windows
+        SignalQualityAnalyzer.check_artifact_and_flag_window(window);
+
+        if(currState == UIState_Active_Calib || currState == UIState_NoSSVEP_Test) {
+            if (!ensure_csv_open_window()) {
+                continue; // must be open for logging
+            }
+
+            ++tick_count_per_session; // these are the ticks we log in the calib data file
+            
             int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
             if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
             
-            SignalQualityAnalyzer.check_artifact_and_flag_window(window);
-
-            // trim window ends if its calibration mode (GUARD)
+            // trim window ends for training data (GUARD)
             window.trimmed_window.clear();
             window.sliding_window.get_trimmed_snapshot(window.trimmed_window,
                 40 * n_ch_local, 40 * n_ch_local);
@@ -533,13 +537,8 @@ try{
             window.has_label = (currLabel != TestFreq_None);
             // Log trimmed window (only if has label)
             if(window.has_label){
-                log_window_snapshot(window, currState, window.tick, /*use_trimmed=*/true);
+                log_window_snapshot(window, currState, tick_count_per_session, /*use_trimmed=*/true);
             }
-        }
-
-        else if(currState == UIState_Hardware_Checks) {
-            // MOVE THIS OUT -> WE SHOULD ALWAYS BE CHECKING THIS MAYBE??
-            SignalQualityAnalyzer.check_artifact_and_flag_window(window);
         }
         
         else if(currState == UIState_Active_Run){
@@ -547,7 +546,7 @@ try{
             // TODO WHEN READY: add ftr vector + make decision here for run mode
             
             // TODO: NEEDS TESTING IN RUN MODE (BCUZ WE HAVENT IMPLEMENTED THIS MODE YET)
-            SignalQualityAnalyzer.check_artifact_and_flag_window(window);
+
             // popup saying 'signal is bad, too many artifactual windows. run hardware checks' when too many bad windows detected in a certain time frame, then reset
             if(run_mode_bad_window_timer.check_timer_expired()){
                 // expired -> see if we should throw popup based on bad window counts in the 9s timeout period

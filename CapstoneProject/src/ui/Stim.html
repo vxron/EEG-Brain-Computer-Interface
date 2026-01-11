@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-7" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-9" />
   </head>
   <body>
     <div class="app-shell">
@@ -244,7 +244,7 @@
           <!-- NoSSVEP / Neutral VIEW: mimic runtime -->
           <section
             id="view-neutral"
-            class="view hidden view-neutral"
+            class="view hidden view-neutral neutral"
             aria-label="Neutral / Rest state"
           >
             <header class="viewHeader">
@@ -498,9 +498,12 @@
       </main>
     </div>
 
+    <!-- Overlay div for clean transitions -->
+    <div id="view-transition" class="view-transition hidden"></div>
+
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-17"></script>
+    <script src="Stim.js?v=20251119-18"></script>
   </body>
 </html>
