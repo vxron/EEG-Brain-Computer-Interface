@@ -388,6 +388,12 @@ body.stim-swap .view.hidden {
   opacity: 1 !important;
   transform: none !important;
 }
+/* make flickers invisible during swaps too */
+body.stim-swap .flicker-block {
+  visibility: hidden !important;
+  transition: none !important;
+  transform: none !important;
+}
 
 .view h2 {
   margin: 0 0 6px;
@@ -476,8 +482,10 @@ body:not(.fullscreen-mode) {
   --g1: #38bdf8;
   --g2: #1d4ed8;
 
-  /* flicker brightness target (JS drives this) */
-  --stim-brightness: 1;
+  --stim-brightness: 1; /* to enable flicker */
+  transform: scale(var(--stim-scale, 1));
+  transform-origin: center;
+  transition: none; /* NO transition - we control it per frame */
 }
 
 .flicker-block::before {
@@ -489,11 +497,9 @@ body:not(.fullscreen-mode) {
   background: radial-gradient(circle at top left, var(--g1), var(--g2));
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.9);
 
-  /* Flicker only the background layer */
+  /* ONLY brightness filter here, NO transform */
   filter: brightness(var(--stim-brightness));
-  transition: filter 0s;
-  transform: scale(var(--stim-scale, 1));
-  transform-origin: center;
+  transition: none; /* NO transition */
 }
 
 .flicker-block > * {

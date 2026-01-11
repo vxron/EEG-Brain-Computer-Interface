@@ -247,6 +247,23 @@ inline std::string CalibDataEnumToString(SettingCalibData_E e){
     }
 }
 
+inline std::string StimModeEnumToString(SettingStimMode_E e){
+    switch (e) {
+        case StimMode_Flicker:    return "flicker";
+        case StimMode_GrowShrink: return "grow_shrink";
+        default:                  return "Unknown";
+    }
+}
+
+inline std::string WaveformEnumToString(SettingWaveform_E e){
+    switch (e) {
+        case Waveform_Square:   return "square";
+        case Waveform_Sinusoid: return "sinusoid";
+        default:                return "Unknown";
+    }
+}
+
+
 /* END HELPERS */
 
 /* START STRUCTS */
