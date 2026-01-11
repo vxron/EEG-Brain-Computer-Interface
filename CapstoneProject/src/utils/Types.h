@@ -150,9 +150,16 @@ enum SettingTrainArch_E {
 	TrainArch_RNN, 
 };
 
-enum SettingFreqRange_E {
-	// TODO IF TIME;
+enum SettingStimMode_E : int {
+  StimMode_Flicker = 0,
+  StimMode_GrowShrink = 1,
 };
+
+enum SettingWaveform_E : int {
+  Waveform_Square = 0,
+  Waveform_Sinusoid = 1,
+};
+
 
 
 /* END ENUMS */
@@ -239,6 +246,23 @@ inline std::string CalibDataEnumToString(SettingCalibData_E e){
         default:                       return "Unknown";
     }
 }
+
+inline std::string StimModeEnumToString(SettingStimMode_E e){
+    switch (e) {
+        case StimMode_Flicker:    return "flicker";
+        case StimMode_GrowShrink: return "grow_shrink";
+        default:                  return "Unknown";
+    }
+}
+
+inline std::string WaveformEnumToString(SettingWaveform_E e){
+    switch (e) {
+        case Waveform_Square:   return "square";
+        case Waveform_Sinusoid: return "sinusoid";
+        default:                return "Unknown";
+    }
+}
+
 
 /* END HELPERS */
 
