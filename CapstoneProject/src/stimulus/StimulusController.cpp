@@ -191,16 +191,11 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
             int refresh = stateStoreRef_->g_refresh_hz.load(std::memory_order_acquire);
             int result = checkStimFreqIsIntDivisorOfRefresh(true, freq); 
             // if bad result
-            while(result == -1 && has_divisor_6_to_20(refresh)){
-                LOG_ALWAYS("SC: dropped testcase=" << static_cast<int>(freq));
-                // reasonably drop since we have other divisors
-                activeQueueIdx_++;
-                // guard against boundless incrementing
-                if ( (activeQueueIdx_ >= (int)activeBlockQueue_.size()) || (activeQueueIdx_ >= trainingProtocol_.numActiveBlocks) ) break;
-                freqToTest = activeBlockQueue_[activeQueueIdx_];
-                freq =  TestFreqEnumToInt(freqToTest);
-                result = checkStimFreqIsIntDivisorOfRefresh(true, freq);
-            } // otherwise accept "bad" test freq vis a vis refresh
+            if(result == -1 && has_divisor_6_to_20(refresh)){
+                // we just log a warning but use the frequency anyway
+                LOG_ALWAYS("SC: freq=" << freq << " Hz not optimal for " 
+                   << refresh << " Hz refresh, but proceeding anyway");
+            }
     
             // storing
             stateStoreRef_->g_freq_hz_e.store(freqToTest, std::memory_order_release);

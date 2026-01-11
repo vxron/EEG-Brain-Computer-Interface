@@ -1242,6 +1242,60 @@ body:not(.fullscreen-mode) {
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
 }
 
+/* Optimal frequencies (based on refresh division) get a subtle accent glow */
+.freq-checkbox.freq-optimal {
+  position: relative;
+}
+
+.freq-checkbox.freq-optimal::after {
+  content: "●";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 0.7rem;
+  color: var(--accent);
+  opacity: 0.8;
+  animation: pulse-optimal 2s ease-in-out infinite;
+}
+
+@keyframes pulse-optimal {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Suboptimal frequencies get dimmed + warning icon */
+.freq-checkbox.freq-suboptimal {
+  opacity: 0.7;
+  position: relative;
+}
+
+.freq-checkbox.freq-suboptimal::after {
+  content: "⚠";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 0.65rem;
+  color: rgba(250, 204, 21, 0.7);
+}
+
+.freq-checkbox.freq-suboptimal:hover {
+  opacity: 0.85;
+}
+
+/* When selected, suboptimal freqs show warning more prominently */
+.freq-checkbox.freq-suboptimal:has(input:checked) {
+  border-color: rgba(250, 204, 21, 0.5);
+}
+
+.freq-checkbox.freq-suboptimal:has(input:checked)::after {
+  color: rgba(250, 204, 21, 0.95);
+}
+
 .freq-label {
   display: flex;
   flex-direction: column;
