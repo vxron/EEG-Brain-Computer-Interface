@@ -150,9 +150,16 @@ enum SettingTrainArch_E {
 	TrainArch_RNN, 
 };
 
-enum SettingFreqRange_E {
-	// TODO IF TIME;
+enum SettingStimMode_E : int {
+  StimMode_Flicker = 0,
+  StimMode_GrowShrink = 1,
 };
+
+enum SettingWaveform_E : int {
+  Waveform_Square = 0,
+  Waveform_Sinusoid = 1,
+};
+
 
 
 /* END ENUMS */

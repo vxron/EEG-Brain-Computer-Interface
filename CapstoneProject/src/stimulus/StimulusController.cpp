@@ -54,29 +54,48 @@ static const state_transition state_transition_table[] = {
 // ^todo: add popup if switching: r u sure u want to exit???
 
 
-StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef, std::optional<trainingProto_S> trainingProtocol) : state_(UIState_None), stateStoreRef_(stateStoreRef) {
-    if (trainingProtocol.has_value()){
-        trainingProto_S trainingProtocol_value = trainingProtocol.value();
-        trainingProtocol_ = trainingProtocol_value; 
-    }
-    else {
-        // default protocol
-        trainingProtocol_.activeBlockDuration_s = 15;
-        trainingProtocol_.displayInPairs = false;
-        trainingProtocol_.freqsToTest = {TestFreq_8_Hz, TestFreq_9_Hz, TestFreq_10_Hz, TestFreq_11_Hz, TestFreq_12_Hz, 
-                                         TestFreq_8_Hz, TestFreq_9_Hz, TestFreq_10_Hz, TestFreq_11_Hz, TestFreq_12_Hz}; // Two times
-        trainingProtocol_.numActiveBlocks = trainingProtocol_.freqsToTest.size();
-        trainingProtocol_.restDuration_s = 8;
-        trainingProtocol_.noSSVEPDuration_s = 12; // interleaved after each testfreq 
-        // fix to add rest protocol 
-    }
-     activeBlockQueue_ = trainingProtocol_.freqsToTest;
-     activeBlockDur_ms_ = std::chrono::milliseconds{
-     trainingProtocol_.activeBlockDuration_s * 1000 };
-     restBlockDur_ms_ = std::chrono::milliseconds{
-     trainingProtocol_.restDuration_s * 1000 }; 
-     noSSVEPBlockDur_ms_ = std::chrono::milliseconds{trainingProtocol_.noSSVEPDuration_s * 1000};    
+StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef) : state_(UIState_None), stateStoreRef_(stateStoreRef) {
+    // default protocol
+    trainingProtocol_.activeBlockDuration_s = 15;
+    trainingProtocol_.displayInPairs = false;
+    trainingProtocol_.freqsToTest = {TestFreq_8_Hz, TestFreq_11_Hz, TestFreq_14_Hz, TestFreq_17_Hz, TestFreq_20_Hz, 
+                                     TestFreq_8_Hz, TestFreq_11_Hz, TestFreq_14_Hz, TestFreq_17_Hz, TestFreq_20_Hz}; // Two times
+    trainingProtocol_.numActiveBlocks = trainingProtocol_.freqsToTest.size();
+    trainingProtocol_.restDuration_s = 8;
+    trainingProtocol_.noSSVEPDuration_s = 12; // interleaved after each testfreq 
+    activeBlockQueue_ = trainingProtocol_.freqsToTest;
+    activeBlockDur_ms_ = std::chrono::milliseconds{
+    trainingProtocol_.activeBlockDuration_s * 1000 };
+    restBlockDur_ms_ = std::chrono::milliseconds{
+    trainingProtocol_.restDuration_s * 1000 }; 
+    noSSVEPBlockDur_ms_ = std::chrono::milliseconds{trainingProtocol_.noSSVEPDuration_s * 1000};    
+}
 
+void StimulusController_C::rebuild_protocol_from_settings() {
+  int n = stateStoreRef_->settings.selected_freqs_n.load(std::memory_order_acquire);
+  n = std::clamp(n, 1, 6);
+
+  std::unique_lock<std::mutex> lock(stateStoreRef_->settings.selected_freq_array_mtx);
+  std::vector<TestFreq_E> pool;
+  pool.reserve(n);
+  for (int i=0;i<n;i++){
+    auto e = stateStoreRef_->settings.selected_freqs_e[i];
+    if (e != TestFreq_None) pool.push_back(e);
+  }
+  lock.unlock();
+  if (pool.empty()) {
+    return; // don't change default protocol from constructor
+  };
+
+  trainingProtocol_.freqsToTest.clear();
+  // repeat series twice for better SNR per class
+  for (int rep=0; rep<2; ++rep){
+    trainingProtocol_.freqsToTest.insert(trainingProtocol_.freqsToTest.end(),
+                                         pool.begin(), pool.end());
+  }
+
+  trainingProtocol_.numActiveBlocks = (int)trainingProtocol_.freqsToTest.size();
+  activeBlockQueue_ = trainingProtocol_.freqsToTest;
 }
 
 std::chrono::milliseconds StimulusController_C::getCurrentBlockTime() const {
@@ -155,6 +174,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
             // RESET MEMBERS FOR NEW SESS
             end_calib_timeout_emitted_ = false;
             activeQueueIdx_ = 0;
+            rebuild_protocol_from_settings();
             stateStoreRef_->g_ui_state.store(UIState_Calib_Options, std::memory_order_release);
             break;
         }
@@ -305,7 +325,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
         case UIState_None: {
             // “offline” / not connected / shut down
             stateStoreRef_->g_ui_state.store(UIState_None, std::memory_order_release);
-            stateStoreRef_->g_ui_popup.store(UIPopup_None);
+            stateStoreRef_->g_ui_popup.store(UIPopup_None, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             break;
         }
@@ -562,6 +582,7 @@ int StimulusController_C::checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int d
         return -1; // not a safe time/state to adjust or validate
     }
     int refresh = stateStoreRef_->g_refresh_hz.load(std::memory_order_acquire);
+    if (refresh <= 0 || desiredTestFreq <= 0) return -1;
     while(refresh % desiredTestFreq != 0){
         // not an int divisor of refresh; increase until we find
         desiredTestFreq ++;

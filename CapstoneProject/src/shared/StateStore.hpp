@@ -167,7 +167,17 @@ struct StateStore_s{
     struct Settings_s {
         std::atomic<SettingCalibData_E> calib_data_setting{CalibData_MostRecentOnly};
         std::atomic<SettingTrainArch_E> train_arch_setting{TrainArch_CNN};
-        // ... todo :,)
+        std::atomic<SettingStimMode_E> stim_mode{StimMode_Flicker};
+        std::atomic<SettingWaveform_E> waveform{Waveform_Square};
+        // frequency pool: up to 6 (fixed size array)
+        // these are the defaults:
+        std::array<TestFreq_E, 6> selected_freqs_e{
+            TestFreq_8_Hz, TestFreq_11_Hz, TestFreq_14_Hz,
+            TestFreq_17_Hz, TestFreq_20_Hz, TestFreq_None
+        };
+        // array mutation requires mtx protection
+        std::mutex selected_freq_array_mtx;
+        std::atomic<int> selected_freqs_n{5};
     };
     Settings_s settings{}; // instantiate
 
