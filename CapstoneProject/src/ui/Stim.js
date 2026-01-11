@@ -291,9 +291,31 @@ function showTrainingOverlay(show) {
 function updateSettingsFromState(data) {
   const arch = data.settings.train_arch_setting;
   const calib = data.settings.calib_data_setting;
+  const stim_mode_i = data.settings.stim_mode; // 0=flicker, 1=grow
+  const waveform_i = data.settings.waveform; // 0=square, 1=sine
 
   if (selTrainArch && arch != null) selTrainArch.value = String(arch);
   if (selCalibData && calib != null) selCalibData.value = String(calib);
+  if (selWaveform) selWaveform.value = waveform_i === 1 ? "sine" : "square";
+  if (selModulation)
+    selModulation.value = stim_mode_i === 1 ? "grow" : "flicker";
+  currentWaveform = selWaveform?.value ?? "square";
+  currentModulation = selModulation?.value ?? "flicker";
+
+  // selected freqs from backend are ENUMS 1..15
+  // grid uses checkbox.value 0..14
+  const selectedEnums = Array.isArray(data.settings.selected_freqs_e)
+    ? data.settings.selected_freqs_e.map((e) => Number(e))
+    : [];
+
+  const selectedZeroBased = new Set(selectedEnums.map((e) => e - 1)); // 1..15 -> 0..14
+
+  freqInputs.forEach((inp) => {
+    const v = Number(inp.value);
+    inp.checked = selectedZeroBased.has(v);
+  });
+
+  updateFreqCounterUI();
 
   settingsInitiallyUpdated = true; // rising edge
 
@@ -457,8 +479,6 @@ function intToLabel(enumType, integer) {
       }
     case "freq_hz_e": // must match TestFreq_E
       switch (integer) {
-        case 0:
-          return "TestFreq_None";
         case 1:
           return "TestFreq_8_Hz";
         case 2:
@@ -470,17 +490,31 @@ function intToLabel(enumType, integer) {
         case 5:
           return "TestFreq_12_Hz";
         case 6:
-          return "TestFreq_20_Hz";
+          return "TestFreq_13_Hz";
         case 7:
-          return "TestFreq_25_Hz";
+          return "TestFreq_14_Hz";
         case 8:
-          return "TestFreq_30_Hz";
+          return "TestFreq_15_Hz";
         case 9:
+          return "TestFreq_16_Hz";
+        case 10:
+          return "TestFreq_17_Hz";
+        case 11:
+          return "TestFreq_18_Hz";
+        case 12:
+          return "TestFreq_20_Hz";
+        case 13:
+          return "TestFreq_25_Hz";
+        case 14:
+          return "TestFreq_30_Hz";
+        case 15:
           return "TestFreq_35_Hz";
         case 99:
           return "TestFreq_NoSSVEP";
+        case 0:
+          return "TestFreq_None";
         default:
-          return `Unknown (${integer})`;
+          return 0;
       }
     default:
       // handle bad entries
@@ -509,30 +543,48 @@ function fmtFreqEnumLabel(enumType, intVal) {
 // HELPER FOR CHOOSING freq pair randomly in NEUTRAL (NO_SSVEP)
 // Allowed TestFreq enums for randomly selecting neutral targets
 // (exclude 0=None and 99=NoSSVEP because those are not flicker freqs)
-const NEUTRAL_TESTFREQ_ENUMS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const NEUTRAL_TESTFREQ_ENUMS = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+];
 
 function testFreqEnumToHz(e) {
   switch (e) {
     case 1:
       return 8;
     case 2:
-      return 9;
-    case 3:
       return 10;
-    case 4:
+    case 3:
       return 11;
-    case 5:
+    case 4:
       return 12;
+    case 5:
+      return 9;
     case 6:
-      return 20;
+      return 13;
     case 7:
-      return 25;
+      return 14;
     case 8:
-      return 30;
+      return 15;
     case 9:
+      return 16;
+    case 10:
+      return 17;
+    case 11:
+      return 18;
+    case 12:
+      return 20;
+    case 13:
+      return 25;
+    case 14:
+      return 30;
+    case 15:
       return 35;
+    case 99:
+      return -1; // NoSSVEP CSV marker
+    case 0:
+      return 0; // None
     default:
-      return 0; // None / invalid / NoSSVEP etc.
+      return 0;
   }
 }
 
@@ -552,6 +604,29 @@ function pickRandomNeutralHzPair() {
     leftHz: testFreqEnumToHz(leftEnum),
     rightHz: testFreqEnumToHz(rightEnum),
   };
+}
+
+// Map settings strings -> backend ints (from SettingWaveform_E and SettingStimMode_E)
+function waveformToInt(w) {
+  // backend: 0=square, 1=sine
+  return w === "sine" ? 1 : 0;
+}
+function stimModeToInt(m) {
+  // backend: 0=flicker, 1=grow
+  return m === "grow" ? 1 : 0;
+}
+
+// Convert checkbox value="0..14" -> backend enum e="1..15"
+function getSelectedFreqEnumsFromGrid() {
+  // HTML checkbox inputs have:
+  // - value: 0..14
+  // - data-hz: 8,9,10... etc (for display only)
+  const picked = freqInputs
+    .filter((i) => i.checked)
+    .map((i) => Number(i.value) + 1) // backend expects 1..15
+    .filter((e) => Number.isInteger(e));
+  picked.sort((a, b) => a - b);
+  return Array.from(new Set(picked));
 }
 
 // ============= 6) MAP STIM_WINDOW FROM STATESTORE-> view + labels in UI ===============
@@ -905,26 +980,70 @@ class FlickerStimulus {
     if (this.el) {
       this.el.style.visibility = "visible";
       this.el.style.setProperty("--stim-brightness", "1.0");
+      this.el.style.setProperty("--stim-scale", "1");
     }
   }
   stop() {
     this.enabled = false;
     this.frameIdx = 0;
     if (this.el) {
-      // Reset to neutral appearance when not flickering
+      // Reset to neutral appearance when not flickering or transforming
       this.el.style.setProperty("--stim-brightness", "1.0");
+      this.el.style.setProperty("--stim-scale", "1");
     }
   }
   // frequencymodulator
   onePeriod() {
     if (!this.enabled || !this.el || this.targetHz <= 0) return;
+
     this.frameIdx = (this.frameIdx + 1) % this.framesPerCycle;
+    const phase = (2 * Math.PI * this.frameIdx) / this.framesPerCycle;
 
-    const half = this.framesPerCycle / 2;
-    const on = this.frameIdx < half;
+    // Use global settings chosen in Settings page (kept synced from /state)
+    const waveform = currentWaveform; // "square" | "sine"
+    const modulation = currentModulation; // "flicker" | "grow"
 
-    // square wave: ON = bright, OFF = dim
-    this.el.style.setProperty("--stim-brightness", on ? "1.3" : "0.4");
+    // ======= modulation: FLICKER (brightness) =======
+    if (modulation === "flicker") {
+      let b;
+
+      if (waveform === "sine") {
+        // Sine brightness oscillation: map sin(-1..1) -> [0.4..1.3]
+        const s = (Math.sin(phase) + 1) / 2; // 0..1
+        b = 0.4 + s * (1.3 - 0.4);
+      } else {
+        // Square wave brightness: half cycle ON/OFF
+        const half = this.framesPerCycle / 2;
+        const on = this.frameIdx < half;
+        b = on ? 1.3 : 0.4;
+      }
+
+      this.el.style.setProperty("--stim-brightness", String(b));
+      // keep scale neutral
+      this.el.style.setProperty("--stim-scale", "1");
+      return;
+    }
+
+    // ======= modulation: GROW/SHRINK (scale) =======
+    if (modulation === "grow") {
+      let s;
+
+      if (waveform === "sine") {
+        // Sine scale oscillation: map sin -> [0.85..1.15]
+        const x = (Math.sin(phase) + 1) / 2; // 0..1
+        s = 0.85 + x * (1.15 - 0.85);
+      } else {
+        // Square scale toggle: [0.85, 1.15]
+        const half = this.framesPerCycle / 2;
+        const on = this.frameIdx < half;
+        s = on ? 1.15 : 0.85;
+      }
+
+      this.el.style.setProperty("--stim-scale", s.toFixed(3));
+      // keep brightness neutral
+      this.el.style.setProperty("--stim-brightness", "1.0");
+      return;
+    }
   }
 }
 
@@ -1367,13 +1486,16 @@ async function sendCalibOptionsAndStart() {
 }
 
 // special post event for settings save
-// payload: { action, train_arch, calib_data }
+// payload: { action, train_arch, calib_data, stim_mode, waveform, selected_freqs_e[] }
 async function sendSettingsAndSave() {
   const trainArchRaw = selTrainArch?.value ?? "";
   const calibDataRaw = selCalibData?.value ?? "";
 
   const trainArch = parseInt(trainArchRaw, 10);
   const calibData = parseInt(calibDataRaw, 10);
+  const waveformStr = selWaveform?.value ?? "square"; // "square" | "sine"
+  const modStr = selModulation?.value ?? "flicker"; // "flicker" | "grow"
+  const selected_freqs_e = getSelectedFreqEnumsFromGrid();
 
   // basic UI-side validation (backend still enforces)
   if (Number.isNaN(trainArch) || Number.isNaN(calibData)) {
@@ -1383,11 +1505,18 @@ async function sendSettingsAndSave() {
     );
     return;
   }
+  if (selected_freqs_e.length < 1) {
+    showModal("Missing frequencies", "Please select at least 1 frequency.");
+    return;
+  }
 
   const payload = {
     action: "set_settings",
     train_arch_setting: trainArch,
     calib_data_setting: calibData,
+    stim_mode: stimModeToInt(modStr),
+    waveform: waveformToInt(waveformStr),
+    selected_freqs_e, // int enums 1..15
   };
 
   try {
@@ -1403,6 +1532,10 @@ async function sendSettingsAndSave() {
         elSettingsStatus.textContent = `Save failed (HTTP ${res.status})`;
       return;
     }
+
+    // Apply locally right away (so flicker mode changes instantly)
+    currentWaveform = waveformStr;
+    currentModulation = modStr;
 
     logLine(
       `Settings saved (train_arch=${trainArch}, calib_data=${calibData})`
