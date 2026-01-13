@@ -19,8 +19,6 @@ session. It MUST match the CLI interface expected by C++.
 Expected args:
     --data <path>      directory containing calibration data
     --model <path>     directory where ONNX + meta.json should be written
-    --subject <str>    subject ID
-    --session <str>    session ID
     --arch <CNN|SVM>
     --calibsetting <all_sessions|most_recent_only>
 """
@@ -32,15 +30,37 @@ import sys
 from pathlib import Path
 import pandas as pd
 import numpy as np
-import torch
-from dataclasses import dataclass
 from typing import Any
+from dataclasses import dataclass
 
 import utils.utils as utils
 
 # Trainers live in trainers/
-from trainers.cnn_trainer import train_cnn, export_cnn_onnx, train_cnn_on_split
-#rom trainers.svm_trainer import train_svm, export_svm_onnx # TODO HADEEL
+from trainers.cnn_trainer import score_pair_cv_cnn, train_final_cnn_and_export
+# from trainers.svm_trainer # TODO HADEEL
+
+# ^ THOSE ARE THE "API" FUNCS WE USE from our trainers. 
+# Here are more details on the signature they must take.
+# 1) score_pair_cv_<arch>
+#    - inputs: REQUIRED FOR ALL* 
+#        - X_pair
+#        - y_pair
+#        - folds: premade cross-val folds for cross-val training (shared between archs)
+#        - n_ch: spatial dimension 
+#        - n_time: time dimension
+#        - freq_a_hz
+#        - freq_b_hz
+#        - (...) any addtn args as required per specific model implementation
+#    - return: ModelMetrics (REQUIRED FOR ALL* see utils dataclass)
+# 2) train_final_<arch>_and_export
+#    - inputs: REQUIRED FOR ALL* 
+#        - X_pair
+#        - y_pair
+#        - n_ch: spatial dimension 
+#        - n_time: time dimension
+#        - out_onnx_path: Path
+#        - (...) any addtn args as required per specific model implementation
+#    - return: FinalTrainResults (REQUIRED FOR ALL* see utils dataclass)  
 
 # ------------------------------
 # PATH ROOTS (repo-anchored)
@@ -49,7 +69,6 @@ THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[3]
 DATA_ROOT = REPO_ROOT / "data"
 MODELS_ROOT = REPO_ROOT / "models"
-
 
 # ------------------------------
 # CLI ARG PARSER
@@ -74,20 +93,6 @@ def get_args():
     )
 
     parser.add_argument(
-        "--subject",
-        type=str,
-        required=True,
-        help="Subject ID for this training run.",
-    )
-
-    parser.add_argument(
-        "--session",
-        type=str,
-        required=True,
-        help="Session ID for this training run.",
-    )
-
-    parser.add_argument(
         "--arch",
         type=str,
         required=True,
@@ -102,93 +107,23 @@ def get_args():
         choices=["all_sessions", "most_recent_only"],
         help="Choice of calib data setting (all sessions or most recent).",
     )
-
-    # Shared pipeline knobs (regardless of model)
-    parser.add_argument("--val_ratio", type=float, default=0.2) # 20% val, 80% train used for FINAL MODEL TRAINING
-    parser.add_argument("--seed", type=int, default=0)
-
-    # Pair selection knobs (regardless of model)
-    parser.add_argument("--pick_top_k_freqs", type=int, default=6,
-                        help="Shortlist top-K freqs before pairwise search (cap compute).")
-    parser.add_argument("--cv_folds", type=int, default=5,
-                   help="Cross-validation folds used for best-pair scoring.") # used for SCORING CANDIDATE PAIRS
-    parser.add_argument("--min_windows_per_class", type=int, default=4,
-                   help="Minimum number of windows per class required to consider a frequency.")
-
-    # CNN specific knobs
-    parser.add_argument("--max_epochs", type=int, default=300)
     
-    parser.add_argument(
-        "--patience", 
-        type=int, 
-        default=30,
-        help="Number of successive iterations we'll continue for when seeing no improvement.",
-    )
-
-    parser.add_argument(
-        "--min_delta", 
-        type=float, 
-        default=1e-4,
-        help="numerical change in loss func necessary to consider real improvement",
-    ) 
-    
-    # TODO: should choose batch_size based on number of training windows if arg is not given
-    parser.add_argument(
-        "--batch_size", 
-        type=int, 
-        default=12,
-        help = "how many training windows the CNN sees at once before updating its weights (1 optimizer step)",
-    ) 
-    # greater batch sizes produce a more stable, accurate gradient (more of training set being used at once) and faster per-epoch compute times on GPUs, at the cost of less frequent weight updates (slower learning dynamics)
-    # greater batch sizes (toward whole train set) are also at a greater risk of overfitting because gradient is more stable (tends towards sharp minima)...
-    #  whereas small batch w diff gradients per step adds intrinsic regularization/stochastic noise (flatter minima, small input noise doesn't matter)
-    # for small eeg datasets -> small batch sizes preferred
-
-    parser.add_argument(
-        "--learning_rate", 
-        type=float, 
-        default=1e-3,
-        help="magnitude of gradient descent steps. smaller batches require smaller LR.",
-    ) 
-
-    # SVM specific knobs HERE (if any)
-
     return parser.parse_args()
+
 
 # -----------------------------
 # Shared Between All Trainers (CNN, SVM, ETC...) 
 # Data Loading + Preprocessing
 # -----------------------------
-@dataclass
-class DatasetInfo:
-    ch_cols: list[str]
-    n_ch: int
-    n_time: int
-    classes_hz: list[int]
-
 # Group rows by session folder name in addition to window_idx so we avoid collisions
 @dataclass(frozen=True)
 class CsvSource:
     src_id: str          # session folder name
     path: Path
 
-@dataclass
-class NormalizerSpec:
-    """
-    per-window zscores
-    """
-    type: str = "zscore_per_window_per_channel"
-    eps: float = 1e-6
-
-    def apply(self, X: np.ndarray) -> np.ndarray:
-        # X: (N, C, T)
-        mu = X.mean(axis=2, keepdims=True)
-        sd = X.std(axis=2, keepdims=True)
-        return (X - mu) / (sd + self.eps)
-
-# Handle "most recent" vs "all sessions" calib data settings
 def list_window_csvs(data_session_dir: Path, calibsetting: str) -> list[CsvSource]:
     """
+    Handles "most recent" vs "all sessions" calib data settings
     data_session_dir: <root>/data/<subject>/<session>
     Returns sources with stable src_id to prevent window_idx collisions across sessions.
     """
@@ -212,20 +147,31 @@ def list_window_csvs(data_session_dir: Path, calibsetting: str) -> list[CsvSourc
             if p.exists():
                 sources.append(CsvSource(src_id=sess_dir.name, path=p))
 
-        # stable ordering
         sources.sort(key=lambda s: s.src_id)
         return sources
 
     raise ValueError(f"Unknown calibsetting: {calibsetting}")
 
-
-# BUILD TRAINING DATA
-# We read CSV(s) and get the shape of X
-# (N, C, T) = (num_windows, num_channels, window_len_samples)
-def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, DatasetInfo]:
+def standardize_T_crop(x_ct: np.ndarray, target_T: int) -> np.ndarray:
     """
+    x_ct: (C, T)
+    Crop windows to target_T deterministically.
+    THIS IS FOR WHEN WE FIND WINDOWS AREN'T EXACTLY SAME LENGTH & WE DONT WANT TO FAIL.
+
+    We crop from the END so alignment is stable if windows were built sequentially.
+    """
+    C, T = x_ct.shape
+    if T == target_T:
+        return x_ct
+    if T < target_T:
+        raise ValueError("standardize_T_crop only supports cropping (T >= target_T).")
+    return x_ct[:, -target_T:]
+
+def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, utils.DatasetInfo]:
+    """
+    BUILD TRAINING DATA
     Reads window-level CSV(s) and returns:
-      X: (N, C, T)
+      X: (N, C, T) = (num_windows, num_channels, window_len_samples)
       y_hz: (N,)
       info: DatasetInfo
 
@@ -312,7 +258,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
     X = np.stack(windows, axis=0).astype(np.float32)  # (N, C, T)
     y_hz = np.array(labels_hz, dtype=np.int64)
 
-    info = DatasetInfo(
+    info = utils.DatasetInfo(
         ch_cols=ch_cols,
         n_ch=n_ch,
         n_time=int(X.shape[2]),
@@ -324,23 +270,6 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
 # -----------------------------
 # Best Pair Selection Logic
 # -----------------------------
-
-def standardize_T_crop(x_ct: np.ndarray, target_T: int) -> np.ndarray:
-    """
-    x_ct: (C, T)
-    Crop windows to target_T deterministically.
-    THIS IS FOR WHEN WE FIND WINDOWS AREN'T EXACTLY SAME LENGTH & WE DONT WANT TO FAIL.
-
-    We crop from the END so alignment is stable if windows were built sequentially.
-    """
-    C, T = x_ct.shape
-    if T == target_T:
-        return x_ct
-    if T < target_T:
-        raise ValueError("standardize_T_crop only supports cropping (T >= target_T).")
-    return x_ct[:, -target_T:]
-
-
 def make_binary_pair_dataset(X: np.ndarray, y_hz: np.ndarray, hz_a: int, hz_b: int) -> tuple[np.ndarray, np.ndarray]:
     """
     Filters to only windows in {hz_a, hz_b} and returns:
@@ -380,10 +309,11 @@ def make_cv_folds_binary(yb: np.ndarray, k: int, seed: int) -> list[tuple[np.nda
 
     return folds
 
-def shortlist_freqs(y_hz: np.ndarray, *, min_windows_per_class: int, pick_top_k: int) -> list[int]:
+def shortlist_freqs(y_hz: np.ndarray, * pick_top_k: int) -> list[int]:
     """
     Keep only frequencies with enough windows, then take the top-K by count.
     """
+    min_windows_per_class = 100
     vals, counts = np.unique(y_hz, return_counts=True)
     keep = [(int(v), int(c)) for v, c in zip(vals, counts) if int(c) >= int(min_windows_per_class)]
     if len(keep) < 2:
@@ -394,82 +324,12 @@ def shortlist_freqs(y_hz: np.ndarray, *, min_windows_per_class: int, pick_top_k:
     freqs = [hz for hz, _ in keep]
     return freqs[: min(pick_top_k, len(freqs))]
 
-def score_pair_cnn_cv(
-    *,
-    X: np.ndarray, y_hz: np.ndarray,
-    hz_a: int, hz_b: int,
-    n_ch: int, n_time: int,
-    cv_folds: int,
-    seed: int,
-    batch_size: int,
-    learning_rate: float,
-    max_epochs: int,
-    patience: int,
-    min_delta: float,
-    device: torch.device,
-) -> dict[str, Any]:
-    """
-    Returns dict with mean/std balanced accuracy across folds.
-    """
-    Xp, yb = make_binary_pair_dataset(X, y_hz, hz_a, hz_b)
-
-    # Guard: need enough per class
-    c0 = int((yb == 0).sum())
-    c1 = int((yb == 1).sum())
-    if c0 < 2 or c1 < 2:
-        return {"ok": False, "reason": "not_enough_data", "c0": c0, "c1": c1}
-
-    # Auto-reduce k so CV still works on small datasets.
-    k = int(min(cv_folds, c0, c1))
-    if k < 2:
-        return {"ok": False, "reason": "k_too_small", "c0": c0, "c1": c1, "k": k}
-
-    folds = make_cv_folds_binary(yb, k, seed)
-    if len(folds) < max(2, k - 1):
-        return {"ok": False, "reason": "fold_build_failed", "c0": c0, "c1": c1, "k": k}
-
-    # Use shorter training during selection (faster but same arch)
-    max_epochs_sel = min(max_epochs, 80)
-    patience_sel   = min(patience, 10)
-
-    bals = []
-    accs = []
-    for fi, (tr_idx, va_idx) in enumerate(folds):
-        val_bal, val_acc = train_cnn_on_split(
-            X_train=Xp[tr_idx], y_train=yb[tr_idx],
-            X_val=Xp[va_idx],   y_val=yb[va_idx],
-            n_ch=n_ch, n_time=n_time,
-            seed=seed + 1000 * fi,
-            batch_size=min(batch_size, int(len(tr_idx))),
-            learning_rate=learning_rate,
-            max_epochs=max_epochs_sel,
-            patience=patience_sel,
-            min_delta=min_delta,
-            device=device,
-        )
-        bals.append(val_bal)
-        accs.append(val_acc)
-
-    return {
-        "ok": True,
-        "hz_a": hz_a, "hz_b": hz_b,
-        "n_pair": int(len(yb)),
-        "c0": c0, "c1": c1,
-        "mean_bal_acc": float(np.mean(bals)),
-        "std_bal_acc": float(np.std(bals)),
-        "mean_acc": float(np.mean(accs)),
-        "std_acc": float(np.std(accs)),
-        "folds_used": int(len(folds)),
-        "k_requested": int(cv_folds),
-        "k_used": int(k),
-    }
-
 def select_best_pair(
     *,
     X: np.ndarray, y_hz: np.ndarray,
-    info: DatasetInfo,
+    info: utils.DatasetInfo,
+    gen_cfg: utils.GeneralTrainingConfigs,
     args,
-    device: torch.device,
 ) -> tuple[int, int, dict[str, Any]]:
     """
     Returns: (best_left_hz, best_right_hz, debug_info)
@@ -477,57 +337,78 @@ def select_best_pair(
     """
     cand_freqs = shortlist_freqs(
         y_hz,
-        min_windows_per_class=args.min_windows_per_class,
-        pick_top_k=args.pick_top_k_freqs,
+        pick_top_k=6,
     )
     if len(cand_freqs) < 2:
         raise RuntimeError("Not enough usable frequencies after min_windows_per_class filtering.")
 
     pairs = [(cand_freqs[i], cand_freqs[j]) for i in range(len(cand_freqs)) for j in range(i + 1, len(cand_freqs))]
 
-    best = None
+    best_metrics = None
     best_score = -1.0
-    all_scores = []
+    all_metrics = []
 
     print(f"[PY] Pair search candidates: freqs={cand_freqs} -> {len(pairs)} pairs, arch={args.arch}")
 
     for hz_a, hz_b in pairs:
-        if args.arch == "CNN":
-            res = score_pair_cnn_cv(
-                X=X, y_hz=y_hz,
-                hz_a=hz_a, hz_b=hz_b,
-                n_ch=info.n_ch, n_time=info.n_time,
-                cv_folds=args.cv_folds,
-                seed=args.seed,
-                batch_size=args.batch_size,
-                learning_rate=args.learning_rate,
-                max_epochs=args.max_epochs,
-                patience=args.patience,
-                min_delta=args.min_delta,
-                device=device,
-            )
-        else:
-            res = {"ok": False, "reason": "svm_not_implemented"}
-            print("hadeel todo for svm")
 
-        all_scores.append(res)
+        # ====== 1) build binary dataset for this candidate pair =====
+        Xp, yb = make_binary_pair_dataset(X, y_hz, hz_a, hz_b)
 
-        if not res.get("ok", False):
-            print(f"[PY] pair ({hz_a},{hz_b}) skipped: {res.get('reason')}")
+        # Guard: need enough samples per class for k-fold
+        c0 = int((yb == 0).sum())
+        c1 = int((yb == 1).sum())
+        if c0 < 2 or c1 < 2:
+            print(f"[PY] pair ({hz_a},{hz_b}) skipped: not enough data (c0={c0}, c1={c1})")
             continue
 
-        score = float(res["mean_bal_acc"])
-        print(f"[PY] pair ({hz_a},{hz_b}) mean_bal_acc={score:.3f} (+/-{res['std_bal_acc']:.3f}) n={res['n_pair']}")
+        # Auto-reduce k if dataset is small
+        k = int(min(gen_cfg.number_cross_val_folds, c0, c1))
+        if k < 2:
+            print(f"[PY] pair ({hz_a},{hz_b}) skipped: k too small (k={k}, c0={c0}, c1={c1})")
+            continue
+
+        folds = make_cv_folds_binary(yb, k, 0)
+        if len(folds) < 2:
+            print(f"[PY] pair ({hz_a},{hz_b}) skipped: fold build failed")
+            continue
+
+        # ===== 2) score the pair using trainer API =====
+        if args.arch == "CNN":
+            metrics = score_pair_cv_cnn(
+                X_pair=Xp,
+                y_pair=yb,
+                folds=folds,
+                n_ch=info.n_ch,
+                n_time=info.n_time,
+                freq_a_hz=hz_a,
+                freq_b_hz=hz_b,
+            )
+        elif args.arch == "SVM":
+            metrics = utils.ModelMetrics(0, -99, -99)
+            print("hadeel todo for svm")
+        else:
+            "error"
+
+        all_metrics.append(metrics)
+
+        if not metrics.cv_ok:
+            print(f"[PY] pair ({hz_a},{hz_b}) skipped due to cv error")
+            continue
+
+        score = metrics.avg_fold_balanced_accuracy # current scoring metric we're using
+        std_score = metrics.std_fold_balanced_accuracy
+        print(f"[PY] pair ({hz_a},{hz_b}) mean_bal_acc={score:.3f} (+/-{std_score:.3f})")
 
         if score > best_score:
             best_score = score
-            best = res
+            best_metrics = metrics
 
-    if best is None:
+    if best_metrics is None:
         raise RuntimeError("Failed to select any valid pair (all candidates lacked data).")
 
-    a = int(best["hz_a"])
-    b = int(best["hz_b"])
+    a = best_metrics.freq_a_hz
+    b = best_metrics.freq_b_hz
 
     # Make left/right deterministic
     # Convention: left = lower Hz, right = higher Hz
@@ -535,7 +416,7 @@ def select_best_pair(
 
     debug = {
         "candidate_freqs": cand_freqs,
-        "pair_scores": all_scores,
+        "pair_scores": all_metrics,
         "best_score_mean_bal_acc": best_score,
     }
     return left_hz, right_hz, debug
@@ -544,17 +425,15 @@ def select_best_pair(
 # -----------------------------
 # JSON Contract & ONNX Export
 # -----------------------------
-def write_train_result_json(model_dir: Path, *, ok: bool, arch: str, calibsetting: str,
-                            subject: str, session: str,
+def write_train_result_json(model_dir: Path, *, train_ok: bool, onnx_ok: bool, arch: str, calibsetting: str,
                             left_hz: int, right_hz: int,
                             left_e: int, right_e: int,
                             extra: dict[str, Any] | None = None) -> Path:
     payload: dict[str, Any] = {
-        "ok": bool(ok),
+        "train_ok": bool(train_ok),
+        "onnx_ok": bool(onnx_ok),
         "arch": arch,
         "calibsetting": calibsetting,
-        "subject_id": subject,
-        "session_id": session,
         "best_freq_left_hz": int(left_hz),
         "best_freq_right_hz": int(right_hz),
         "best_freq_left_e": int(left_e),
@@ -579,10 +458,17 @@ def hz_to_enum_mapping() -> dict[int, int]:
         10: 3,
         11: 4,
         12: 5,
-        20: 6,
-        25: 7,
-        30: 8,
-        35: 9,
+        13: 6,
+        14: 7,
+        15: 8,
+        16: 9,
+        17: 10,
+        18: 11,
+        20: 12,
+        25: 13,
+        30: 14,
+        35: 15,
+        -1: 99
     }
 
 
@@ -602,8 +488,7 @@ def main():
     data_session_dir = data_arg if data_arg.is_absolute() else (DATA_ROOT / data_arg)
     data_session_dir = data_session_dir.resolve()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("[PY] device:", device)
+    gen_cfg = utils.GeneralTrainingConfigs()
 
     # 1) Resolve sources based on calibsetting
     sources = list_window_csvs(data_session_dir, args.calibsetting)
@@ -613,39 +498,31 @@ def main():
     X, y_hz, info = load_windows_csv(sources)
     print("[PY] Loaded X:", X.shape, "y_hz:", y_hz.shape, "classes_hz:", info.classes_hz)
 
-    # 3) Normalize (safe: per-window zscore)
-    norm = NormalizerSpec()
-    X = norm.apply(X).astype(np.float32)
-
-    # 4) Select best pair using CV scoring with same arch
-    best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, info=info, args=args, device=device)
+    # 3) Select best pair using CV scoring with same arch
+    best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, info=info, gen_cfg=gen_cfg, args=args)
     print(f"[PY] BEST PAIR: {best_left_hz}Hz vs {best_right_hz}Hz")
 
-    # 5) Train final model on winning pair
+    # 4) Train final model on winning pair
     Xp, yb = make_binary_pair_dataset(X, y_hz, best_left_hz, best_right_hz)
+    # Build folds for the winning pair (used for final CV reporting)
+    c0 = int((yb == 0).sum())
+    c1 = int((yb == 1).sum())
+    k_final = int(min(gen_cfg.number_cross_val_folds, c0, c1))
+    folds_final: list[tuple[np.ndarray, np.ndarray]] = []
+    if k_final >= 2:
+        folds_final = make_cv_folds_binary(yb, k_final, seed=0)
+    if len(folds_final) < 2:
+        print(f"[PY] warning: final folds not usable (k_final={k_final}, folds={len(folds_final)}). "
+              f"Final training will still run; CV metrics may be 0.")
 
     if args.arch == "CNN":
-        model, best_state, history = train_cnn(
-            X=Xp,
-            y_cls=yb,
+        final = train_final_cnn_and_export(
+            X_pair=Xp,
+            y_pair=yb,
+            folds=folds_final,
             n_ch=info.n_ch,
             n_time=info.n_time,
-            n_classes=2,
-            seed=args.seed,
-            val_ratio=args.val_ratio,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            max_epochs=args.max_epochs,
-            patience=args.patience,
-            min_delta=args.min_delta,
-            device=device,
-        )
-
-        export_cnn_onnx(
-            model=model,
-            n_ch=info.n_ch,
-            n_time=info.n_time,
-            out_path=(out_dir / "ssvep_model.onnx"),
+            out_onnx_path=(out_dir / "ssvep_model.onnx"),
         )
 
     elif args.arch == "SVM":
@@ -658,11 +535,10 @@ def main():
 
     write_train_result_json(
         out_dir,
-        ok=True,
+        train_ok=final.train_ok,
+        onnx_ok=final.onnx_export_ok,
         arch=args.arch,
         calibsetting=args.calibsetting,
-        subject=args.subject,
-        session=args.session,
         left_hz=best_left_hz,
         right_hz=best_right_hz,
         left_e=hz2e[best_left_hz],
@@ -671,10 +547,11 @@ def main():
             "n_windows_total": int(X.shape[0]),
             "n_windows_pair": int(Xp.shape[0]),
             "pair_selection_metric": "mean_cv_balanced_accuracy",
-            "cv_folds_requested": int(args.cv_folds),
             "candidate_freqs": debug.get("candidate_freqs"),
             "best_score_mean_bal_acc": debug.get("best_score_mean_bal_acc"),
             "pair_scores": debug.get("pair_scores"),
+            "final_train_acc": final.final_train_acc,
+            "final_val_acc": final.final_val_acc,
         },
     )
 
