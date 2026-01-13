@@ -8,7 +8,6 @@ session. It MUST match the CLI interface expected by C++.
 (see training manager thread in CapstoneProject.cpp for details)
 
 - Loads windowed EEG from one or many eeg_windows.csv files.
-- Applies per-window, per-channel z-score normalization.
 - Selects BEST LEFT/RIGHT frequency pair using cross-validated scoring on model arch.
     --arch SVM : linear SVM
     --arch CNN : compact CNN (EEGNet) in PyTorch
@@ -31,7 +30,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from typing import Any
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import utils.utils as utils
 
@@ -56,6 +55,7 @@ from trainers.cnn_trainer import score_pair_cv_cnn, train_final_cnn_and_export
 #    - inputs: REQUIRED FOR ALL* 
 #        - X_pair
 #        - y_pair
+#        - folds: premade cross-val folds for FINAL cross-val training (for reporting purposes)
 #        - n_ch: spatial dimension 
 #        - n_time: time dimension
 #        - out_onnx_path: Path
@@ -65,6 +65,7 @@ from trainers.cnn_trainer import score_pair_cv_cnn, train_final_cnn_and_export
 # ------------------------------
 # PATH ROOTS (repo-anchored)
 # ------------------------------
+# TODO: Make it move upward dynamically (as it stands, breaks if we move folders)
 THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[3]
 DATA_ROOT = REPO_ROOT / "data"
@@ -167,12 +168,58 @@ def standardize_T_crop(x_ct: np.ndarray, target_T: int) -> np.ndarray:
         raise ValueError("standardize_T_crop only supports cropping (T >= target_T).")
     return x_ct[:, -target_T:]
 
+def add_trial_ids_per_window(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds an integer trial_id per window based on contiguous runs of testfreq_hz within each _src.
+    Trial increments when testfreq_hz changes (in time order).
+    This is essential so that we can batch per trial instead of per window in CNN arch (to optimize learning steps with richer info).
+    """
+    # window-level metadata
+    win = (
+        df.groupby(["_src", "window_idx"], sort=True)
+          .agg(
+              testfreq_hz=("testfreq_hz", "first"),
+              start_sample=("sample_idx", "min"),
+          )
+          .reset_index()
+    )
+
+    # sort windows by time within each session
+    win = win.sort_values(["_src", "start_sample", "window_idx"], kind="stable")
+
+    # trial increments on frequency changes within each session
+    def _assign_trials(g: pd.DataFrame) -> pd.DataFrame:
+        freq = g["testfreq_hz"].to_numpy()
+        # new trial when freq changes vs previous window
+        new_trial = np.empty(len(freq), dtype=np.int64)
+        new_trial[0] = 0
+        for i in range(1, len(freq)):
+            new_trial[i] = new_trial[i - 1] + (freq[i] != freq[i - 1])
+        g = g.copy()
+        g["trial_local"] = new_trial
+        return g
+
+    win = win.groupby("_src", group_keys=False, sort=False).apply(_assign_trials)
+
+    # Make trial ids globally unique ints across sessions:
+    # factorize on (_src, trial_local)
+    trial_key = list(zip(win["_src"].astype(str), win["trial_local"].astype(int)))
+    win["trial_id"] = pd.factorize(trial_key)[0].astype(np.int64)
+
+    # merge trial_id back onto per-sample rows
+    df = df.merge(win[["_src", "window_idx", "trial_id"]], on=["_src", "window_idx"], how="left")
+    if df["trial_id"].isna().any():
+        raise RuntimeError("trial_id merge failed for some rows.")
+    df["trial_id"] = df["trial_id"].astype(np.int64)
+    return df
+
 def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, utils.DatasetInfo]:
     """
     BUILD TRAINING DATA
     Reads window-level CSV(s) and returns:
       X: (N, C, T) = (num_windows, num_channels, window_len_samples)
       y_hz: (N,)
+      trial_ids_np: single array with the trial ids for each window so that we can shuffle by trial if desired
       info: DatasetInfo
 
     Expected columns:
@@ -206,7 +253,11 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
 
     df = pd.concat(frames, ignore_index=True)
 
+    # assign trial ids before grouping windows
+    df = add_trial_ids_per_window(df)
+
     # Detect channel columns as the ones between sample_idx and testfreq_e
+    # TODO: detect by name instead of between these columns, cuz it's too brittle if we change column arch
     cols = list(df.columns)
     sample_i = cols.index("sample_idx")
     tf_e_i = cols.index("testfreq_e")
@@ -217,6 +268,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
 
     windows: list[np.ndarray] = []
     labels_hz: list[int] = []
+    trial_ids: list[int] = []
 
     # group by (_src, window_idx) to avoid collisions
     grouped = df.groupby(["_src", "window_idx"], sort=True)
@@ -227,6 +279,8 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         tf_hz = int(g["testfreq_hz"].iloc[0])
         if tf_hz < 0:
             continue
+
+        trial_id = int(g["trial_id"].iloc[0])
 
         x_tc = g[ch_cols].to_numpy(dtype=np.float32)  # (T, C)
         if x_tc.ndim != 2 or x_tc.shape[1] != n_ch:
@@ -251,12 +305,14 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
 
         windows.append(x_ct)
         labels_hz.append(tf_hz)
+        trial_ids.append(trial_id)
 
     if not windows:
         raise RuntimeError("No valid windows found after grouping/filters.")
 
     X = np.stack(windows, axis=0).astype(np.float32)  # (N, C, T)
     y_hz = np.array(labels_hz, dtype=np.int64)
+    trial_ids_np = np.array(trial_ids, dtype=np.int64)
 
     info = utils.DatasetInfo(
         ch_cols=ch_cols,
@@ -264,13 +320,13 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         n_time=int(X.shape[2]),
         classes_hz=sorted(set(y_hz.tolist())),
     )
-    return X, y_hz, info
+    return X, y_hz, trial_ids_np, info
 
 
 # -----------------------------
 # Best Pair Selection Logic
 # -----------------------------
-def make_binary_pair_dataset(X: np.ndarray, y_hz: np.ndarray, hz_a: int, hz_b: int) -> tuple[np.ndarray, np.ndarray]:
+def make_binary_pair_dataset(X: np.ndarray, y_hz: np.ndarray, trial_ids: np.ndarray, hz_a: int, hz_b: int) -> tuple[np.ndarray, np.ndarray]:
     """
     Filters to only windows in {hz_a, hz_b} and returns:
       Xp: (Npair, C, T)
@@ -279,13 +335,64 @@ def make_binary_pair_dataset(X: np.ndarray, y_hz: np.ndarray, hz_a: int, hz_b: i
     mask = (y_hz == hz_a) | (y_hz == hz_b)
     Xp = X[mask]
     yp = y_hz[mask]
+    tp = trial_ids[mask]
     yb = np.where(yp == hz_a, 0, 1).astype(np.int64)
-    return Xp, yb
+    return Xp, yb, tp
+
+def make_cv_folds_binary_by_trial(
+    yb: np.ndarray, trial_ids: np.ndarray, k: int, seed: int
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    K-fold CV where entire trials are assigned to folds.
+    Ensures no trial appears in both train and val.
+    Stratifies approximately by class by assigning trials based on their majority label.
+    """
+    rng = np.random.default_rng(seed)
+
+    trial_ids = np.asarray(trial_ids).astype(np.int64)
+    yb = np.asarray(yb).astype(np.int64)
+
+    uniq_trials = np.unique(trial_ids)
+    # Determine a label per trial (majority vote)
+    trial_label = {}
+    trial_to_indices = {}
+
+    for t in uniq_trials:
+        idx = np.where(trial_ids == t)[0]
+        trial_to_indices[int(t)] = idx
+        # majority label
+        lab = int(np.round(yb[idx].mean()))  # works for binary 0/1
+        trial_label[int(t)] = lab
+
+    trials0 = [t for t in uniq_trials if trial_label[int(t)] == 0]
+    trials1 = [t for t in uniq_trials if trial_label[int(t)] == 1]
+    rng.shuffle(trials0)
+    rng.shuffle(trials1)
+
+    folds0 = np.array_split(np.array(trials0, dtype=np.int64), k)
+    folds1 = np.array_split(np.array(trials1, dtype=np.int64), k)
+
+    folds: list[tuple[np.ndarray, np.ndarray]] = []
+    for i in range(k):
+        val_trials = np.concatenate([folds0[i], folds1[i]]) if (len(folds0[i]) + len(folds1[i])) else np.array([], dtype=np.int64)
+        if val_trials.size == 0:
+            continue
+
+        val_idx = np.concatenate([trial_to_indices[int(t)] for t in val_trials])
+        train_trials = np.setdiff1d(uniq_trials, val_trials, assume_unique=False)
+        train_idx = np.concatenate([trial_to_indices[int(t)] for t in train_trials])
+
+        if val_idx.size == 0 or train_idx.size == 0:
+            continue
+        folds.append((train_idx.astype(np.int64), val_idx.astype(np.int64)))
+
+    return folds
 
 def make_cv_folds_binary(yb: np.ndarray, k: int, seed: int) -> list[tuple[np.ndarray, np.ndarray]]:
     """
     Returns list of (train_idx, val_idx) for k-fold CV.
     Ensures each fold gets some samples from each class when possible.
+    OBSOLETE !
     """
     rng = np.random.default_rng(seed)
     idx0 = np.where(yb == 0)[0]
@@ -309,7 +416,7 @@ def make_cv_folds_binary(yb: np.ndarray, k: int, seed: int) -> list[tuple[np.nda
 
     return folds
 
-def shortlist_freqs(y_hz: np.ndarray, * pick_top_k: int) -> list[int]:
+def shortlist_freqs(y_hz: np.ndarray, pick_top_k: int) -> list[int]:
     """
     Keep only frequencies with enough windows, then take the top-K by count.
     """
@@ -326,7 +433,7 @@ def shortlist_freqs(y_hz: np.ndarray, * pick_top_k: int) -> list[int]:
 
 def select_best_pair(
     *,
-    X: np.ndarray, y_hz: np.ndarray,
+    X: np.ndarray, y_hz: np.ndarray, trial_ids: np.ndarray,
     info: utils.DatasetInfo,
     gen_cfg: utils.GeneralTrainingConfigs,
     args,
@@ -353,7 +460,7 @@ def select_best_pair(
     for hz_a, hz_b in pairs:
 
         # ====== 1) build binary dataset for this candidate pair =====
-        Xp, yb = make_binary_pair_dataset(X, y_hz, hz_a, hz_b)
+        Xp, yb, tp = make_binary_pair_dataset(X, y_hz, trial_ids, hz_a, hz_b)
 
         # Guard: need enough samples per class for k-fold
         c0 = int((yb == 0).sum())
@@ -368,7 +475,7 @@ def select_best_pair(
             print(f"[PY] pair ({hz_a},{hz_b}) skipped: k too small (k={k}, c0={c0}, c1={c1})")
             continue
 
-        folds = make_cv_folds_binary(yb, k, 0)
+        folds = make_cv_folds_binary_by_trial(yb, tp, k, seed=0)
         if len(folds) < 2:
             print(f"[PY] pair ({hz_a},{hz_b}) skipped: fold build failed")
             continue
@@ -378,6 +485,7 @@ def select_best_pair(
             metrics = score_pair_cv_cnn(
                 X_pair=Xp,
                 y_pair=yb,
+                trial_ids_pair=tp,
                 folds=folds,
                 n_ch=info.n_ch,
                 n_time=info.n_time,
@@ -388,7 +496,7 @@ def select_best_pair(
             metrics = utils.ModelMetrics(0, -99, -99)
             print("hadeel todo for svm")
         else:
-            "error"
+            raise ValueError(f"Unknown arch: {args.arch}")
 
         all_metrics.append(metrics)
 
@@ -416,7 +524,7 @@ def select_best_pair(
 
     debug = {
         "candidate_freqs": cand_freqs,
-        "pair_scores": all_metrics,
+        "pair_scores": [asdict(m) for m in all_metrics], # dictionary format for JSON serialization
         "best_score_mean_bal_acc": best_score,
     }
     return left_hz, right_hz, debug
@@ -495,22 +603,22 @@ def main():
     print(f"[PY] loading {len(sources)} eeg_windows.csv sources")
 
     # 2) Load data
-    X, y_hz, info = load_windows_csv(sources)
+    X, y_hz, trial_ids, info = load_windows_csv(sources)
     print("[PY] Loaded X:", X.shape, "y_hz:", y_hz.shape, "classes_hz:", info.classes_hz)
 
     # 3) Select best pair using CV scoring with same arch
-    best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, info=info, gen_cfg=gen_cfg, args=args)
+    best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, trial_ids=trial_ids, info=info, gen_cfg=gen_cfg, args=args)
     print(f"[PY] BEST PAIR: {best_left_hz}Hz vs {best_right_hz}Hz")
 
     # 4) Train final model on winning pair
-    Xp, yb = make_binary_pair_dataset(X, y_hz, best_left_hz, best_right_hz)
+    Xp, yb, tp = make_binary_pair_dataset(X, y_hz, trial_ids, best_left_hz, best_right_hz)
     # Build folds for the winning pair (used for final CV reporting)
     c0 = int((yb == 0).sum())
     c1 = int((yb == 1).sum())
     k_final = int(min(gen_cfg.number_cross_val_folds, c0, c1))
     folds_final: list[tuple[np.ndarray, np.ndarray]] = []
     if k_final >= 2:
-        folds_final = make_cv_folds_binary(yb, k_final, seed=0)
+        folds_final = make_cv_folds_binary_by_trial(yb, tp, k_final, seed=0)
     if len(folds_final) < 2:
         print(f"[PY] warning: final folds not usable (k_final={k_final}, folds={len(folds_final)}). "
               f"Final training will still run; CV metrics may be 0.")
@@ -519,6 +627,7 @@ def main():
         final = train_final_cnn_and_export(
             X_pair=Xp,
             y_pair=yb,
+            trial_ids_pair=tp,
             folds=folds_final,
             n_ch=info.n_ch,
             n_time=info.n_time,
