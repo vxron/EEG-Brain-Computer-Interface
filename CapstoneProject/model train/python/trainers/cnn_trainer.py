@@ -3,34 +3,44 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Tuple, List, Dict, Any
 
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader, random_split
+from torch.utils.data import TensorDataset, DataLoader, BatchSampler
 
 import utils.utils as utils
 
 # CNN Hyperparameters & Configs DataClass
 @dataclass(frozen=True)
 class CNNTrainConfig:
-    # Configs
-    max_epochs: int = 300
-    patience: int = 30               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
-    min_delta: float = 1e-4          # numerical change in loss func necessary to consider real improvement 
-    batch_size: int = 12             # how many training windows the CNN sees at once before updating its weights (1 optimizer step)
-    learning_rate: float = 1e-3      # magnitude of gradient descent steps. smaller batches require smaller LR.
+    # Optimization & Convergence Stability
+    max_epochs: int = 400
+    batch_size: int = 12             # how many training windows the CNN sees at once before updating its weights (1 optimizer step) -> keep batches small for overlapping EEG windows
+    learning_rate: float = 1e-3      # magnitude of gradient descent steps. smaller batches require smaller LR. (1e-3 is adam optimizer default)
     seed: int = 0
+
+    # Generalization Control
+    patience: int = 25               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
+    min_delta: float = 1e-3          # numerical change in loss func necessary to consider real improvement 
     
     # TODO: should choose batch_size based on number of training windows if arg is not given and scale LR accordingly
+    # TODO: tune hyperparams... [patience, learning_rate, batch_size, kernel_length, F1, D, F2] ??
+    # TODO: option on UI to tune (longer) or use defaults (faster)?
 
-    # CNN layer-specific configs
+    # Model Capacity & Sizing
     F1: int = 8                      # [temporal frequency detectors] number of output channels from the first layer (inputs to 2nd layer), aka: number of different temporal kernels ('weight matrices') generated
+    kernel_length: int = 125         # [125 samples at 250Hz -> 500ms EEG temporal summaries] length of temporal kernel [essentially FIR filters applied to the per-channel temporal streams] 
+    
     D: int = 2                       # [spatial variants per frequency] number of output channels from the 2nd layer (inputs to 3rd layer), aka: number of different spatial kernels ('weight matrices') generated, e.g: more weights on occipital from ssvep
-    F2: int = 16                     # [compressed ftr set for classifier] number of output channels from the 3rd layer (inputs to final layer), aka: number of different 
-    kernel_length: int = 63          # [should be odd] length of temporal kernel [essentially FIR filters applied to the per-channel temporal streams] 
-    dropout: float = 0.25            # 
+    pooling_factor: int = 5          # [downsamples by 5 after spatial block (250Hz/5 = new sampling rate of 50Hz)] for optimal tradeoff between preserving temporal frequency detail, regularization/stability/reduce overfitting, & speed/"cost"
+    # TODO: shift up if using high freq
+
+    F2: int = 16                     # [compressed ftr set for classifier] number of output channels from the 3rd layer (inputs to final layer), representing spatiotemporal mixed info blocks (for the 500ms segments)
+    pooling_factor_final: int = 10    # [downsamples again by 10 now (50Hz/10 = new sampling rate of 5Hz)]
+    
+    dropout: float = 0.5             # [regularization trick] "turns off" a fraction of activations to reduce overfitting (not rely too much on any single pathway), greater = greater overfitting resistance
+    
 
 # EEGNET (CNN) MODEL DEFINITION
 # A layer is a block in the NN
@@ -68,8 +78,10 @@ class EEGNet(nn.Module):
                  F1: int = 8,
                  D: int = 2,
                  F2: int = 16,
-                 kernel_length: int = 64,
-                 dropout: float = 0.25):
+                 kernel_length: int = 125,
+                 pooling_factor: int = 5,
+                 pooling_factor_final: int = 10,
+                 dropout: float = 0.5):
         super().__init__()
         self.n_ch = n_ch
         self.n_time = n_time
@@ -102,9 +114,9 @@ class EEGNet(nn.Module):
             groups=F1,
             bias=False
         )
-        self.bn2 = nn.BatchNorm2d(F1 * D)
-        self.act = nn.ELU()
-        self.pool1 = nn.AvgPool2d(kernel_size=(1, 4))  # downsample time by 4
+        self.bn2 = nn.BatchNorm2d(F1 * D)              # batch normalization
+        self.act = nn.ELU()                            # exponential linear unit (ELU) non-linearity 
+        self.pool1 = nn.AvgPool2d(kernel_size=(1, pooling_factor))
         self.drop1 = nn.Dropout(dropout)
 
         # ------------------------------
@@ -127,7 +139,7 @@ class EEGNet(nn.Module):
             bias=False
         )
         self.bn3 = nn.BatchNorm2d(F2)
-        self.pool2 = nn.AvgPool2d(kernel_size=(1, 8))  # downsample time again
+        self.pool2 = nn.AvgPool2d(kernel_size=(1, pooling_factor_final))  # downsample time again
         self.drop2 = nn.Dropout(dropout)
 
         # ------------------------------
@@ -167,6 +179,62 @@ class EEGNet(nn.Module):
         feats = self._forward_features(x)
         logits = self.classifier(feats)
         return logits
+
+class ListBatchSampler(BatchSampler):
+    """
+    PyTorch BatchSampler that yields precomputed index lists.
+    """
+    def __init__(self, batches: list[list[int]]):
+        self._batches = batches
+
+    def __iter__(self):
+        for b in self._batches:
+            yield b
+
+    def __len__(self):
+        return len(self._batches)
+
+    
+def make_trial_batches(
+    trial_ids: np.ndarray,
+    *,
+    max_trials_per_batch: int = 1,
+    max_windows_per_batch: int = 16,
+    seed: int = 0,
+) -> list[list[int]]:
+    """
+    Builds batches as lists of indices.
+    - Groups by trial_id (no mixing across trials unless max_trials_per_batch > 1)
+    - Caps batch size so huge trials get split into multiple optimizer steps
+    """
+    trial_ids = np.asarray(trial_ids).astype(np.int64)
+    uniq = np.unique(trial_ids)
+
+    rng = np.random.default_rng(seed)
+    rng.shuffle(uniq)
+
+    # map: trial -> indices (shuffled inside trial)
+    trial_to_idx = {}
+    for t in uniq:
+        idx = np.where(trial_ids == t)[0].astype(np.int64)
+        rng.shuffle(idx)
+        trial_to_idx[int(t)] = idx.tolist()
+
+    batches: list[list[int]] = []
+    for i in range(0, len(uniq), max_trials_per_batch):
+        trials = uniq[i : i + max_trials_per_batch]
+
+        # collect windows from these trials
+        pool: list[int] = []
+        for t in trials:
+            pool.extend(trial_to_idx[int(t)])
+
+        # chunk pool into capped batches
+        for j in range(0, len(pool), max_windows_per_batch):
+            batches.append(pool[j : j + max_windows_per_batch])
+
+    return batches
+
 
 # TODO: Apply z score normalization to avoid magnitude related skews
 def apply_z_score_normalization(X: np.ndarray, *, eps: float = 1e-6) -> np.ndarray:
@@ -275,6 +343,7 @@ def train_final_cnn_and_export(
     *,
     X_pair: np.ndarray,
     y_pair: np.ndarray,
+    trial_ids_pair: np.ndarray,
     folds: list[tuple[np.ndarray, np.ndarray]],
     n_ch: int,
     n_time: int,
@@ -305,9 +374,11 @@ def train_final_cnn_and_export(
         for fi, (tr_idx, va_idx) in enumerate(folds):
             fold_seed = int(cfg.seed + 1000 * fi)
 
-            _, _, tr_loss, tr_acc, va_loss, va_acc = train_cnn_on_split(
+            va_bal, va_acc, tr_loss, tr_acc, va_loss = train_cnn_on_split(
                 X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
                 X_val=X_pair[va_idx],   y_val=y_pair[va_idx],
+                trial_ids_train=trial_ids_pair[tr_idx],
+                trial_ids_val=trial_ids_pair[va_idx],
                 n_ch=n_ch, n_time=n_time,
                 seed=fold_seed,
                 batch_size=min(cfg.batch_size, int(len(tr_idx))) if len(tr_idx) > 0 else cfg.batch_size,
@@ -337,35 +408,42 @@ def train_final_cnn_and_export(
     ds_all = TensorDataset(X_all_t, y_all_t)
 
     g = torch.Generator().manual_seed(cfg.seed)
-    train_loader = DataLoader(
-        ds_all,
-        batch_size=min(cfg.batch_size, len(ds_all)) if len(ds_all) > 0 else cfg.batch_size,
-        shuffle=True,
-        generator=g
-    )
-
-    val_loader = DataLoader(
-        ds_all,
-        batch_size=min(cfg.batch_size, len(ds_all)) if len(ds_all) > 0 else cfg.batch_size,
-        shuffle=False
-    )
+    # final data loader creation -> prioritize trial based batching
+    if trial_ids_pair is not None:
+        batches = make_trial_batches(
+            trial_ids_pair,
+            max_trials_per_batch=1, # don't mix trials (just shuffles)
+            max_windows_per_batch=cfg.batch_size, # still keep steps small
+            seed=cfg.seed,
+        )
+        train_loader = DataLoader(
+            ds_all,
+            batch_sampler=ListBatchSampler(batches),
+        )
+    else:
+        g = torch.Generator().manual_seed(cfg.seed)
+        train_loader = DataLoader(
+            ds_all,
+            batch_size=min(cfg.batch_size, len(ds_all)) if len(ds_all) > 0 else cfg.batch_size,
+            shuffle=True,
+            generator=g
+        )
 
     # Build model using cfg hyperparams
     model = EEGNet(
         n_ch=n_ch, n_time=n_time, n_classes=2,
-        F1=cfg.F1, D=cfg.D, F2=cfg.F2,
-        kernel_length=cfg.kernel_length, dropout=cfg.dropout
+        F1=cfg.F1, D=cfg.D, F2=cfg.F2, 
+        kernel_length=cfg.kernel_length, dropout=cfg.dropout,
+        pooling_factor=cfg.pooling_factor, pooling_factor_final=cfg.pooling_factor_final,
     ).to(device)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
     # Train to convergence
-    run_training_to_convergence(
-        model, train_loader, val_loader,
-        device=device, optimizer=optimizer, criterion=criterion,
-        max_epochs=cfg.max_epochs, patience=cfg.patience, min_delta=cfg.min_delta,
-    )
+    for ep in range(cfg.max_epochs):
+        tr_loss, tr_acc = run_epoch(model, train_loader, train=True, device=device, optimizer=optimizer, criterion=criterion)
+        print(f"[FINAL] Epoch {ep+1:03d}/{cfg.max_epochs} train_loss={tr_loss:.4f} train_acc={tr_acc:.3f}")
 
     # 3) EXPORT
     # export helper expects trained model weights
@@ -399,6 +477,8 @@ def train_cnn_on_split(
     *,
     X_train: np.ndarray, y_train: np.ndarray,
     X_val: np.ndarray,   y_val: np.ndarray,
+    trial_ids_train: np.ndarray | None = None,
+    trial_ids_val: np.ndarray | None = None,
     n_ch: int, n_time: int,
     seed: int,
     batch_size: int,
@@ -436,12 +516,28 @@ def train_cnn_on_split(
 
     # deterministic shuffling for the train loader
     g = torch.Generator().manual_seed(seed)
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=min(batch_size, len(train_ds)) if len(train_ds) > 0 else batch_size, # Automatically chops batches from input ds
-        shuffle=True,
-        generator=g
-    )
+    if trial_ids_train is not None:
+        # DESIRED: Trial-batched training: one optimizer step per trial (or per small group of trials)
+        batches = make_trial_batches(
+            trial_ids_train,
+            max_trials_per_batch=1,   # 1 trial per step
+            seed=seed,
+        )
+        train_loader = DataLoader(
+            train_ds,
+            batch_sampler=ListBatchSampler(batches),
+        )
+    else:
+        # fallback: window batching (less good for strongly overlapping ssvep windows...)
+        g = torch.Generator().manual_seed(seed)
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=min(batch_size, len(train_ds)) if len(train_ds) > 0 else batch_size,
+            shuffle=True,
+            generator=g
+        )
+
+    # window-batching
     val_loader = DataLoader(
         val_ds,
         batch_size=min(batch_size, len(val_ds)) if len(val_ds) > 0 else batch_size,
@@ -452,7 +548,7 @@ def train_cnn_on_split(
     cfg = CNNTrainConfig()
     model = EEGNet(
         n_ch=n_ch, n_time=n_time, n_classes=2,
-        F1=cfg.F1, D=cfg.D, F2=cfg.F2,
+        F1=cfg.F1, D=cfg.D, F2=cfg.F2, pooling_factor=cfg.pooling_factor, pooling_factor_final=cfg.pooling_factor_final,
         kernel_length=cfg.kernel_length, dropout=cfg.dropout
     ).to(device)
     criterion = nn.CrossEntropyLoss()
@@ -503,6 +599,7 @@ def score_pair_cv_cnn(
     *,
     X_pair: np.ndarray,
     y_pair: np.ndarray,
+    trial_ids_pair: np.ndarray,
     folds: list[tuple[np.ndarray, np.ndarray]],
     n_ch: int,
     n_time: int,
@@ -528,6 +625,8 @@ def score_pair_cv_cnn(
         val_bal, val_acc, _, _, _ = train_cnn_on_split(
             X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
             X_val=X_pair[va_idx],   y_val=y_pair[va_idx],
+            trial_ids_train=trial_ids_pair[tr_idx],
+            trial_ids_val=trial_ids_pair[va_idx],
             n_ch=n_ch, n_time=n_time,
             seed=fold_seed,
             batch_size=min(cfg.batch_size, int(len(tr_idx))) if len(tr_idx) > 0 else cfg.batch_size,
@@ -576,8 +675,7 @@ def export_cnn_onnx(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Export from CPU model for fewer surprises
-    model_export = EEGNet(n_ch=n_ch, n_time=n_time, n_classes=model.n_classes)
-    model_export.load_state_dict({k: v.detach().cpu() for k, v in model.state_dict().items()})
+    model_export = model.to("cpu")
     model_export.eval()
 
     dummy_input = torch.zeros(1, 1, n_ch, n_time, dtype=torch.float32)
