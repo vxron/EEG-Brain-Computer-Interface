@@ -1,7 +1,7 @@
 # trainers/cnn_trainer.py
 
 from __future__ import annotations
-
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Tuple, List, Dict, Any
 
@@ -12,6 +12,25 @@ from torch.utils.data import TensorDataset, DataLoader, random_split
 
 import utils.utils as utils
 
+# CNN Hyperparameters & Configs DataClass
+@dataclass(frozen=True)
+class CNNTrainConfig:
+    # Configs
+    max_epochs: int = 300
+    patience: int = 30               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
+    min_delta: float = 1e-4          # numerical change in loss func necessary to consider real improvement 
+    batch_size: int = 12             # how many training windows the CNN sees at once before updating its weights (1 optimizer step)
+    learning_rate: float = 1e-3      # magnitude of gradient descent steps. smaller batches require smaller LR.
+    seed: int = 0
+    
+    # TODO: should choose batch_size based on number of training windows if arg is not given and scale LR accordingly
+
+    # CNN layer-specific configs
+    F1: int = 8                      # [temporal frequency detectors] number of output channels from the first layer (inputs to 2nd layer), aka: number of different temporal kernels ('weight matrices') generated
+    D: int = 2                       # [spatial variants per frequency] number of output channels from the 2nd layer (inputs to 3rd layer), aka: number of different spatial kernels ('weight matrices') generated, e.g: more weights on occipital from ssvep
+    F2: int = 16                     # [compressed ftr set for classifier] number of output channels from the 3rd layer (inputs to final layer), aka: number of different 
+    kernel_length: int = 63          # [should be odd] length of temporal kernel [essentially FIR filters applied to the per-channel temporal streams] 
+    dropout: float = 0.25            # 
 
 # EEGNET (CNN) MODEL DEFINITION
 # A layer is a block in the NN
@@ -34,18 +53,21 @@ import utils.utils as utils
 #    - where D is the number of ftrs you get from a single spatial kernel (i.e. num of spatial combinations you learn per temporal filter)
 # 3) SEPARABLE convolution layer
 #    - 2 convolutional layers (depthwise & pointwise) + BatchNorm + AvgPool + Dropout
-#    - each spatial map from 2) gets its own temporal refinement
-#    - number of feature maps stays the same (F1*D)
-#    - output shape (B, F1*D, C, T') <- time downsampled due to pooling
-#    - so final out channels = F1*D = F2 = number of learned features passed to classifier
+#    - each spatiotemporal map from 2) gets its own temporal refinement (again)
+#    - 1) depthwise temporal conv
+#         - number of feature maps stays the same (F1*D), just refined
+#         - (B,F1*D,1,T1) -> (B,F1*D,1,T2)
+#    - 2) pointwise (1x1) conv (COMPRESSION)
+#         - AT EACH TIME INDEX in T2: apply another learned map from F1*D to F2 output channels 
+#         - so final out channels = F2 = number of learned features passed to classifier
 # 4) Flatten
 # 5) Classifier
 #    - maps to k classes (B, k)
 class EEGNet(nn.Module):
     def __init__(self, n_ch: int, n_time: int, n_classes: int,
-                 F1: int = 8,      # number of temporal filters
-                 D: int = 2,       # depth multiplier for spatial filters
-                 F2: int = 16,     # number of pointwise filters after separable conv
+                 F1: int = 8,
+                 D: int = 2,
+                 F2: int = 16,
                  kernel_length: int = 64,
                  dropout: float = 0.25):
         super().__init__()
@@ -146,6 +168,12 @@ class EEGNet(nn.Module):
         logits = self.classifier(feats)
         return logits
 
+# TODO: Apply z score normalization to avoid magnitude related skews
+def apply_z_score_normalization(X: np.ndarray, *, eps: float = 1e-6) -> np.ndarray:
+    # X: (N, C, T)
+    mu = X.mean(axis=2, keepdims=True)
+    sd = X.std(axis=2, keepdims=True)
+    return (X - mu) / (sd + eps)
 
 # TRAINING LOOP FUNCTION
 def run_epoch(model, loader, train: bool, *, device, optimizer, criterion):
@@ -243,93 +271,129 @@ def run_training_to_convergence(model, train_loader, val_loader,
 
     return best_state, history
 
-
-def train_cnn(
+def train_final_cnn_and_export(
     *,
-    X: np.ndarray,             # (N,C,T) float32 (already normalized in train_ssvep.py)
-    y_cls: np.ndarray,         # (N,) int64 class indices 0..K-1
+    X_pair: np.ndarray,
+    y_pair: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
     n_ch: int,
     n_time: int,
-    n_classes: int,
-    seed: int,
-    val_ratio: float,
-    batch_size: int,
-    learning_rate: float,
-    max_epochs: int,
-    patience: int,
-    min_delta: float,
-    device: torch.device,
-) -> Tuple[EEGNet, Dict[str, torch.Tensor], List[Dict[str, float]]]:
+    out_onnx_path: Path,
+) -> utils.FinalTrainResults:
     """
-    Returns:
-      model (with best weights loaded),
-      best_state (cpu tensors),
-      history (list of dicts)
+    FINAL TRAINING + EXPORT (shared trainer API)
+
+    What we do here:
+    1) Run CV to report FINAL metrics (loss/acc on held-out folds)
+       - This gives an honest estimate of generalization for the chosen pair.
+    2) Train ONE final model on ALL data (max data = best deployable model)
+    3) Export that final model to ONNX
+
     """
-    # BUILD TENSORS (DEFINING EEGNET CNN)
-    # PyTorch Conv2d wants (B, 1, C, T) so we need to reshape
-    # i.e. each training batch gets:
-    # B is the batch size (how many windows processed together) e.g. 1 window only would have B = 1
-    # in_channels is 1 because EEG data itself is 1D (whereas RGB would be 3D wtv)
-    # C is the spatial dimension (height) -> how many channels there are (8)
-    # T is the temporal dimension (width) -> time samples (number of samples per window)
-    N, C, T = X.shape
-    assert C == n_ch
-    assert T == n_time
-    assert X.shape[0] == y_cls.shape[0], f"X has N={X.shape[0]} windows but y has {y_cls.shape[0]} labels"
 
-    # ---- Reshape X for Conv2d: (N,C,T) -> (N,1,C,T) ----
-    X_4d = X[:, None, :, :]  # insert dimension at axis=1
-    print("X_4d shape:", X_4d.shape)
-    assert X_4d.shape == (N, 1, C, T)
+    cfg = CNNTrainConfig()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ---- Make PyTorch tensors ----
-    # X tensor must be float32. y tensor for classification must be int64 (Long).
-    X_t = torch.from_numpy(X_4d).float()
-    y_t = torch.from_numpy(y_cls.astype(np.int64)).long()
+    # 1) CV METRICS (for reporting)
+    # We'll average final_train_loss/acc and final_val_loss/acc across folds for FinalTrainResults.
+    tr_losses: list[float] = []
+    tr_accs:   list[float] = []
+    va_losses: list[float] = []
+    va_accs:   list[float] = []
 
-    # ---- Build a Dataset + DataLoaders ----
-    dataset = TensorDataset(X_t, y_t)
-    # 80/20 split
-    n_val = max(1, int(val_ratio * len(dataset)))
-    n_train = len(dataset) - n_val
-    train_ds, val_ds = random_split(
-        dataset,
-        [n_train, n_val],
-        generator=torch.Generator().manual_seed(seed),
+    if folds and len(folds) >= 2:
+        for fi, (tr_idx, va_idx) in enumerate(folds):
+            fold_seed = int(cfg.seed + 1000 * fi)
+
+            _, _, tr_loss, tr_acc, va_loss, va_acc = train_cnn_on_split(
+                X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
+                X_val=X_pair[va_idx],   y_val=y_pair[va_idx],
+                n_ch=n_ch, n_time=n_time,
+                seed=fold_seed,
+                batch_size=min(cfg.batch_size, int(len(tr_idx))) if len(tr_idx) > 0 else cfg.batch_size,
+                learning_rate=cfg.learning_rate,
+                max_epochs=cfg.max_epochs,      # final training can use full schedule
+                patience=cfg.patience,
+                min_delta=cfg.min_delta,
+                device=device,
+            )
+
+            tr_losses.append(float(tr_loss))
+            tr_accs.append(float(tr_acc))
+            va_losses.append(float(va_loss))
+            va_accs.append(float(va_acc))
+
+    # 2) TRAIN FINAL MODEL ON ALL DATA
+    # We train on ALL X_pair/y_pair so the exported model sees maximum calibration windows.
+    # We'll create a "val_loader" that is just the train set again, so early-stopping doesn't crash.
+
+    # Normalize inside trainer (per-window z-score)
+    X_all = apply_z_score_normalization(X_pair)
+
+    # reshape: (N,C,T) -> (N,1,C,T)
+    X_all_t = torch.from_numpy(X_all[:, None, :, :]).float()
+    y_all_t = torch.from_numpy(y_pair.astype(np.int64)).long()
+
+    ds_all = TensorDataset(X_all_t, y_all_t)
+
+    g = torch.Generator().manual_seed(cfg.seed)
+    train_loader = DataLoader(
+        ds_all,
+        batch_size=min(cfg.batch_size, len(ds_all)) if len(ds_all) > 0 else cfg.batch_size,
+        shuffle=True,
+        generator=g
     )
-    # small since dataset is currently very small (will need to be tuned fs)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
-    print(f"train windows: {len(train_ds)}, val windows: {len(val_ds)}")
+    val_loader = DataLoader(
+        ds_all,
+        batch_size=min(cfg.batch_size, len(ds_all)) if len(ds_all) > 0 else cfg.batch_size,
+        shuffle=False
+    )
 
-    # Instantiate model
-    model = EEGNet(n_ch=C, n_time=T, n_classes=n_classes).to(device)
-    print(model)
+    # Build model using cfg hyperparams
+    model = EEGNet(
+        n_ch=n_ch, n_time=n_time, n_classes=2,
+        F1=cfg.F1, D=cfg.D, F2=cfg.F2,
+        kernel_length=cfg.kernel_length, dropout=cfg.dropout
+    ).to(device)
 
-    # Loss + optimizer
-    # CrossEntropyLoss expects:
-    #   logits (current 'scores'): (B, K)
-    #   labels: (B,) with values 0..K-1
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
-    best_state, history = run_training_to_convergence(
+    # Train to convergence
+    run_training_to_convergence(
         model, train_loader, val_loader,
         device=device, optimizer=optimizer, criterion=criterion,
-        max_epochs=max_epochs, patience=patience, min_delta=min_delta,
+        max_epochs=cfg.max_epochs, patience=cfg.patience, min_delta=cfg.min_delta,
     )
 
-    model.eval()
-    with torch.no_grad():
-        xb0, yb0 = next(iter(val_loader))
-        xb0 = xb0.to(device)
-        out = model(xb0)
-        print("logits shape:", tuple(out.shape), " (should be (B,K))")
+    # 3) EXPORT
+    # export helper expects trained model weights
+    export_ok = True
+    try:
+        export_cnn_onnx(
+            model=model,
+            n_ch=n_ch,
+            n_time=n_time,
+            out_path=Path(out_onnx_path),
+        )
+    except Exception as e:
+        print("[CNN] ONNX export failed:", e)
+        export_ok = False
 
-    return model, best_state, history
+    # FINAL RESULT OBJECT
+    # If folds weren't provided, we still trained/exported, but metrics will be zeros.
+    def _mean(xs: list[float]) -> float:
+        return float(np.mean(xs)) if xs else 0.0
 
+    return utils.FinalTrainResults(
+        train_ok=True,
+        onnx_export_ok=bool(export_ok),
+        final_train_loss=_mean(tr_losses),
+        final_train_acc=_mean(tr_accs),
+        final_val_loss=_mean(va_losses),
+        final_val_acc=_mean(va_accs),
+    )
 
 def train_cnn_on_split(
     *,
@@ -343,17 +407,25 @@ def train_cnn_on_split(
     patience: int,
     min_delta: float,
     device: torch.device,
-) -> tuple[float, float]:
+) -> tuple[float, float, float, float, float]:
     """
-    Trains CNN on a specific split and returns (val_bal_acc, val_acc).
+    Trains CNN on a specific split and returns:
+     (val_bal_acc, val_acc, train_loss, train_acc, val_loss)
     This avoids random_split so we can do proper CV.
     """
     # Make training more repeatable across runs
     torch.manual_seed(seed)
     np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
+    # normalize by z-score to avoid large magnitude skews
+    X_train = apply_z_score_normalization(X_train)
+    X_val   = apply_z_score_normalization(X_val)
 
-    # reshape: (N,C,T) -> (N,1,C,T)
+    # reshape: (N,C,T) -> (N,1,C,T) for Conv2d:
+    # C is the spatial dimension (height) -> how many channels there are (8)
+    # T is the temporal dimension (width) -> time samples (number of samples per window)
     Xtr = torch.from_numpy(X_train[:, None, :, :]).float()
     ytr = torch.from_numpy(y_train.astype(np.int64)).long()
     Xva = torch.from_numpy(X_val[:, None, :, :]).float()
@@ -362,12 +434,27 @@ def train_cnn_on_split(
     train_ds = TensorDataset(Xtr, ytr)
     val_ds   = TensorDataset(Xva, yva)
 
-    # deterministic shuffling
+    # deterministic shuffling for the train loader
     g = torch.Generator().manual_seed(seed)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=g)
-    val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=min(batch_size, len(train_ds)) if len(train_ds) > 0 else batch_size, # Automatically chops batches from input ds
+        shuffle=True,
+        generator=g
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=min(batch_size, len(val_ds)) if len(val_ds) > 0 else batch_size,
+        shuffle=False
+    )
 
-    model = EEGNet(n_ch=n_ch, n_time=n_time, n_classes=2).to(device)
+    # Instantiate model with configs
+    cfg = CNNTrainConfig()
+    model = EEGNet(
+        n_ch=n_ch, n_time=n_time, n_classes=2,
+        F1=cfg.F1, D=cfg.D, F2=cfg.F2,
+        kernel_length=cfg.kernel_length, dropout=cfg.dropout
+    ).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -377,7 +464,17 @@ def train_cnn_on_split(
         max_epochs=max_epochs, patience=patience, min_delta=min_delta,
     )
 
-    # Evaluate on val
+    # FINAL METRICS
+    # train and val loss/acc
+    train_loss, train_acc = run_epoch(
+        model, train_loader, train=False,
+        device=device, optimizer=optimizer, criterion=criterion
+    )
+    val_loss, val_acc = run_epoch(
+        model, val_loader, train=False,
+        device=device, optimizer=optimizer, criterion=criterion
+    )
+    # Balanced accuracy on val
     model.eval()
     preds = []
     trues = []
@@ -393,7 +490,76 @@ def train_cnn_on_split(
 
     val_acc = float((y_pred == y_true).mean())
     val_bal = utils.balanced_accuracy(y_true, y_pred)
-    return val_bal, val_acc
+    return (
+        float(val_bal),
+        float(val_acc),
+        float(train_loss),
+        float(train_acc),
+        float(val_loss),
+    )
+
+
+def score_pair_cv_cnn(
+    *,
+    X_pair: np.ndarray,
+    y_pair: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    n_ch: int,
+    n_time: int,
+    freq_a_hz: int,
+    freq_b_hz: int,
+) -> utils.ModelMetrics:
+    """
+    Cross-val scoring for ONE (already-binary) pair.
+    Folds are built in train_ssvep.py (shared across archs).
+    Returns ModelMetrics (shared contract).
+    """
+    cfg = CNNTrainConfig()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    bals: list[float] = []
+    accs: list[float] = []
+
+    for fi, (tr_idx, va_idx) in enumerate(folds):
+        # per-fold seed so folds are repeatable but not identical
+        fold_seed = int(cfg.seed + 1000 * fi)
+
+        val_bal, val_acc, _, _, _ = train_cnn_on_split(
+            X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
+            X_val=X_pair[va_idx],   y_val=y_pair[va_idx],
+            n_ch=n_ch, n_time=n_time,
+            seed=fold_seed,
+            batch_size=min(cfg.batch_size, int(len(tr_idx))) if len(tr_idx) > 0 else cfg.batch_size,
+            learning_rate=cfg.learning_rate,
+            max_epochs=cfg.max_epochs,
+            patience=cfg.patience,
+            min_delta=cfg.min_delta,
+            device=device,
+        )
+        bals.append(float(val_bal))
+        accs.append(float(val_acc))
+
+    if not bals:
+        return utils.ModelMetrics(
+            freq_a_hz=int(freq_a_hz),
+            freq_b_hz=int(freq_b_hz),
+            cv_ok=False,
+            avg_fold_balanced_accuracy=0.0,
+            std_fold_balanced_accuracy=0.0,
+            avg_fold_accuracy=0.0,
+            std_fold_accuracy=0.0,
+        )
+
+    return utils.ModelMetrics(
+        freq_a_hz=int(freq_a_hz),
+        freq_b_hz=int(freq_b_hz),
+        cv_ok=True,
+        avg_fold_balanced_accuracy=float(np.mean(bals)),
+        std_fold_balanced_accuracy=float(np.std(bals)),
+        avg_fold_accuracy=float(np.mean(accs)),
+        std_fold_accuracy=float(np.std(accs)),
+    )
 
 
 def export_cnn_onnx(
