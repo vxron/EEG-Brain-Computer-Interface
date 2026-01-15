@@ -36,6 +36,13 @@ static const state_transition state_transition_table[] = {
     {UIState_Pending_Training, UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Settings,         UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_NoSSVEP_Test,     UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Paused,           UIStateEvent_UserPushesExit,                 UIState_Home},
+    
+    {UIState_Active_Calib,     UIStateEvent_UserPushesPause,                UIState_Paused},  
+    {UIState_Instructions,     UIStateEvent_UserPushesPause,                UIState_Paused},
+    {UIState_NoSSVEP_Test,     UIStateEvent_UserPushesPause,                UIState_Paused},
+    {UIState_Active_Run,       UIStateEvent_UserPushesPause,                UIState_Paused},
+    // return states from state_paused must be specially handled in the detect_event function since they are dynamic
  
     {UIState_Run_Options,      UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
     {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Active_Run},
@@ -56,24 +63,32 @@ static const state_transition state_transition_table[] = {
 
 StimulusController_C::StimulusController_C(StateStore_s* stateStoreRef) : state_(UIState_None), stateStoreRef_(stateStoreRef) {
     // default protocol
-    trainingProtocol_.activeBlockDuration_s = 15;
+    trainingProtocol_.activeBlockDuration_s = 11;
     trainingProtocol_.displayInPairs = false;
     trainingProtocol_.freqsToTest = {TestFreq_8_Hz, TestFreq_11_Hz, TestFreq_14_Hz, TestFreq_17_Hz, TestFreq_20_Hz, 
                                      TestFreq_8_Hz, TestFreq_11_Hz, TestFreq_14_Hz, TestFreq_17_Hz, TestFreq_20_Hz}; // Two times
     trainingProtocol_.numActiveBlocks = trainingProtocol_.freqsToTest.size();
     trainingProtocol_.restDuration_s = 8;
-    trainingProtocol_.noSSVEPDuration_s = 12; // interleaved after each testfreq 
+    trainingProtocol_.noSSVEPDuration_s = 10; // interleaved after each testfreq 
     activeBlockQueue_ = trainingProtocol_.freqsToTest;
     activeBlockDur_ms_ = std::chrono::milliseconds{
     trainingProtocol_.activeBlockDuration_s * 1000 };
     restBlockDur_ms_ = std::chrono::milliseconds{
-    trainingProtocol_.restDuration_s * 1000 }; 
+    trainingProtocol_.restDuration_s * 1000 };
     noSSVEPBlockDur_ms_ = std::chrono::milliseconds{trainingProtocol_.noSSVEPDuration_s * 1000};    
 }
 
 void StimulusController_C::rebuild_protocol_from_settings() {
   int n = stateStoreRef_->settings.selected_freqs_n.load(std::memory_order_acquire);
   n = std::clamp(n, 1, 6);
+  int total_cycles = stateStoreRef_->settings.num_times_cycle_repeats.load(std::memory_order_acquire);
+  int duration_active = stateStoreRef_->settings.duration_active_s.load(std::memory_order_acquire);
+  int duration_rest = stateStoreRef_->settings.duration_rest_s.load(std::memory_order_acquire);
+  int duration_none = stateStoreRef_->settings.duration_none_s.load(std::memory_order_acquire);
+
+  trainingProtocol_.restDuration_s = duration_rest;
+  trainingProtocol_.activeBlockDuration_s = duration_active;
+  trainingProtocol_.noSSVEPDuration_s = duration_none;
 
   std::unique_lock<std::mutex> lock(stateStoreRef_->settings.selected_freq_array_mtx);
   std::vector<TestFreq_E> pool;
@@ -89,7 +104,7 @@ void StimulusController_C::rebuild_protocol_from_settings() {
 
   trainingProtocol_.freqsToTest.clear();
   // repeat series twice for better SNR per class
-  for (int rep=0; rep<2; ++rep){
+  for (int rep=0; rep<total_cycles; ++rep){
     trainingProtocol_.freqsToTest.insert(trainingProtocol_.freqsToTest.end(),
                                          pool.begin(), pool.end());
   }
@@ -144,6 +159,10 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
                 // want to show popup saying training failed
                 stateStoreRef_->g_ui_popup.store(UIPopup_TrainJobFailed);
             }
+
+            // reset any timers that got weird/paused/etc
+            if(currentWindowTimer_.is_paused() || currentWindowTimer_.is_started()) { currentWindowTimer_.stop_timer(); }
+
             break;
         }
         
@@ -271,6 +290,15 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
 
         }
 
+        case UIState_Paused: {
+            stateStoreRef_->g_ui_state.store(UIState_Paused, std::memory_order_release);
+            if(currentWindowTimer_.is_started()){
+                currentWindowTimer_.pause_timer();
+            }
+            pausedFromState_ = prevState;
+            break;
+        }
+
         case UIState_Run_Options: {
             stateStoreRef_->g_ui_state.store(UIState_Run_Options, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
@@ -336,7 +364,9 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
         case UIState_Active_Calib:
         case UIState_NoSSVEP_Test:
         case UIState_Instructions:
-            currentWindowTimer_.stop_timer();
+            if(ev != UIStateEvent_UserPushesPause){
+                currentWindowTimer_.stop_timer();
+            }
             if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
                 // calib over... need to save csv in consumer thread (finalize training data)
                 {
@@ -370,6 +400,13 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             // TODO: any fault cases
             break;
 
+        case UIState_Paused: {
+            if(currentWindowTimer_.is_paused()){
+                currentWindowTimer_.unpause_timer();
+            }
+            break;
+        }
+
         case UIState_Active_Run:
         // idk yet whether or not we want to be clearing here !
             //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
@@ -384,6 +421,15 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
 }
 
 void StimulusController_C::processEvent(UIStateEvent_E ev){
+    // special dynamic proessing for resume from pause because it depends on previous state
+    if(ev == UIStateEvent_UserPushesResume && state_ == UIState_Paused){
+        onStateExit(state_, ev);
+        state_ = pausedFromState_; // next state is whatever the prev state was
+        prevState_ = UIState_Paused;
+        onStateEnter(prevState_, state_, ev);
+        return;
+    }
+
     std::size_t table_size = sizeof(state_transition_table)/sizeof(state_transition);
 	for(std::size_t i=0; i<table_size; i++){
         const auto& t = state_transition_table[i];
