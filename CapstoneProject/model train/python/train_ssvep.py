@@ -33,6 +33,7 @@ from typing import Any
 from dataclasses import dataclass, asdict
 
 from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 
 import utils.utils as utils
 
@@ -66,6 +67,122 @@ from trainers.cnn_trainer import score_pair_cv_cnn, train_final_cnn_and_export
 #        - hparam_tuning: whether or not we want to run hparam tuning
 #        - (...) any addtn args as required per specific model implementation
 #    - return: FinalTrainResults (REQUIRED FOR ALL* see utils dataclass)  
+
+HOP_SAMPLES = 80
+
+# ------------------------------
+# DEBUG
+# ------------------------------
+
+def _summarize_blocked_folds(
+    *,
+    yb: np.ndarray,
+    trial_ids: np.ndarray,
+    groups: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    block_size_windows: int,
+    hop_samples: int,
+    n_time: int,
+    logger: "DebugLogger",
+    tag: str = "CV",
+) -> None:
+    yb = np.asarray(yb).astype(np.int64)
+    trial_ids = np.asarray(trial_ids).astype(np.int64)
+    groups = np.asarray(groups).astype(np.int64)
+
+    N = int(len(yb))
+    uniq_groups = np.unique(groups)
+
+    logger.log(f"[{tag}] ===== Blocked-fold summary =====")
+    logger.log(f"[{tag}] N_windows={N}")
+    logger.log(f"[{tag}] n_time(W)={int(n_time)} samples")
+    logger.log(f"[{tag}] hop_samples(H)={int(hop_samples)}")
+    logger.log(f"[{tag}] block_size_windows=ceil(W/H)={int(block_size_windows)}")
+    logger.log(f"[{tag}] n_groups={len(uniq_groups)}")
+    logger.log(f"[{tag}] k_used={len(folds)}")
+    logger.log()
+
+    # --- group purity checks + build group->label and group->trial maps
+    bad_label_groups = 0
+    bad_trial_groups = 0
+    group_to_label: dict[int, int] = {}
+    group_to_trial: dict[int, int] = {}
+
+    for g in uniq_groups:
+        idx_g = np.where(groups == g)[0]
+        labs = np.unique(yb[idx_g])
+        trs = np.unique(trial_ids[idx_g])
+
+        if len(labs) != 1:
+            bad_label_groups += 1
+        if len(trs) != 1:
+            bad_trial_groups += 1
+
+        # even if not pure, choose first for logging (but we'll warn)
+        group_to_label[int(g)] = int(yb[idx_g[0]])
+        group_to_trial[int(g)] = int(trial_ids[idx_g[0]])
+
+    if bad_label_groups or bad_trial_groups:
+        logger.log(
+            f"[{tag}] WARNING: group purity failed | "
+            f"bad_label_groups={bad_label_groups}, "
+            f"bad_trial_groups={bad_trial_groups}"
+        )
+    else:
+        logger.log(f"[{tag}] group purity OK ✓")
+
+    logger.log()
+
+    # --- overall class balance (windows)
+    c0 = int((yb == 0).sum())
+    c1 = int((yb == 1).sum())
+    logger.log(f"[{tag}] overall class counts: c0={c0}, c1={c1}")
+    logger.log()
+
+    # --- per-fold stats
+    for fi, (tr_idx, va_idx) in enumerate(folds):
+        tr_idx = np.asarray(tr_idx, dtype=np.int64)
+        va_idx = np.asarray(va_idx, dtype=np.int64)
+
+        # window counts
+        tr0 = int((yb[tr_idx] == 0).sum())
+        tr1 = int((yb[tr_idx] == 1).sum())
+        va0 = int((yb[va_idx] == 0).sum())
+        va1 = int((yb[va_idx] == 1).sum())
+
+        # leakage check: any group present in both train and val?
+        tr_gset = set(groups[tr_idx].tolist())
+        va_gset = set(groups[va_idx].tolist())
+        inter = tr_gset.intersection(va_gset)
+
+        logger.log(
+            f"[{tag}] Fold {fi:02d}: "
+            f"train N={len(tr_idx)} (c0={tr0}, c1={tr1}) | "
+            f"val N={len(va_idx)} (c0={va0}, c1={va1}) | "
+            f"leak_groups={len(inter)}"
+        )
+
+        if inter:
+            logger.log(
+                f"[{tag}]   ERROR: leakage detected! example groups={list(inter)[:5]}"
+            )
+
+        # group counts (by label), computed correctly PER FOLD
+        tr_groups = np.array(sorted(tr_gset), dtype=np.int64)
+        va_groups = np.array(sorted(va_gset), dtype=np.int64)
+
+        tr_g0 = int(sum(group_to_label[int(g)] == 0 for g in tr_groups))
+        tr_g1 = int(sum(group_to_label[int(g)] == 1 for g in tr_groups))
+        va_g0 = int(sum(group_to_label[int(g)] == 0 for g in va_groups))
+        va_g1 = int(sum(group_to_label[int(g)] == 1 for g in va_groups))
+
+        logger.log(
+            f"[{tag}]   groups: "
+            f"train G={len(tr_groups)} (g0={tr_g0}, g1={tr_g1}) | "
+            f"val G={len(va_groups)} (g0={va_g0}, g1={va_g1})"
+        )
+
+    logger.log(f"[{tag}] ===== End summary =====\n")
 
 # ------------------------------
 # PATH ROOTS (repo-anchored)
@@ -370,24 +487,228 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
     )
     return X, y_hz, trial_ids_np, info
 
-
 # -----------------------------
-# Best Pair Selection Logic
+# CV Fold building
 # -----------------------------
-def make_binary_pair_dataset(X: np.ndarray, y_hz: np.ndarray, trial_ids: np.ndarray, hz_a: int, hz_b: int) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Filters to only windows in {hz_a, hz_b} and returns:
-      Xp: (Npair, C, T)
-      yb: (Npair,) where hz_a -> 0, hz_b -> 1
-    """
-    mask = (y_hz == hz_a) | (y_hz == hz_b)
-    Xp = X[mask]
-    yp = y_hz[mask]
-    tp = trial_ids[mask]
-    yb = np.where(yp == hz_a, 0, 1).astype(np.int64)
-    return Xp, yb, tp
 
-def make_cv_folds_binary_by_window(
+
+def _count_groups_per_class(
+    *,
+    yb: np.ndarray,
+    groups: np.ndarray,
+) -> tuple[int, int, np.ndarray, np.ndarray]:
+    """
+    Returns:
+      n_groups_c0, n_groups_c1,
+      uniq_groups (sorted),
+      group_label aligned with uniq_groups (0/1)
+    Assumes each group is label-pure (we still verify elsewhere).
+    """
+    yb = np.asarray(yb).astype(np.int64)
+    groups = np.asarray(groups).astype(np.int64)
+
+    uniq_groups = np.unique(groups)
+    group_label = np.empty(len(uniq_groups), dtype=np.int64)
+
+    for gi, g in enumerate(uniq_groups):
+        idx_g = np.where(groups == g)[0]
+        if idx_g.size == 0:
+            raise RuntimeError("Impossible: empty group encountered.")
+        group_label[gi] = int(yb[idx_g[0]])
+
+    n_groups_c0 = int((group_label == 0).sum())
+    n_groups_c1 = int((group_label == 1).sum())
+    return n_groups_c0, n_groups_c1, uniq_groups, group_label
+
+def _validate_folds_strict(
+    *,
+    yb: np.ndarray,
+    groups: np.ndarray,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+) -> tuple[bool, list[str]]:
+    """
+    Strict validation:
+      - at least 2 folds
+      - no group leakage between train and val
+      - each fold has both classes in val AND train
+    Returns (ok, reasons)
+    """
+    yb = np.asarray(yb).astype(np.int64)
+    groups = np.asarray(groups).astype(np.int64)
+
+    reasons: list[str] = []
+    if len(folds) < 2:
+        reasons.append("len(folds) < 2")
+        return False, reasons
+
+    for fi, (tr_idx, va_idx) in enumerate(folds):
+        tr_idx = np.asarray(tr_idx, dtype=np.int64)
+        va_idx = np.asarray(va_idx, dtype=np.int64)
+
+        # group leakage check
+        inter = set(groups[tr_idx]).intersection(set(groups[va_idx]))
+        if inter:
+            reasons.append(f"fold {fi}: group leakage (n={len(inter)})")
+            continue
+
+        # class presence check (val)
+        va0 = int((yb[va_idx] == 0).sum())
+        va1 = int((yb[va_idx] == 1).sum())
+        if va0 == 0 or va1 == 0:
+            reasons.append(f"fold {fi}: val single-class (va0={va0}, va1={va1})")
+
+        # class presence check (train)
+        tr0 = int((yb[tr_idx] == 0).sum())
+        tr1 = int((yb[tr_idx] == 1).sum())
+        if tr0 == 0 or tr1 == 0:
+            reasons.append(f"fold {fi}: train single-class (tr0={tr0}, tr1={tr1})")
+
+        # size sanity
+        if tr_idx.size == 0 or va_idx.size == 0:
+            reasons.append(f"fold {fi}: empty split (train={tr_idx.size}, val={va_idx.size})")
+
+    ok = (len(reasons) == 0)
+    return ok, reasons
+
+
+def make_cv_folds_binary_by_blocked_windows(
+    *,
+    yb: np.ndarray,
+    trial_ids: np.ndarray,
+    k: int,
+    seed: int,
+    n_time: int,
+    hop_samples: int,
+    fs_hz: float = 250.0,
+    debug_logger: utils.DebugLogger | None = None,
+    debug_tag: str = "CV",
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    Steps:
+      1) Build blocked groups (overlap-safe) within trials.
+      2) Compute k upper bound based on groups-per-class.
+      3) For k_try from k_eff down to 2:
+            try a fixed seed list (deterministic),
+            build StratifiedGroupKFold splits,
+            validate strictly.
+         Return first valid folds.
+      4) If nothing valid, return [].
+
+    Guarantees (if returns non-empty):
+      - leak_groups=0 in every fold
+      - each fold val has both classes
+      - each fold train has both classes
+    """
+    yb = np.asarray(yb).astype(np.int64)
+    trial_ids = np.asarray(trial_ids).astype(np.int64)
+
+    if yb.shape[0] != trial_ids.shape[0]:
+        raise ValueError("yb and trial_ids must have same length")
+
+    # 1) Build block groups
+    block_size_windows = _compute_block_size_windows(
+        n_time=int(n_time),
+        hop_samples=int(hop_samples),
+    )
+    groups = _make_block_groups_within_trials(
+        trial_ids=trial_ids,
+        yb=yb,
+        block_size_windows=int(block_size_windows),
+    )
+
+    # 2) Compute k bound from groups-per-class
+    n_groups_c0, n_groups_c1, uniq_groups, group_label = _count_groups_per_class(
+        yb=yb, groups=groups
+    )
+    k_req = int(k)
+    k_eff = int(min(k_req, n_groups_c0, n_groups_c1))
+
+    if debug_logger is not None:
+        debug_logger.log(f"[{debug_tag}] ===== Fold builder (blocked groups) =====")
+        debug_logger.log(f"[{debug_tag}] N_windows={len(yb)}")
+        debug_logger.log(f"[{debug_tag}] n_time={int(n_time)} hop_samples={int(hop_samples)} fs_hz={float(fs_hz)}")
+        debug_logger.log(f"[{debug_tag}] block_size_windows=ceil(W/H)={block_size_windows}")
+        debug_logger.log(f"[{debug_tag}] n_groups_total={len(uniq_groups)}")
+        debug_logger.log(f"[{debug_tag}] n_groups_c0={n_groups_c0}, n_groups_c1={n_groups_c1}")
+        debug_logger.log(f"[{debug_tag}] k requested={k_req} -> k_eff (group-limited)={k_eff}")
+        debug_logger.log()
+
+    if k_eff < 2:
+        if debug_logger is not None:
+            debug_logger.log(f"[{debug_tag}] FAIL: k_eff < 2 (not enough groups per class)")
+            debug_logger.log(f"[{debug_tag}] ========================================\n")
+        return []
+
+    # Deterministic seed schedule:
+    # - include the provided seed first
+    # - then a fixed list of additional seeds
+    seed_base = int(seed)
+    seed_list = [seed_base, 0, 1, 2, 3, 5, 7, 11, 13, 17]
+    # remove duplicates while preserving order
+    seen = set()
+    seed_list = [s for s in seed_list if not (s in seen or seen.add(s))]
+
+    idx = np.arange(len(yb), dtype=np.int64)
+
+    # 3) Retry + degrade loop
+    for k_try in range(k_eff, 1, -1):
+        if debug_logger is not None:
+            debug_logger.log(f"[{debug_tag}] Trying k_try={k_try} with seeds={seed_list}")
+
+        for s in seed_list:
+            sgkf = StratifiedGroupKFold(n_splits=int(k_try), shuffle=True, random_state=int(s))
+            folds: list[tuple[np.ndarray, np.ndarray]] = []
+
+            try:
+                for tr_idx, va_idx in sgkf.split(idx, yb, groups):
+                    folds.append((tr_idx.astype(np.int64), va_idx.astype(np.int64)))
+            except Exception as e:
+                if debug_logger is not None:
+                    debug_logger.log(f"[{debug_tag}]   seed={s}: EXCEPTION during split: {e}")
+                continue
+
+            ok, reasons = _validate_folds_strict(yb=yb, groups=groups, folds=folds)
+
+            if debug_logger is not None:
+                debug_logger.log(f"[{debug_tag}]   seed={s}: built {len(folds)} folds -> ok={ok}")
+                if not ok:
+                    for r in reasons[:6]:
+                        debug_logger.log(f"[{debug_tag}]     reason: {r}")
+                    if len(reasons) > 6:
+                        debug_logger.log(f"[{debug_tag}]     ... ({len(reasons)-6} more)")
+                else:
+                    debug_logger.log(f"[{debug_tag}]   seed={s}: SUCCESS ✓")
+
+            if ok:
+                # 4) Summarize the successful folds in detail
+                if debug_logger is not None:
+                    _summarize_blocked_folds(
+                        yb=yb,
+                        trial_ids=trial_ids,
+                        groups=groups,
+                        folds=folds,
+                        block_size_windows=int(block_size_windows),
+                        hop_samples=int(hop_samples),
+                        n_time=int(n_time),
+                        logger=debug_logger,
+                        tag=debug_tag,
+                    )
+                    debug_logger.log(f"[{debug_tag}] DONE: using k={k_try}, seed={s}")
+                    debug_logger.log(f"[{debug_tag}] ========================================\n")
+                return folds
+
+        if debug_logger is not None:
+            debug_logger.log(f"[{debug_tag}] No valid folds for k_try={k_try}. Degrading k...\n")
+
+    if debug_logger is not None:
+        debug_logger.log(f"[{debug_tag}] FAIL: Could not produce valid folds for any k>=2")
+        debug_logger.log(f"[{debug_tag}] ========================================\n")
+
+    return []
+
+
+
+def make_cv_folds_binary_by_window_old(
     yb: np.ndarray, trial_ids: np.ndarray, k: int, seed: int
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """
@@ -481,6 +802,182 @@ def make_cv_folds_binary(yb: np.ndarray, k: int, seed: int) -> list[tuple[np.nda
 
     return folds
 
+def _compute_block_size_windows(
+    *,
+    n_time: int,
+    hop_samples: int,
+) -> int:
+    """
+    Block size (in windows) ~ ceil(W/H) where:
+      W = window_len_samples = n_time
+      H = hop_samples
+    This groups windows that overlap in raw EEG samples into the same block.
+    """
+    if hop_samples <= 0:
+        raise ValueError(f"hop_samples must be > 0, got {hop_samples}")
+    if n_time <= 0:
+        raise ValueError(f"n_time must be > 0, got {n_time}")
+    # fs_hz isn't mathematically required for W/H, but we keep it in signature
+    # because you'll likely want to log/validate it.
+    block = int(np.ceil(float(n_time) / float(hop_samples)))
+    return max(1, block)
+
+
+def _make_block_groups_within_trials(
+    *,
+    trial_ids: np.ndarray,
+    yb: np.ndarray,
+    block_size_windows: int,
+) -> np.ndarray:
+    """
+    Create "group" ids so that:
+      - groups never cross trial boundaries
+      - groups never cross label boundaries (safety)
+      - within each (trial_id, label) segment, consecutive windows are chunked into blocks
+        of size block_size_windows
+
+    IMPORTANT: this assumes the incoming arrays are already in time order
+    (which they are, because your windows are built in time order in load_windows_csv()).
+    """
+    trial_ids = np.asarray(trial_ids).astype(np.int64)
+    yb = np.asarray(yb).astype(np.int64)
+    if trial_ids.shape[0] != yb.shape[0]:
+        raise ValueError("trial_ids and yb must have same length")
+
+    N = int(len(yb))
+    groups = np.empty(N, dtype=np.int64)
+
+    g = -1
+    pos_in_block = 0
+
+    for i in range(N):
+        # start a new group when:
+        # - first sample
+        # - trial changes
+        # - label changes (extra guard)
+        # - current block is full
+        new_group = False
+        if i == 0:
+            new_group = True
+        else:
+            if trial_ids[i] != trial_ids[i - 1]:
+                new_group = True
+            elif yb[i] != yb[i - 1]:
+                new_group = True
+            elif pos_in_block >= block_size_windows:
+                new_group = True
+
+        if new_group:
+            g += 1
+            pos_in_block = 1
+        else:
+            pos_in_block += 1
+
+        groups[i] = g
+
+    return groups
+
+
+def make_cv_folds_binary_by_blocked_windows_old(
+    *,
+    yb: np.ndarray,
+    trial_ids: np.ndarray,
+    k: int,
+    seed: int,
+    n_time: int,
+    hop_samples: int,
+    fs_hz: float = 250.0,
+    debug_logger: utils.DebugLogger | None = None,
+    debug_tag: str = "CV",
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    Stratified CV on *blocked window groups*:
+      - windows close in time (overlapping) are grouped into the same "block" group
+        block_size_windows ~= ceil(W/H) where W=n_time and H=hop_samples
+      - we then do StratifiedGroupKFold so each fold has both classes, but blocks
+        never get split across train/val.
+
+    This is desired compromise:
+      random-ish windows in each fold, but overlap leakage is prevented because
+      overlapping neighbors live in the same group.
+
+    NOTE: This relies on arrays being in time order within each trial_id.
+    """
+    yb = np.asarray(yb).astype(np.int64)
+    trial_ids = np.asarray(trial_ids).astype(np.int64)
+
+    # 1) Build groups = block ids
+    block_size_windows = _compute_block_size_windows(
+        n_time=int(n_time),
+        hop_samples=int(hop_samples),
+    )
+    groups = _make_block_groups_within_trials(
+        trial_ids=trial_ids,
+        yb=yb,
+        block_size_windows=int(block_size_windows),
+    )
+
+    # 2) reduce k based on BLOCKS (groups)
+    uniq_groups = np.unique(groups)
+    group_label = np.empty(len(uniq_groups), dtype=np.int64)
+    for gi, g in enumerate(uniq_groups):
+        idx_g = np.where(groups == g)[0]
+        group_label[gi] = int(yb[idx_g[0]])
+    n_groups_c0 = int((group_label == 0).sum())
+    n_groups_c1 = int((group_label == 1).sum())
+    k_req = int(k)
+    k_eff = int(min(k_req, n_groups_c0, n_groups_c1))
+
+    if debug_logger is not None:
+        debug_logger.log(
+            f"[{debug_tag}] k requested={k_req}, "
+            f"groups per class: c0={n_groups_c0}, c1={n_groups_c1} -> k_eff={k_eff}"
+        )
+    if k_eff < 2:
+        if debug_logger is not None:
+            debug_logger.log(f"[{debug_tag}] fold build failed: k_eff < 2 (not enough groups).")
+        return []
+
+    # 3) StratifiedGroupKFold on windows with "groups" constraint
+    # This ensures each fold has both classes (when possible) AND groups aren't split.
+    sgkf = StratifiedGroupKFold(n_splits=int(k_eff), shuffle=True, random_state=int(seed))
+    idx = np.arange(len(yb), dtype=np.int64)
+
+    folds: list[tuple[np.ndarray, np.ndarray]] = []
+    for tr_idx, va_idx in sgkf.split(idx, yb, groups):
+        folds.append((tr_idx.astype(np.int64), va_idx.astype(np.int64)))
+
+    if debug_logger is not None:
+        _summarize_blocked_folds(
+            yb=yb,
+            trial_ids=trial_ids,
+            groups=groups,
+            folds=folds,
+            block_size_windows=int(block_size_windows),
+            hop_samples=int(hop_samples),
+            n_time=int(n_time),
+            logger=debug_logger,
+            tag=debug_tag,
+        )
+
+    return folds
+
+# -----------------------------
+# Best Pair Selection Logic
+# -----------------------------
+def make_binary_pair_dataset(X: np.ndarray, y_hz: np.ndarray, trial_ids: np.ndarray, hz_a: int, hz_b: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Filters to only windows in {hz_a, hz_b} and returns:
+      Xp: (Npair, C, T)
+      yb: (Npair,) where hz_a -> 0, hz_b -> 1
+    """
+    mask = (y_hz == hz_a) | (y_hz == hz_b)
+    Xp = X[mask]
+    yp = y_hz[mask]
+    tp = trial_ids[mask]
+    yb = np.where(yp == hz_a, 0, 1).astype(np.int64)
+    return Xp, yb, tp
+
 def shortlist_freqs(y_hz: np.ndarray, pick_top_k: int) -> list[int]:
     """
     Keep only frequencies with enough windows, then take the top-K by count.
@@ -502,6 +999,7 @@ def select_best_pair(
     X: np.ndarray, y_hz: np.ndarray, trial_ids: np.ndarray,
     info: utils.DatasetInfo,
     gen_cfg: utils.GeneralTrainingConfigs,
+    debug_logger: utils.DebugLogger | None = None,
     args,
 ) -> tuple[int, int, dict[str, Any]]:
     """
@@ -535,13 +1033,18 @@ def select_best_pair(
             print(f"[PY] pair ({hz_a},{hz_b}) skipped: not enough data (c0={c0}, c1={c1})")
             continue
 
-        # Auto-reduce k if dataset is small
-        k = int(min(gen_cfg.number_cross_val_folds, c0, c1))
-        if k < 2:
-            print(f"[PY] pair ({hz_a},{hz_b}) skipped: k too small (k={k}, c0={c0}, c1={c1})")
-            continue
-
-        folds = make_cv_folds_binary_by_window(yb, tp, k, seed=0)
+        k = int(gen_cfg.number_cross_val_folds)
+        folds = make_cv_folds_binary_by_blocked_windows(
+            yb=yb,
+            trial_ids=tp,
+            k=k,
+            seed=0,
+            n_time=info.n_time,    # window length in samples
+            hop_samples=HOP_SAMPLES,
+            fs_hz=250.0,
+            debug_logger=debug_logger,
+            debug_tag=f"PAIR {hz_a}vs{hz_b}",
+        )
         if len(folds) < 2:
             print(f"[PY] pair ({hz_a},{hz_b}) skipped: fold build failed")
             continue
@@ -557,6 +1060,7 @@ def select_best_pair(
                 n_time=info.n_time,
                 freq_a_hz=hz_a,
                 freq_b_hz=hz_b,
+                logger=debug_logger,
             )
         elif args.arch == "SVM":
             metrics = utils.ModelMetrics(0, -99, -99)
@@ -657,6 +1161,8 @@ def main():
     out_dir = out_dir_arg if out_dir_arg.is_absolute() else (MODELS_ROOT / out_dir_arg)
     out_dir.mkdir(parents=True, exist_ok=True)
     print("[PY] model output dir:", out_dir.resolve())
+    debug_log = utils.DebugLogger(out_dir / "train_ssvep_debug.txt")
+    print(f"[PY] CV debug log -> {debug_log.path.resolve()}")
 
     data_arg = Path(args.data)
     data_session_dir = data_arg if data_arg.is_absolute() else (DATA_ROOT / data_arg)
@@ -675,7 +1181,7 @@ def main():
     print("[PY] Loaded X:", X.shape, "y_hz:", y_hz.shape, "classes_hz:", info.classes_hz)
 
     # 3) Select best pair using CV scoring with same arch
-    best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, trial_ids=trial_ids, info=info, gen_cfg=gen_cfg, args=args)
+    best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, trial_ids=trial_ids, info=info, gen_cfg=gen_cfg, debug_logger=debug_log, args=args)
     print(f"[PY] BEST PAIR: {best_left_hz}Hz vs {best_right_hz}Hz")
 
     # 4) Train final model on winning pair
@@ -683,10 +1189,20 @@ def main():
     # Build folds for the winning pair (used for final CV reporting)
     c0 = int((yb == 0).sum())
     c1 = int((yb == 1).sum())
-    k_final = int(min(gen_cfg.number_cross_val_folds, c0, c1))
+    k_final = int(gen_cfg.number_cross_val_folds)
     folds_final: list[tuple[np.ndarray, np.ndarray]] = []
-    if k_final >= 2:
-        folds_final = make_cv_folds_binary_by_window(yb, tp, k_final, seed=0)
+    if c0 >= 2 and c1 >= 2:
+        folds_final = make_cv_folds_binary_by_blocked_windows(
+            yb=yb,
+            trial_ids=tp,
+            k=k_final,
+            seed=0,
+            n_time=info.n_time,
+            hop_samples=HOP_SAMPLES,
+            fs_hz=250.0,
+            debug_logger=debug_log,
+            debug_tag=f"FINAL {best_left_hz}vs{best_right_hz}",
+        )
     if len(folds_final) < 2:
         print(f"[PY] warning: final folds not usable (k_final={k_final}, folds={len(folds_final)}). "
               f"Final training will still run; CV metrics may be 0.")
@@ -701,6 +1217,7 @@ def main():
             n_time=info.n_time,
             out_onnx_path=(out_dir / "ssvep_model.onnx"),
             hparam_tuning=hparam_arg,
+            logger=debug_log,
         )
 
     elif args.arch == "SVM":

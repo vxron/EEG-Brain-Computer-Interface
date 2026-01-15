@@ -5,6 +5,28 @@ import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from datetime import datetime
+
+# ==================== TEXT FILE LOGGER ==============================
+class DebugLogger:
+    """
+    Simple line-oriented debug logger that writes to a file.
+    """
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        header = (
+            f"==== DEBUG LOG START ====\n"
+            f"created: {datetime.now().isoformat()}\n"
+            f"path: {self.path.resolve()}\n"
+            f"=========================\n\n"
+        )
+        self.path.write_text(header)
+
+    def log(self, msg: str = ""):
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(msg.rstrip() + "\n")
 
 # =================== SHARED DATACLASSES ============================
 @dataclass(frozen=True)
