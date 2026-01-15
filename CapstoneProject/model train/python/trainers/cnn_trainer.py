@@ -18,6 +18,12 @@ import utils.utils as utils
 # TODO: decide pooling args & hyperparam tuning range based on frequencies were looking at. shift up if using high freq to preserve more info (at least 60Hz by Nyquist)
 
 # ===================== DEBUG HELPERS =====================
+def _log(logger: utils.DebugLogger | None, msg: str = "") -> None:
+    if logger is None:
+        print(msg)
+    else:
+        logger.log(msg)
+
 def eval_pred_stats(model, loader, *, device) -> dict:
     model.eval()
     y_true_all = []
@@ -75,7 +81,7 @@ class CNNTrainConfig:
 
 # Hyperparameter tuning space [if hparam tuning on, for final model training only] 
 HPARAM_SPACE = {
-    "kernel_length": [63, 125, 188],  # 250 ms, 500 ms, or 750 ms temporal segments as layer 2 inputs
+    "kernel_length": [63, 125, 187],  # 250 ms, 500 ms, or 750 ms temporal segments as layer 2 inputs
     "pooling_factor": [2, 4, 5],      # layer 2 temporal downsampling 
     "pooling_factor_final": [8, 10],  # final layer temporal downsampling
     "F1": [8, 16],                    # number of output (125-length) temporal combinations from layer 1
@@ -184,8 +190,8 @@ class EEGNet(nn.Module):
         self.sep_depth = nn.Conv2d(
             in_channels=F1 * D,
             out_channels=F1 * D,
-            kernel_size=(1, 16),
-            padding=(0, 16 // 2),
+            kernel_size=(1, 15),
+            padding=(0, 15 // 2),
             groups=F1 * D,
             bias=False
         )
@@ -300,6 +306,7 @@ def make_stratified_trial_batches_new(
     *,
     max_windows_per_batch: int = 16,
     seed: int = 0,
+    logger: utils.DebugLogger | None = None,
 ) -> list[list[int]]:
     """
     Build batches ensuring BOTH classes present and roughly balanced.
@@ -412,7 +419,7 @@ def make_stratified_trial_batches_new(
     dropped = total_available - total_used
     
     if dropped > 0:
-        print(f"[BATCH INFO] Used {total_used}/{total_available} windows ({100*total_used/total_available:.1f}%), dropped {dropped} to maintain class balance")
+        _log(logger, f"[BATCH INFO] Used {total_used}/{total_available} windows ({100*total_used/total_available:.1f}%), dropped {dropped} to maintain class balance")
     
     return batches
 
@@ -655,7 +662,8 @@ def run_epoch(model, loader, train: bool, *, device, optimizer, criterion):
 
 def run_training_to_convergence(model, train_loader, val_loader,
                                 *, device, optimizer, criterion,
-                                max_epochs, patience, min_delta):
+                                max_epochs, patience, min_delta,
+                                logger: utils.DebugLogger | None = None):
     """
     Trains until val loss stops improving.
     Returns: (best_state_dict, history_list)
@@ -677,7 +685,7 @@ def run_training_to_convergence(model, train_loader, val_loader,
                                     device=device, optimizer=optimizer, criterion=criterion)
 
         stats = eval_pred_stats(model, val_loader, device=device)
-        print(
+        _log(logger,
             f"           val_pred_dist: pred0={stats['pred0']} pred1={stats['pred1']} | "
             f"conf: tn={stats['tn']} fp={stats['fp']} fn={stats['fn']} tp={stats['tp']}"
         )
@@ -701,7 +709,7 @@ def run_training_to_convergence(model, train_loader, val_loader,
             epochs_no_improve += 1
             star = ""
 
-        print(
+        _log(logger,
             f"Epoch {ep:03d} | "
             f"train loss {tr_loss:.4f} acc {tr_acc:.3f} | "
             f"val loss {va_loss:.4f} acc {va_acc:.3f} | "
@@ -709,15 +717,15 @@ def run_training_to_convergence(model, train_loader, val_loader,
         )
 
         if epochs_no_improve >= patience:
-            print(f"Early stop at epoch {ep} (best val loss {best_val_loss:.4f}).")
+            _log(logger,f"Early stop at epoch {ep} (best val loss {best_val_loss:.4f}).")
             break
 
     # Restore best weights into the *training* model
     if best_state is not None:
         model.load_state_dict(best_state)
-        print("Restored best model weights (lowest val loss).")
+        _log(logger,"Restored best model weights (lowest val loss).")
     else:
-        print("WARNING: best_state never set (unexpected).")
+        _log(logger,"WARNING: best_state never set (unexpected).")
 
     return best_state, history
 
@@ -732,6 +740,7 @@ def train_single_final_model_with_holdout_and_export(
     out_onnx_path: Path,
     device: torch.device,
     holdout_frac: float = 0.1,
+    logger: utils.DebugLogger | None = None
 ) -> tuple[bool, bool, float, float, float]:
     """
     Trains ONE final model using a small trial-wise holdout for early stopping, then exports ONNX.
@@ -782,13 +791,13 @@ def train_single_final_model_with_holdout_and_export(
         for ep in range(int(cfg.MAX_EPOCHS)):
             tr_loss, tr_acc = run_epoch(model, train_loader, train=True,
                                         device=device, optimizer=optimizer, criterion=criterion)
-            print(f"[FINAL-NO-HOLDOUT] Epoch {ep+1:03d}/{int(cfg.MAX_EPOCHS)} "
+            _log(logger,f"[FINAL-NO-HOLDOUT] Epoch {ep+1:03d}/{int(cfg.MAX_EPOCHS)} "
                   f"train_loss={tr_loss:.4f} train_acc={tr_acc:.3f}")
 
         try:
             export_cnn_onnx(model=model, n_ch=n_ch, n_time=n_time, out_path=Path(out_onnx_path))
         except Exception as e:
-            print("[CNN] ONNX export failed:", e)
+            _log(logger, f"[CNN] ONNX export failed: {e}")
             export_ok = False
 
         return bool(train_ok), bool(export_ok), float(ho_loss), float(ho_acc), float(ho_bal)
@@ -810,7 +819,7 @@ def train_single_final_model_with_holdout_and_export(
     try:
         export_cnn_onnx(model=model, n_ch=n_ch, n_time=n_time, out_path=Path(out_onnx_path))
     except Exception as e:
-        print("[CNN] ONNX export failed:", e)
+        _log(logger, f"[CNN] ONNX export failed: {e}")
         export_ok = False
 
     return True, bool(export_ok), float(val_loss), float(val_acc), float(val_bal)
@@ -825,6 +834,7 @@ def train_final_cnn_and_export(
     n_time: int,
     out_onnx_path: Path,
     hparam_tuning: str,
+    logger: utils.DebugLogger | None = None,
 ) -> utils.FinalTrainResults:
     """
     FINAL TRAINING + EXPORT (shared trainer API)
@@ -863,9 +873,10 @@ def train_final_cnn_and_export(
                 n_time=n_time,
                 device=device,
                 max_epochs=int(cfg.MAX_EPOCHS_HTUNING),
+                logger=logger,
             )
 
-            print(
+            _log(logger,
                 "[HTUNE] "
                 f"score={score:.4f} "
                 f"F1={cand.F1} D={cand.D} "
@@ -879,8 +890,8 @@ def train_final_cnn_and_export(
                 best_cfg = cand
 
         cfg = best_cfg
-        print("[HTUNE] Best cfg:", asdict(cfg))
-        print("[HTUNE] Best mean CV balanced acc:", float(best_score))
+        _log(logger, f"[HTUNE] Best cfg: {asdict(cfg)}")
+        _log(logger, f"[HTUNE] Best mean CV balanced acc: {float(best_score):.4f}")
 
     # 3) Always compute CV metrics for the cfg we will actually deploy
     if folds and len(folds) >= 2:
@@ -897,6 +908,7 @@ def train_final_cnn_and_export(
                 cfg=fold_cfg,
                 max_epochs=cfg.MAX_EPOCHS,      # final training can use full schedule
                 device=device,
+                logger=logger,
             )
 
             cv_bals.append(float(va_bal))
@@ -951,6 +963,7 @@ def train_cnn_on_split(
     max_epochs: int,
     device: torch.device,
     return_model: bool = False, # need model when we do onnx export at the end (once only)
+    logger: utils.DebugLogger | None = None,
 ) -> tuple[float, float, float, float, float] | tuple[float, float, float, float, float, EEGNet]:
     """
     Trains CNN on a specific split and returns:
@@ -986,10 +999,11 @@ def train_cnn_on_split(
             y=y_train,
             max_windows_per_batch=int(cfg.batch_size),
             seed=int(cfg.seed),
+            logger=logger,
         )
         train_loader = DataLoader(train_ds, batch_sampler=ListBatchSampler(batches))
         # In train_cnn_on_split(), after creating batches:
-        print(f"\n[BATCH VALIDATION]")
+        _log(logger,f"\n[BATCH VALIDATION]")
         for i, batch_idx in enumerate(batches):
             batch_labels = y_train[batch_idx]
             n0 = int((batch_labels == 0).sum())
@@ -998,9 +1012,9 @@ def train_cnn_on_split(
             if n0 == 0 or n1 == 0:
                 raise RuntimeError(f"Batch {i} is unbalanced: class0={n0}, class1={n1}")
 
-            print(f"  Batch {i}: size={len(batch_idx)}, class0={n0}, class1={n1}")
+            _log(logger,f"  Batch {i}: size={len(batch_idx)}, class0={n0}, class1={n1}")
 
-        print(f"All {len(batches)} batches are balanced! ✓\n")
+        _log(logger,f"All {len(batches)} batches are balanced! ✓\n")
     else:
         # fallback: window batching (less good for strongly overlapping ssvep windows...)
         g = torch.Generator().manual_seed(int(cfg.seed))
@@ -1017,6 +1031,9 @@ def train_cnn_on_split(
         batch_size=min(int(cfg.batch_size), len(val_ds)) if len(val_ds) > 0 else int(cfg.batch_size),
         shuffle=False,
     )
+
+    _log(logger, f"[SPLIT] train windows={len(train_ds)} c0={(y_train==0).sum()} c1={(y_train==1).sum()}")
+    _log(logger, f"[SPLIT] val   windows={len(val_ds)}   c0={(y_val==0).sum()} c1={(y_val==1).sum()}")
 
     # build model using cfg
     F2 = _derived_F2(cfg)
@@ -1043,6 +1060,7 @@ def train_cnn_on_split(
         max_epochs=int(max_epochs), # depends on htuning vs pairwise comps vs final model
         patience=int(cfg.patience),
         min_delta=float(cfg.min_delta),
+        logger=logger,
     )
 
     # FINAL METRICS
@@ -1101,6 +1119,7 @@ def score_hparam_cfg_cv_cnn(
     n_time: int,
     device: torch.device,
     max_epochs: int,
+    logger: utils.DebugLogger | None = None,
 ) -> float:
     """
     Returns mean CV balanced accuracy for this hparam cfg.
@@ -1118,6 +1137,7 @@ def score_hparam_cfg_cv_cnn(
             cfg=fold_cfg,
             max_epochs=int(max_epochs),
             device=device,
+            logger=logger,
         )
         bals.append(float(val_bal))
     return float(np.mean(bals)) if bals else 0.0
@@ -1132,6 +1152,7 @@ def score_pair_cv_cnn(
     n_time: int,
     freq_a_hz: int,
     freq_b_hz: int,
+    logger: utils.DebugLogger | None = None
 ) -> utils.ModelMetrics:
     """
     Cross-val scoring for ONE (already-binary) pair.
@@ -1158,6 +1179,7 @@ def score_pair_cv_cnn(
             cfg=fold_cfg,
             max_epochs=int(cfg.MAX_EPOCHS_CV),
             device=device,
+            logger=logger,
         )
         bals.append(float(val_bal))
         accs.append(float(val_acc))
