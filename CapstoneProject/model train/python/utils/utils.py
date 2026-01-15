@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # =================== SHARED DATACLASSES ============================
 @dataclass(frozen=True)
@@ -15,7 +16,7 @@ class DatasetInfo:
 
 @dataclass(frozen=True)
 class GeneralTrainingConfigs:
-    number_cross_val_folds: int = 6  # cross val is used for assessing pairwise combinations & selecting bset frequency-pair
+    number_cross_val_folds: int = 5  # cross val is used for assessing pairwise combinations & selecting bset frequency-pair
     test_split_fraction: float = 0.10   # [should be rlly small test fold, maybe 10%] regular test/train is used for final model training (deployment)
 
 # Custom metrics that select_best_pair expects trainers to output for their pairwise models
@@ -34,10 +35,27 @@ class ModelMetrics:
 class FinalTrainResults:
     train_ok: bool
     onnx_export_ok: bool
-    final_train_loss: float
-    final_train_acc: float
-    final_val_loss: float
-    final_val_acc: float
+    
+    # Cross-validation summary
+    cv_ok: bool
+    cv_mean_bal_acc: float
+    cv_std_bal_acc: float
+    cv_mean_acc: float
+    cv_std_acc: float
+    cv_mean_val_loss: float
+    cv_std_val_loss: float
+
+    # Final exported model early-stop holdout metrics (not used for selection across freq pairs)
+    final_holdout_ok: bool
+    final_holdout_loss: float
+    final_holdout_acc: float
+    final_holdout_bal_acc: float
+    cfg: dict[str, Any] | None = None # FOR CNN ARCH (svm may not need cfg)
+    # Optional extras (won’t be required at init)
+    final_train_loss: float | None = None
+    final_train_acc: float | None = None
+    final_val_loss: float | None = None
+    final_val_acc: float | None = None
 
 # =================== METRIC CALCULATIONS ============================
 
@@ -56,3 +74,10 @@ def balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             continue
         accs.append(float((y_pred[m] == cls).mean()))
     return float(np.mean(accs)) if accs else 0.0
+
+# ======================= BASIC STATS ===================================
+def mean(xs: list[float]) -> float:
+    return float(np.mean(xs)) if xs else 0.0
+
+def std(xs: list[float]) -> float:
+    return float(np.std(xs)) if xs else 0.0

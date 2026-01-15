@@ -32,6 +32,8 @@ import numpy as np
 from typing import Any
 from dataclasses import dataclass, asdict
 
+from sklearn.model_selection import StratifiedKFold
+
 import utils.utils as utils
 
 # Trainers live in trainers/
@@ -45,6 +47,7 @@ from trainers.cnn_trainer import score_pair_cv_cnn, train_final_cnn_and_export
 #        - X_pair
 #        - y_pair
 #        - folds: premade cross-val folds for cross-val training (shared between archs)
+#        - trial_ids_pair: (for trial-level batching if desired, otherwise unused)
 #        - n_ch: spatial dimension 
 #        - n_time: time dimension
 #        - freq_a_hz
@@ -56,9 +59,11 @@ from trainers.cnn_trainer import score_pair_cv_cnn, train_final_cnn_and_export
 #        - X_pair
 #        - y_pair
 #        - folds: premade cross-val folds for FINAL cross-val training (for reporting purposes)
+#        - trial_ids_pair: (for trial-level batching if desired, otherwise unused)
 #        - n_ch: spatial dimension 
 #        - n_time: time dimension
 #        - out_onnx_path: Path
+#        - hparam_tuning: whether or not we want to run hparam tuning
 #        - (...) any addtn args as required per specific model implementation
 #    - return: FinalTrainResults (REQUIRED FOR ALL* see utils dataclass)  
 
@@ -66,8 +71,23 @@ from trainers.cnn_trainer import score_pair_cv_cnn, train_final_cnn_and_export
 # PATH ROOTS (repo-anchored)
 # ------------------------------
 # TODO: Make it move upward dynamically (as it stands, breaks if we move folders)
-THIS_FILE = Path(__file__).resolve()
-REPO_ROOT = THIS_FILE.parents[3]
+def find_repo_root(start: Path | None = None) -> Path:
+    """
+    Walk upward from `start` (default: this file) until we find a repo-root marker.
+    """
+    start = (start or Path(__file__)).resolve()
+    markers = [
+        ".git",            # directory
+        "README.md",       # file
+    ]
+    for p in [start] + list(start.parents):
+        for m in markers:
+            if (p / m).exists():
+                # If marker is .git, this still works (exists() checks dir)
+                return p
+    raise RuntimeError(f"Could not find repo root walking upward from {start}")
+
+REPO_ROOT = find_repo_root()
 DATA_ROOT = REPO_ROOT / "data"
 MODELS_ROOT = REPO_ROOT / "models"
 
@@ -83,7 +103,7 @@ def get_args():
         "--data",
         type=str,
         required=True,
-        help="Path to directory containing calibration data (eeg_windows.csv).",
+        help="Passes user/session_dir.",
     )
 
     parser.add_argument(
@@ -107,6 +127,14 @@ def get_args():
         required=True,
         choices=["all_sessions", "most_recent_only"],
         help="Choice of calib data setting (all sessions or most recent).",
+    )
+
+    parser.add_argument(
+        "--tunehparams",
+        type=str,
+        required=True,
+        choices=["ON", "OFF"],
+        help="Choice of using default values for hyperparams (faster) or running explicit tuning algorithms (slower)."
     )
     
     return parser.parse_args()
@@ -246,6 +274,26 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         # tag source to prevent window_idx collisions across sessions
         df["_src"] = src.src_id
 
+        # LOG: per-file read success + per-frequency window counts (after filters)
+        n_rows = int(len(df))
+        if n_rows == 0:
+            raise RuntimeError(
+                f"[PY] eeg_windows.csv has 0 usable rows after filters "
+                f"(is_trimmed==1, is_bad!=1) "
+                f"for session '{src.src_id}' at {src.path}"
+            )
+        else:
+            # count distinct windows per frequency (NOT rows)
+            per_win = (
+                df.groupby(["window_idx"], sort=False)
+                  .agg(testfreq_hz=("testfreq_hz", "first"))
+                  .reset_index()
+            )
+            freq_counts = per_win["testfreq_hz"].value_counts().sort_index()
+            freq_str = ", ".join([f"{int(hz)}Hz:{int(cnt)}" for hz, cnt in freq_counts.items()])
+            n_windows = int(len(per_win))
+            print(f"[PY] read OK: {src.src_id} -> {src.path} | windows={n_windows} | {freq_str}")
+
         frames.append(df)
 
     if not frames:
@@ -339,6 +387,23 @@ def make_binary_pair_dataset(X: np.ndarray, y_hz: np.ndarray, trial_ids: np.ndar
     yb = np.where(yp == hz_a, 0, 1).astype(np.int64)
     return Xp, yb, tp
 
+def make_cv_folds_binary_by_window(
+    yb: np.ndarray, trial_ids: np.ndarray, k: int, seed: int
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    Standard stratified k-fold on WINDOWS (not trials).
+    Accepts window overlap as standard practice in SSVEP research.
+    trial_ids parameter kept for API compatibility but not used.
+    """
+    
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
+    folds = []
+    
+    for train_idx, val_idx in skf.split(np.arange(len(yb)), yb):
+        folds.append((train_idx, val_idx))
+    
+    return folds
+
 def make_cv_folds_binary_by_trial(
     yb: np.ndarray, trial_ids: np.ndarray, k: int, seed: int
 ) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -420,7 +485,8 @@ def shortlist_freqs(y_hz: np.ndarray, pick_top_k: int) -> list[int]:
     """
     Keep only frequencies with enough windows, then take the top-K by count.
     """
-    min_windows_per_class = 100
+    k_folds = 5 # REQUIRE AT LEAST K_FOLDS WINDOWS PER CLASS (bare minimum) and 20 for reasonability
+    min_windows_per_class = max(20, int(k_folds * 2))
     vals, counts = np.unique(y_hz, return_counts=True)
     keep = [(int(v), int(c)) for v, c in zip(vals, counts) if int(c) >= int(min_windows_per_class)]
     if len(keep) < 2:
@@ -475,7 +541,7 @@ def select_best_pair(
             print(f"[PY] pair ({hz_a},{hz_b}) skipped: k too small (k={k}, c0={c0}, c1={c1})")
             continue
 
-        folds = make_cv_folds_binary_by_trial(yb, tp, k, seed=0)
+        folds = make_cv_folds_binary_by_window(yb, tp, k, seed=0)
         if len(folds) < 2:
             print(f"[PY] pair ({hz_a},{hz_b}) skipped: fold build failed")
             continue
@@ -596,6 +662,8 @@ def main():
     data_session_dir = data_arg if data_arg.is_absolute() else (DATA_ROOT / data_arg)
     data_session_dir = data_session_dir.resolve()
 
+    hparam_arg = args.tunehparams
+
     gen_cfg = utils.GeneralTrainingConfigs()
 
     # 1) Resolve sources based on calibsetting
@@ -618,7 +686,7 @@ def main():
     k_final = int(min(gen_cfg.number_cross_val_folds, c0, c1))
     folds_final: list[tuple[np.ndarray, np.ndarray]] = []
     if k_final >= 2:
-        folds_final = make_cv_folds_binary_by_trial(yb, tp, k_final, seed=0)
+        folds_final = make_cv_folds_binary_by_window(yb, tp, k_final, seed=0)
     if len(folds_final) < 2:
         print(f"[PY] warning: final folds not usable (k_final={k_final}, folds={len(folds_final)}). "
               f"Final training will still run; CV metrics may be 0.")
@@ -632,6 +700,7 @@ def main():
             n_ch=info.n_ch,
             n_time=info.n_time,
             out_onnx_path=(out_dir / "ssvep_model.onnx"),
+            hparam_tuning=hparam_arg,
         )
 
     elif args.arch == "SVM":
