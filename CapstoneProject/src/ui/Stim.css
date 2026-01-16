@@ -273,14 +273,6 @@ body {
   }
 }
 
-/* layout for the 3 mode cards */
-.home-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin-top: 14px;
-}
-
 /* each card */
 .home-card {
   flex: 1 1 220px;
@@ -1116,15 +1108,6 @@ body:not(.fullscreen-mode) {
   line-height: 1.35;
 }
 
-.settings-foot {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
 .settings-card select,
 .settings-card input {
   min-width: 0;
@@ -1415,7 +1398,7 @@ body:not(.fullscreen-mode) {
 }
 
 /* Responsive */
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .settings-grid {
     grid-template-columns: 1fr;
   }
@@ -1478,6 +1461,129 @@ body:not(.fullscreen-mode) {
   margin-bottom: 3px;
   display: flex !important;
   visibility: visible !important;
+}
+
+/* SETTINGS: LEFT COLUMN WRAPPER
+   (keeps Timing under Training Config) */
+.settings-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.timing-card {
+  overflow: visible;
+}
+
+.timing-card .timing-head h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+
+.timing-card .timing-head .muted {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.timing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(30, 41, 59, 0.5);
+}
+
+.timing-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.timing-label {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.timing-title {
+  font-size: 0.86rem;
+  font-weight: 650;
+  color: rgba(226, 232, 240, 0.95);
+  line-height: 1.2;
+}
+
+.timing-sub {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.timing-control {
+  flex: 0 1 360px;
+  min-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timing-control input[type="range"] {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  appearance: none;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(
+      90deg,
+      rgba(99, 102, 241, 0.35),
+      rgba(139, 92, 246, 0.25)
+    ),
+    rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  outline: none;
+}
+
+.timing-control input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  border: 2px solid rgba(2, 6, 23, 0.75);
+  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.25);
+}
+
+.timing-control input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  border: 2px solid rgba(2, 6, 23, 0.75);
+  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.25);
+}
+
+.timing-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.timing-pill .unit {
+  font-size: 0.74rem;
+  font-weight: 650;
+  color: rgba(203, 213, 225, 0.75);
 }
 
 /* NoSSVEP / Neutral Runtime Mimic */
@@ -1741,6 +1847,179 @@ body:not(.fullscreen-mode) {
   .targets-stage.triple #neutral-instructions::before,
   .targets-stage.triple #neutral-instructions::after {
     display: none;
+  }
+}
+
+/* PAUSE OVERLAY */
+
+.pause-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  background: rgba(2, 6, 23, 0.62);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.pause-card {
+  width: min(460px, 92vw);
+  border-radius: 18px;
+  padding: 18px 18px 16px;
+  background: rgba(2, 6, 23, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.75);
+  position: relative;
+  overflow: hidden;
+  text-align: center;
+}
+
+.pause-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 18px;
+  padding: 1px;
+  background: linear-gradient(
+    135deg,
+    rgba(99, 102, 241, 0.55),
+    rgba(139, 92, 246, 0.35),
+    rgba(56, 189, 248, 0.18)
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.pause-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.pause-sub {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: rgba(203, 213, 225, 0.75);
+  line-height: 1.35;
+}
+
+.pause-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.pause-resume-btn {
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(226, 232, 240, 0.18);
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45), 0 0 0 6px rgba(99, 102, 241, 0.1),
+    0 0 26px rgba(99, 102, 241, 0.25);
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  min-width: 160px;
+}
+
+.pause-resume-btn:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.pause-resume-btn:active {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+
+.pause-exit-btn {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 2201;
+
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+
+  background: rgba(15, 23, 42, 0.82);
+  color: var(--text-main);
+
+  font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: transform 0.12s ease, filter 0.12s ease, border-color 0.12s ease;
+}
+
+.pause-exit-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  border-color: rgba(99, 102, 241, 0.8);
+}
+
+#btn-pause.pause-btn,
+#btn-pause {
+  position: fixed;
+  right: 1.5rem;
+  top: calc(1.5rem + 56px + 10px);
+  z-index: 1000;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: auto;
+  max-width: min(240px, 42vw);
+  white-space: nowrap;
+  padding: clamp(0.48rem, 1.5vw, 0.58rem) clamp(0.95rem, 3vw, 1.25rem);
+  border-radius: 999px;
+  font-size: clamp(0.8rem, 1.55vw, 0.92rem);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  background: rgba(15, 23, 42, 0.82);
+  color: rgba(226, 232, 240, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
+  opacity: 0.96;
+  transition: transform 0.15s ease, box-shadow 0.15s ease,
+    border-color 0.15s ease, filter 0.15s ease, opacity 0.15s ease;
+}
+
+#btn-pause:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  border-color: rgba(99, 102, 241, 0.75); /* accent */
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+#btn-pause:active {
+  transform: translateY(1px);
+  filter: brightness(0.98);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+#btn-pause:focus-visible {
+  outline: none;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35),
+    0 0 0 3px rgba(99, 102, 241, 0.28);
+  border-color: rgba(99, 102, 241, 0.9);
+}
+
+/* Make sure it doesn't collide with the pause overlay exit button */
+.pause-backdrop:not(.hidden) #btn-pause {
+  display: none !important;
+}
+
+/* Responsive: slightly tighter on small screens */
+@media (max-width: 520px) {
+  #btn-pause {
+    right: 1rem;
+    top: calc(1rem + 56px + 8px);
   }
 }
 

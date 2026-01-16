@@ -32,7 +32,7 @@
 #include "acq/FakeAcquisition.h"
 #endif
 
-constexpr bool TEST_MODE = 1;
+constexpr bool TEST_MODE = 0;
 
 // Global "please stop" flag set by Ctrl+C (SIGINT) to shut down cleanly
 static std::atomic<bool> g_stop{false};

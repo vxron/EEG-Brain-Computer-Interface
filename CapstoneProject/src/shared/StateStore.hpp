@@ -178,6 +178,10 @@ struct StateStore_s{
         // array mutation requires mtx protection
         std::mutex selected_freq_array_mtx;
         std::atomic<int> selected_freqs_n{5};
+        std::atomic<int> num_times_cycle_repeats{3};
+        std::atomic<int> duration_active_s{11};
+        std::atomic<int> duration_none_s{10};
+        std::atomic<int> duration_rest_s{8};
     };
     Settings_s settings{}; // instantiate
 
