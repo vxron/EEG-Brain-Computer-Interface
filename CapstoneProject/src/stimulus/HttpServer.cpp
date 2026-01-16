@@ -112,6 +112,10 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int sel_n = stateStoreRef_.settings.selected_freqs_n.load(std::memory_order_acquire);
     if (sel_n < 0) sel_n = 0;
     if (sel_n > 6) sel_n = 6;
+    int total_cycles = stateStoreRef_.settings.num_times_cycle_repeats.load(std::memory_order_acquire);
+    int duration_active = stateStoreRef_.settings.duration_active_s.load(std::memory_order_acquire);
+    int duration_rest = stateStoreRef_.settings.duration_rest_s.load(std::memory_order_acquire);
+    int duration_none = stateStoreRef_.settings.duration_none_s.load(std::memory_order_acquire);
 
     std::unique_lock<std::mutex> lock3(stateStoreRef_.settings.selected_freq_array_mtx);
     // 2) build json string manually
@@ -135,6 +139,10 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
             << "\"train_arch_setting\":" << train_arch_e << ","
             << "\"stim_mode\":"          << stim_mode_e << ","
             << "\"waveform\":"           << waveform_e  << ","
+            << "\"num_times_cycle_repeats\":" << total_cycles << ","
+            << "\"duration_active_s\":"  << duration_active << ","
+            << "\"duration_rest_s\":"    << duration_rest << ","
+            << "\"duration_none_s\":"    << duration_none << ","
             << "\"selected_freqs_n\":"   << sel_n << ","
             << "\"selected_freqs_e\":[";
                 for (int i = 0; i < sel_n; ++i) {
@@ -226,9 +234,15 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     }
                     ev = UIStateEvent_UserPushesStartCalibFromOptions;
                 } 
+                else if (action == "resume_after_pause") {
+                    ev = UIStateEvent_UserPushesResume;
+                }
+                else if (action == "pause") {
+                    ev = UIStateEvent_UserPushesPause;
+                }
                 else if (action == "open_settings") {
                     ev = UIStateEvent_UserPushesSettings;
-                }
+                } 
                 else if (action == "set_settings") {
                     int setting_i = static_cast<int>(CalibData_MostRecentOnly); // default
                     if (!JSON::extract_json_int(body, "\"calib_data_setting\"", setting_i)) {
@@ -265,6 +279,40 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                         return;
                     }
                     stateStoreRef_.settings.waveform.store(static_cast<SettingWaveform_E>(waveform_i), std::memory_order_release);
+
+                    int total_cycles_i = 1;
+                    if (!JSON::extract_json_int(body, "\"num_times_cycle_repeats\"", total_cycles_i)) {
+                        total_cycles_i = 1;
+                    }
+                    if (total_cycles_i < 1 || total_cycles_i > 20) { // pick a sane max
+                        write_json_error(res, 400, "missing_or_invalid_field", "num_times_cycle_repeats");
+                        return;
+                    }
+                    stateStoreRef_.settings.num_times_cycle_repeats.store(total_cycles_i, std::memory_order_release);
+
+                    int dur_active_i = 11;
+                    if (!JSON::extract_json_int(body, "\"duration_active_s\"", dur_active_i)) dur_active_i = 11;
+                    if (dur_active_i < 1 || dur_active_i > 30) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "duration_active_s");
+                        return;
+                    }
+                    stateStoreRef_.settings.duration_active_s.store(dur_active_i, std::memory_order_release);
+
+                    int dur_rest_i = 8;
+                    if (!JSON::extract_json_int(body, "\"duration_rest_s\"", dur_rest_i)) dur_rest_i = 8;
+                    if (dur_rest_i < 0 || dur_rest_i > 30) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "duration_rest_s");
+                        return;
+                    }
+                    stateStoreRef_.settings.duration_rest_s.store(dur_rest_i, std::memory_order_release);
+
+                    int dur_none_i = 10;
+                    if (!JSON::extract_json_int(body, "\"duration_none_s\"", dur_none_i)) dur_none_i = 10;
+                    if (dur_none_i < 0 || dur_none_i > 30) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "duration_none_s");
+                        return;
+                    }
+                    stateStoreRef_.settings.duration_none_s.store(dur_none_i, std::memory_order_release);
 
                     std::vector<int> freq_es;
                     if (!JSON::extract_json_int_array_limited(body, "\"selected_freqs_e\"", freq_es, 6)) {

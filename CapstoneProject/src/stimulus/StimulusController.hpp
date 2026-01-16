@@ -25,6 +25,7 @@ private:
     StateStore_s* stateStoreRef_;
     UIState_E state_;
     UIState_E prevState_;
+    UIState_E pausedFromState_; // for clean returns from paused
     trainingProto_S trainingProtocol_; // requires a default upon construction
 
     std::deque<TestFreq_E> activeBlockQueue_;

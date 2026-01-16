@@ -58,6 +58,9 @@
         <button id="btn-exit" class="btn exit-btn hidden" type="button">
           Exit Session
         </button>
+        <button id="btn-pause" class="btn ghost hidden" type="button">
+          Pause
+        </button>
         <!-- main VIEW STACK (fills most of the right side) -->
         <div class="view-stack">
           <!-- HOME VIEW -->
@@ -316,57 +319,170 @@
 
             <div class="settings-grid">
               <!-- Left Column: Training Settings -->
-              <div class="settings-card">
-                <h3>Training Configuration</h3>
+              <div class="settings-col">
+                <!-- Card 1: Training Configuration -->
+                <div class="settings-card">
+                  <h3>Training Configuration</h3>
 
-                <div class="setting-group">
-                  <label for="set-train-arch">
-                    Model Architecture
-                    <span class="help-text"
-                      >AI model structure for classification</span
-                    >
-                  </label>
-                  <select id="set-train-arch" class="setting-select">
-                    <option value="1">SVM (Support Vector Machine)</option>
-                    <option value="0">
-                      CNN (Convolutional Neural Network)
-                    </option>
-                  </select>
+                  <div class="setting-group">
+                    <label for="set-train-arch">
+                      Model Architecture
+                      <span class="help-text"
+                        >AI model structure for classification</span
+                      >
+                    </label>
+                    <select id="set-train-arch" class="setting-select">
+                      <option value="1">SVM (Support Vector Machine)</option>
+                      <option value="0">
+                        CNN (Convolutional Neural Network)
+                      </option>
+                    </select>
+                  </div>
+
+                  <div class="setting-group">
+                    <label for="set-calib-data">
+                      Calibration Data
+                      <span class="help-text"
+                        >Which data to use for training</span
+                      >
+                    </label>
+                    <select id="set-calib-data" class="setting-select">
+                      <option value="0">Most Recent Session Only</option>
+                      <option value="1">All Sessions (Up to 3)</option>
+                    </select>
+                  </div>
+
+                  <div class="setting-group">
+                    <label class="settings-label" for="set-waveform">
+                      Waveform
+                      <span class="help-text"
+                        >How the oscillation is shaped</span
+                      >
+                    </label>
+                    <select id="set-waveform" class="setting-select">
+                      <option value="square">Square</option>
+                      <option value="sine">Sinusoid</option>
+                    </select>
+                  </div>
+
+                  <div class="setting-group">
+                    <label class="settings-label" for="set-modulation">
+                      Modulation
+                      <span class="help-text">What property is modulated</span>
+                    </label>
+                    <select id="set-modulation" class="setting-select">
+                      <option value="flicker">Flicker (Brightness)</option>
+                      <option value="grow">Grow / Shrink (Scale)</option>
+                    </select>
+                  </div>
                 </div>
 
-                <div class="setting-group">
-                  <label for="set-calib-data">
-                    Calibration Data
-                    <span class="help-text"
-                      >Which data to use for training</span
-                    >
-                  </label>
-                  <select id="set-calib-data" class="setting-select">
-                    <option value="0">Most Recent Session Only</option>
-                    <option value="1">All Sessions (Up to 3)</option>
-                  </select>
-                </div>
+                <!-- Card 2: Training Timing (SEPARATE CARD) -->
+                <div class="settings-card timing-card">
+                  <div class="timing-head">
+                    <h3>Training Timing</h3>
+                    <p class="muted">
+                      Block durations and cycle count for calibration.
+                    </p>
+                  </div>
 
-                <div class="setting-group">
-                  <label class="settings-label" for="set-waveform">
-                    Waveform
-                    <span class="help-text">How the oscillation is shaped</span>
-                  </label>
-                  <select id="set-waveform" class="setting-select">
-                    <option value="square">Square</option>
-                    <option value="sine">Sinusoid</option>
-                  </select>
-                </div>
+                  <!-- Active -->
+                  <div class="timing-row">
+                    <div class="timing-label">
+                      <div class="timing-title">Active duration</div>
+                      <div class="timing-sub">
+                        Time focusing on each stimulus.
+                      </div>
+                    </div>
+                    <div class="timing-control">
+                      <input
+                        id="set-duration-active"
+                        type="range"
+                        min="5"
+                        max="20"
+                        step="1"
+                        value="11"
+                      />
+                      <div class="timing-pill">
+                        <span id="set-duration-active-label">11</span
+                        ><span class="unit">s</span>
+                      </div>
+                    </div>
+                  </div>
 
-                <div class="setting-group">
-                  <label class="settings-label" for="set-modulation">
-                    Modulation
-                    <span class="help-text">What property is modulated</span>
-                  </label>
-                  <select id="set-modulation" class="setting-select">
-                    <option value="flicker">Flicker (Brightness)</option>
-                    <option value="grow">Grow / Shrink (Scale)</option>
-                  </select>
+                  <!-- None -->
+                  <div class="timing-row">
+                    <div class="timing-label">
+                      <div class="timing-title">
+                        Neutral / No-SSVEP duration
+                      </div>
+                      <div class="timing-sub">
+                        Time recording “not attending” to stimuli.
+                      </div>
+                    </div>
+                    <div class="timing-control">
+                      <input
+                        id="set-duration-none"
+                        type="range"
+                        min="5"
+                        max="20"
+                        step="1"
+                        value="10"
+                      />
+                      <div class="timing-pill">
+                        <span id="set-duration-none-label">10</span
+                        ><span class="unit">s</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Rest -->
+                  <div class="timing-row">
+                    <div class="timing-label">
+                      <div class="timing-title">Rest duration</div>
+                      <div class="timing-sub">
+                        Full rest block (no stimulus).
+                      </div>
+                    </div>
+                    <div class="timing-control">
+                      <input
+                        id="set-duration-rest"
+                        type="range"
+                        min="5"
+                        max="20"
+                        step="1"
+                        value="8"
+                      />
+                      <div class="timing-pill">
+                        <span id="set-duration-rest-label">8</span
+                        ><span class="unit">s</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Repeats -->
+                  <div class="timing-row">
+                    <div class="timing-label">
+                      <div class="timing-title">Cycle repeats</div>
+                      <div class="timing-sub">
+                        How many times to repeat the cycle.
+                      </div>
+                    </div>
+                    <div class="timing-control">
+                      <input
+                        id="set-cycle-repeats"
+                        type="range"
+                        min="1"
+                        max="10"
+                        step="1"
+                        value="3"
+                      />
+                      <div class="timing-pill">
+                        <span id="set-cycle-repeats-label">3</span
+                        ><span class="unit">x</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -750,6 +866,39 @@
                 <span class="busy-dot"></span>
                 Running Python training job on calibration data.
               </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- PAUSE OVERLAY -->
+        <div
+          id="pause-overlay"
+          class="pause-backdrop hidden"
+          aria-hidden="true"
+        >
+          <button id="btn-pause-exit" class="pause-exit-btn" type="button">
+            Exit Session
+          </button>
+
+          <div
+            class="pause-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Paused"
+          >
+            <div class="pause-title">Paused</div>
+            <div class="pause-sub">
+              Session is paused. Resume when you’re ready.
+            </div>
+
+            <div class="pause-actions">
+              <button
+                id="btn-resume"
+                class="btn pause-resume-btn"
+                type="button"
+              >
+                Resume
+              </button>
             </div>
           </div>
         </div>
