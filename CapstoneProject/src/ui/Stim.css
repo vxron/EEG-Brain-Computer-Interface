@@ -273,14 +273,6 @@ body {
   }
 }
 
-/* layout for the 3 mode cards */
-.home-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin-top: 14px;
-}
-
 /* each card */
 .home-card {
   flex: 1 1 220px;
@@ -1116,15 +1108,6 @@ body:not(.fullscreen-mode) {
   line-height: 1.35;
 }
 
-.settings-foot {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
 .settings-card select,
 .settings-card input {
   min-width: 0;
@@ -1415,7 +1398,7 @@ body:not(.fullscreen-mode) {
 }
 
 /* Responsive */
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .settings-grid {
     grid-template-columns: 1fr;
   }
@@ -1478,6 +1461,129 @@ body:not(.fullscreen-mode) {
   margin-bottom: 3px;
   display: flex !important;
   visibility: visible !important;
+}
+
+/* SETTINGS: LEFT COLUMN WRAPPER
+   (keeps Timing under Training Config) */
+.settings-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.timing-card {
+  overflow: visible;
+}
+
+.timing-card .timing-head h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+
+.timing-card .timing-head .muted {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.timing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(30, 41, 59, 0.5);
+}
+
+.timing-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.timing-label {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.timing-title {
+  font-size: 0.86rem;
+  font-weight: 650;
+  color: rgba(226, 232, 240, 0.95);
+  line-height: 1.2;
+}
+
+.timing-sub {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.timing-control {
+  flex: 0 1 360px;
+  min-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timing-control input[type="range"] {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  appearance: none;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(
+      90deg,
+      rgba(99, 102, 241, 0.35),
+      rgba(139, 92, 246, 0.25)
+    ),
+    rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  outline: none;
+}
+
+.timing-control input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  border: 2px solid rgba(2, 6, 23, 0.75);
+  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.25);
+}
+
+.timing-control input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  border: 2px solid rgba(2, 6, 23, 0.75);
+  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.25);
+}
+
+.timing-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.timing-pill .unit {
+  font-size: 0.74rem;
+  font-weight: 650;
+  color: rgba(203, 213, 225, 0.75);
 }
 
 /* NoSSVEP / Neutral Runtime Mimic */

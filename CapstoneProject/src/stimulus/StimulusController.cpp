@@ -89,7 +89,10 @@ void StimulusController_C::rebuild_protocol_from_settings() {
   trainingProtocol_.restDuration_s = duration_rest;
   trainingProtocol_.activeBlockDuration_s = duration_active;
   trainingProtocol_.noSSVEPDuration_s = duration_none;
-
+  activeBlockDur_ms_  = std::chrono::milliseconds{ trainingProtocol_.activeBlockDuration_s * 1000 };
+  restBlockDur_ms_    = std::chrono::milliseconds{ trainingProtocol_.restDuration_s * 1000 };
+  noSSVEPBlockDur_ms_ = std::chrono::milliseconds{ trainingProtocol_.noSSVEPDuration_s * 1000 };
+  
   std::unique_lock<std::mutex> lock(stateStoreRef_->settings.selected_freq_array_mtx);
   std::vector<TestFreq_E> pool;
   pool.reserve(n);
