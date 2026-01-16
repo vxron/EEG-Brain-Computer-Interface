@@ -51,6 +51,7 @@ const btnRunSavedSessions = document.getElementById("btn-run-saved-sessions");
 const btnSessionsNew = document.getElementById("btn-sessions-new");
 const btnSessionsBack = document.getElementById("btn-sessions-back");
 const btnStartHw = document.getElementById("btn-start-hw");
+const btnPause = document.getElementById("btn-pause");
 
 // Health headers (above plots, saying whether or not we overall healthy)
 const elHealthBadge = document.getElementById("hw-health-badge");
@@ -125,6 +126,15 @@ const FREQ_MAX_SELECT = 6;
 let currentWaveform = "square"; // "square" | "sine"
 let currentModulation = "flicker"; // "flicker" | "grow"
 let settingsInitiallyUpdated = false;
+// Slider elements
+const elDurActive = document.getElementById("set-duration-active");
+const elDurNone = document.getElementById("set-duration-none");
+const elDurRest = document.getElementById("set-duration-rest");
+const elCycleRep = document.getElementById("set-cycle-repeats");
+const elDurActiveLbl = document.getElementById("set-duration-active-label");
+const elDurNoneLbl = document.getElementById("set-duration-none-label");
+const elDurRestLbl = document.getElementById("set-duration-rest-label");
+const elCycleRepLbl = document.getElementById("set-cycle-repeats-label");
 
 // No SSVEP Block DOM elements
 const viewNoSSVEP = document.getElementById("view-neutral");
@@ -139,6 +149,11 @@ let prevStimState = null;
 let neutralLeftHz = 0;
 let neutralRightHz = 0;
 let neutralPairChosen = false;
+
+// Paused overlay DOM elements
+const elPauseOverlay = document.getElementById("pause-overlay");
+const btnResume = document.getElementById("btn-resume");
+const btnPauseExit = document.getElementById("btn-pause-exit");
 
 // ===================== 2) LOGGING HELPER =============================
 function logLine(msg) {
@@ -282,12 +297,32 @@ function hideModal() {
   modalVisible = false;
 }
 
-// (5) pending training modal helper
+// (5a) pending training overlay helper
 function showTrainingOverlay(show) {
   if (!elTrainingOverlay) return;
 
   elTrainingOverlay.classList.toggle("hidden", !show);
   document.body.classList.toggle("is-busy", show);
+}
+
+// (5b) paused overlay helper
+function setPauseButtonVisible(visible) {
+  if (!btnPause) return;
+  btnPause.classList.toggle("hidden", !visible);
+}
+
+function showPauseOverlay(show) {
+  if (!elPauseOverlay) return;
+
+  if (show) {
+    // Only stop flicker when entering pause
+    stopAllStimuli();
+    elPauseOverlay.classList.remove("hidden");
+    document.body.classList.add("is-busy");
+  } else {
+    elPauseOverlay.classList.add("hidden");
+    document.body.classList.remove("is-busy");
+  }
 }
 
 // (6) update settings from backend when we first enter settings page (rising edge trigger)
@@ -296,6 +331,10 @@ function updateSettingsFromState(data) {
   const calib = data.settings.calib_data_setting;
   const stim_mode_i = data.settings.stim_mode; // 0=flicker, 1=grow
   const waveform_i = data.settings.waveform; // 0=square, 1=sine
+  const duractive_i = Number(data.settings.duration_active_s);
+  const durnone_i = Number(data.settings.duration_none_s);
+  const durrest_i = Number(data.settings.duration_rest_s);
+  const cyclereps_i = Number(data.settings.num_times_cycle_repeats);
 
   if (selTrainArch && arch != null) selTrainArch.value = String(arch);
   if (selCalibData && calib != null) selCalibData.value = String(calib);
@@ -304,6 +343,20 @@ function updateSettingsFromState(data) {
     selModulation.value = stim_mode_i === 1 ? "grow" : "flicker";
   currentWaveform = selWaveform?.value ?? "square";
   currentModulation = selModulation?.value ?? "flicker";
+
+  if (elDurActive && !Number.isNaN(duractive_i))
+    elDurActive.value = String(duractive_i);
+  if (elDurNone && !Number.isNaN(durnone_i))
+    elDurNone.value = String(durnone_i);
+  if (elDurRest && !Number.isNaN(durrest_i))
+    elDurRest.value = String(durrest_i);
+  if (elCycleRep && !Number.isNaN(cyclereps_i))
+    elCycleRep.value = String(cyclereps_i);
+  if (elDurActiveLbl && elDurActive)
+    elDurActiveLbl.textContent = elDurActive.value;
+  if (elDurNoneLbl && elDurNone) elDurNoneLbl.textContent = elDurNone.value;
+  if (elDurRestLbl && elDurRest) elDurRestLbl.textContent = elDurRest.value;
+  if (elCycleRepLbl && elCycleRep) elCycleRepLbl.textContent = elCycleRep.value;
 
   // selected freqs from backend are ENUMS 1..15
   // grid uses checkbox.value 0..14
@@ -389,7 +442,6 @@ function setSelectedHzToGrid(selectedHz) {
   });
   updateFreqCounterUI();
 }
-
 function updateFreqCounterUI() {
   if (!elFreqWarning) return;
   const n = getSelectedHzFromGrid().length;
@@ -405,7 +457,6 @@ function updateFreqCounterUI() {
       ? "var(--success)"
       : "var(--danger)";
 }
-
 function attachFreqGridHandlers() {
   freqInputs.forEach((inp) => {
     inp.addEventListener("change", (e) => {
@@ -427,8 +478,15 @@ function attachFreqGridHandlers() {
       updateFreqCounterUI();
     });
   });
-
   updateFreqCounterUI();
+}
+
+// (9) SLIDER HELPERS FOR SETTINGS PAGE
+function bindSliderValue(sliderEl, labelEl) {
+  if (!sliderEl || !labelEl) return;
+  const update = () => (labelEl.textContent = String(sliderEl.value));
+  sliderEl.addEventListener("input", update);
+  update();
 }
 
 // ==================== 4) CONNECTION STATUS HELPER =====================
@@ -476,6 +534,8 @@ function intToLabel(enumType, integer) {
         case 10:
           return "UIState_NoSSVEP_Test";
         case 11:
+          return "UIState_Paused";
+        case 12:
           return "UIState_None";
         default:
           return `Unknown (${integer})`;
@@ -667,8 +727,15 @@ function updateUiFromState(data) {
   // general detection of rising edges for any state
   const stateChanged = prevStimState !== stimState;
 
-  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = no_ssvep, 11 = None
-  if (stimState === 3 /* Home */ || stimState === 11 /* None */) {
+  const pauseVisible =
+    stimState === 0 || // Active_Run
+    stimState === 1 || // Active_Calib
+    stimState === 2 || // Instructions
+    stimState === 10; // NoSSVEP_Test
+  setPauseButtonVisible(pauseVisible);
+
+  // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = no_ssvep, 11 = paused, 12 = None
+  if (stimState === 3 /* Home */ || stimState === 12 /* None */) {
     stopAllStimuli();
     stopHardwareMode();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
@@ -777,6 +844,7 @@ function updateUiFromState(data) {
 
   // pending training overlay driven purely by state
   showTrainingOverlay(stimState === 8); // uistate_pending_training
+  showPauseOverlay(stimState == 11); // uistate_paused
 
   // HANDLE POPUPS TRIGGERED BY BACKEND:
   const popupEnumIdx = data.popup ?? 0; // 0 is fallback (popup NONE)
@@ -1562,8 +1630,16 @@ async function sendSettingsAndSave() {
     calib_data_setting: calibData,
     stim_mode: stimModeToInt(modStr),
     waveform: waveformToInt(waveformStr),
+    duration_active_s: Number(elDurActive?.value ?? 11), // otherwise default
+    duration_none_s: Number(elDurNone?.value ?? 10),
+    duration_rest_s: Number(elDurRest?.value ?? 8),
+    num_times_cycle_repeats: Number(elCycleRep?.value ?? 3),
     selected_freqs_e, // int enums 1..15
   };
+  console.log("SET_SETTINGS payload:", payload);
+  logLine(
+    `Saving timers: active=${payload.duration_active_s}s none=${payload.duration_none_s}s rest=${payload.duration_rest_s}s reps=${payload.num_times_cycle_repeats}`
+  );
 
   try {
     const res = await fetch(`${API_BASE}/event`, {
@@ -1628,6 +1704,12 @@ async function init() {
   startPolling();
   attachFreqGridHandlers();
 
+  // add event listeners for all the sliders (settings page)
+  bindSliderValue(elDurActive, elDurActiveLbl);
+  bindSliderValue(elDurNone, elDurNoneLbl);
+  bindSliderValue(elDurRest, elDurRestLbl);
+  bindSliderValue(elCycleRep, elCycleRepLbl);
+
   // Add button event listeners
   btnStartCalib.addEventListener("click", () => {
     sendSessionEvent("start_calib");
@@ -1659,6 +1741,24 @@ async function init() {
   btnSessionsBack.addEventListener("click", () => {
     sendSessionEvent("back_to_run_options");
   });
+
+  if (btnPause) {
+    btnPause.addEventListener("click", () => {
+      sendSessionEvent("pause");
+    });
+  }
+
+  if (btnResume) {
+    btnResume.addEventListener("click", () => {
+      sendSessionEvent("resume_after_pause");
+    });
+  }
+
+  if (btnPauseExit) {
+    btnPauseExit.addEventListener("click", () => {
+      sendSessionEvent("exit");
+    });
+  }
 
   if (btnStartHw) {
     btnStartHw.addEventListener("click", () => {

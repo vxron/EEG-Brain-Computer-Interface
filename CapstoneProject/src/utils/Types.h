@@ -86,7 +86,8 @@ enum UIState_E {
 	UIState_Pending_Training, // 8 when we're waiting for training to complete after calib
 	UIState_Settings, // 9
 	UIState_NoSSVEP_Test, // 10 collect 'no ssvep' data
-	UIState_None, // 11
+	UIState_Paused, // 11
+	UIState_None, // 12
 };
 
 enum EpilepsyRisk_E {
@@ -117,7 +118,9 @@ enum UIStateEvent_E {
 	UIStateEvent_TrainingFailed, // 17
 	UIStateEvent_UserPushesSettings, // 18
 	UIStateEvent_UserSavesSettings, // 19
-	UIStateEvent_None, // 20
+	UIStateEvent_UserPushesPause, // 20
+	UIStateEvent_UserPushesResume, // 21
+	UIStateEvent_None, // 22
 };
 
 enum UIPopup_E {
