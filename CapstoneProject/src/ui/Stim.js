@@ -51,6 +51,7 @@ const btnRunSavedSessions = document.getElementById("btn-run-saved-sessions");
 const btnSessionsNew = document.getElementById("btn-sessions-new");
 const btnSessionsBack = document.getElementById("btn-sessions-back");
 const btnStartHw = document.getElementById("btn-start-hw");
+const btnPause = document.getElementById("btn-pause");
 
 // Health headers (above plots, saying whether or not we overall healthy)
 const elHealthBadge = document.getElementById("hw-health-badge");
@@ -148,6 +149,11 @@ let prevStimState = null;
 let neutralLeftHz = 0;
 let neutralRightHz = 0;
 let neutralPairChosen = false;
+
+// Paused overlay DOM elements
+const elPauseOverlay = document.getElementById("pause-overlay");
+const btnResume = document.getElementById("btn-resume");
+const btnPauseExit = document.getElementById("btn-pause-exit");
 
 // ===================== 2) LOGGING HELPER =============================
 function logLine(msg) {
@@ -291,12 +297,32 @@ function hideModal() {
   modalVisible = false;
 }
 
-// (5) pending training modal helper
+// (5a) pending training overlay helper
 function showTrainingOverlay(show) {
   if (!elTrainingOverlay) return;
 
   elTrainingOverlay.classList.toggle("hidden", !show);
   document.body.classList.toggle("is-busy", show);
+}
+
+// (5b) paused overlay helper
+function setPauseButtonVisible(visible) {
+  if (!btnPause) return;
+  btnPause.classList.toggle("hidden", !visible);
+}
+
+function showPauseOverlay(show) {
+  if (!elPauseOverlay) return;
+
+  if (show) {
+    // Only stop flicker when entering pause
+    stopAllStimuli();
+    elPauseOverlay.classList.remove("hidden");
+    document.body.classList.add("is-busy");
+  } else {
+    elPauseOverlay.classList.add("hidden");
+    document.body.classList.remove("is-busy");
+  }
 }
 
 // (6) update settings from backend when we first enter settings page (rising edge trigger)
@@ -701,6 +727,13 @@ function updateUiFromState(data) {
   // general detection of rising edges for any state
   const stateChanged = prevStimState !== stimState;
 
+  const pauseVisible =
+    stimState === 0 || // Active_Run
+    stimState === 1 || // Active_Calib
+    stimState === 2 || // Instructions
+    stimState === 10; // NoSSVEP_Test
+  setPauseButtonVisible(pauseVisible);
+
   // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = no_ssvep, 11 = paused, 12 = None
   if (stimState === 3 /* Home */ || stimState === 12 /* None */) {
     stopAllStimuli();
@@ -811,6 +844,7 @@ function updateUiFromState(data) {
 
   // pending training overlay driven purely by state
   showTrainingOverlay(stimState === 8); // uistate_pending_training
+  showPauseOverlay(stimState == 11); // uistate_paused
 
   // HANDLE POPUPS TRIGGERED BY BACKEND:
   const popupEnumIdx = data.popup ?? 0; // 0 is fallback (popup NONE)
@@ -1707,6 +1741,24 @@ async function init() {
   btnSessionsBack.addEventListener("click", () => {
     sendSessionEvent("back_to_run_options");
   });
+
+  if (btnPause) {
+    btnPause.addEventListener("click", () => {
+      sendSessionEvent("pause");
+    });
+  }
+
+  if (btnResume) {
+    btnResume.addEventListener("click", () => {
+      sendSessionEvent("resume_after_pause");
+    });
+  }
+
+  if (btnPauseExit) {
+    btnPauseExit.addEventListener("click", () => {
+      sendSessionEvent("exit");
+    });
+  }
 
   if (btnStartHw) {
     btnStartHw.addEventListener("click", () => {
