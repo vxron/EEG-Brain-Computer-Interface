@@ -58,6 +58,9 @@
         <button id="btn-exit" class="btn exit-btn hidden" type="button">
           Exit Session
         </button>
+        <button id="btn-pause" class="btn ghost hidden" type="button">
+          Pause
+        </button>
         <!-- main VIEW STACK (fills most of the right side) -->
         <div class="view-stack">
           <!-- HOME VIEW -->
@@ -863,6 +866,39 @@
                 <span class="busy-dot"></span>
                 Running Python training job on calibration data.
               </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- PAUSE OVERLAY -->
+        <div
+          id="pause-overlay"
+          class="pause-backdrop hidden"
+          aria-hidden="true"
+        >
+          <button id="btn-pause-exit" class="pause-exit-btn" type="button">
+            Exit Session
+          </button>
+
+          <div
+            class="pause-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Paused"
+          >
+            <div class="pause-title">Paused</div>
+            <div class="pause-sub">
+              Session is paused. Resume when you’re ready.
+            </div>
+
+            <div class="pause-actions">
+              <button
+                id="btn-resume"
+                class="btn pause-resume-btn"
+                type="button"
+              >
+                Resume
+              </button>
             </div>
           </div>
         </div>

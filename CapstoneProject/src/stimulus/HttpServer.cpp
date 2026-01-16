@@ -234,9 +234,15 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     }
                     ev = UIStateEvent_UserPushesStartCalibFromOptions;
                 } 
+                else if (action == "resume_after_pause") {
+                    ev = UIStateEvent_UserPushesResume;
+                }
+                else if (action == "pause") {
+                    ev = UIStateEvent_UserPushesPause;
+                }
                 else if (action == "open_settings") {
                     ev = UIStateEvent_UserPushesSettings;
-                }
+                } 
                 else if (action == "set_settings") {
                     int setting_i = static_cast<int>(CalibData_MostRecentOnly); // default
                     if (!JSON::extract_json_int(body, "\"calib_data_setting\"", setting_i)) {

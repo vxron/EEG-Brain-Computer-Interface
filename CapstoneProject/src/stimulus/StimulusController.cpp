@@ -92,7 +92,7 @@ void StimulusController_C::rebuild_protocol_from_settings() {
   activeBlockDur_ms_  = std::chrono::milliseconds{ trainingProtocol_.activeBlockDuration_s * 1000 };
   restBlockDur_ms_    = std::chrono::milliseconds{ trainingProtocol_.restDuration_s * 1000 };
   noSSVEPBlockDur_ms_ = std::chrono::milliseconds{ trainingProtocol_.noSSVEPDuration_s * 1000 };
-  
+
   std::unique_lock<std::mutex> lock(stateStoreRef_->settings.selected_freq_array_mtx);
   std::vector<TestFreq_E> pool;
   pool.reserve(n);
@@ -429,7 +429,8 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
         onStateExit(state_, ev);
         state_ = pausedFromState_; // next state is whatever the prev state was
         prevState_ = UIState_Paused;
-        onStateEnter(prevState_, state_, ev);
+        // dont run onstateenter cuz we don't want the side effects; just publish state to ui
+        stateStoreRef_->g_ui_state.store(state_, std::memory_order_release);
         return;
     }
 
