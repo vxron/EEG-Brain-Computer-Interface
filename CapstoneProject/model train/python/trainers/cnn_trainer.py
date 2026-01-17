@@ -754,6 +754,7 @@ def train_single_final_model_with_holdout_and_export(
     )
 
     if len(ho_idx) == 0:
+       
         # No holdout possible; train on all data without early stop and export.
         # (But in practice with multiple trials, ho_idx should not be empty.)
         ho_loss = 0.0
@@ -768,25 +769,29 @@ def train_single_final_model_with_holdout_and_export(
         y_all_t = torch.from_numpy(y_pair.astype(np.int64)).long()
         ds_all = TensorDataset(X_all_t, y_all_t)
 
-        batches = make_stratified_trial_batches_new(
-            trial_ids=trial_ids_pair,
-            y=y_pair,
-            max_windows_per_batch=int(cfg.batch_size),
-            seed=int(cfg.seed),
-        )
-        train_loader = DataLoader(ds_all, batch_sampler=ListBatchSampler(batches))
+        try:
+            batches = make_stratified_trial_batches_new(
+                trial_ids=trial_ids_pair,
+                y=y_pair,
+                max_windows_per_batch=int(cfg.batch_size),
+                seed=int(cfg.seed),
+            )
+            train_loader = DataLoader(ds_all, batch_sampler=ListBatchSampler(batches))
 
-        model = EEGNet(
-            n_ch=n_ch, n_time=n_time, n_classes=2,
-            F1=int(cfg.F1), D=int(cfg.D), F2=int(_derived_F2(cfg)),
-            kernel_length=int(cfg.kernel_length),
-            pooling_factor=int(cfg.pooling_factor),
-            pooling_factor_final=int(cfg.pooling_factor_final),
-            dropout=float(cfg.DROPOUT),
-        ).to(device)
+            model = EEGNet(
+                n_ch=n_ch, n_time=n_time, n_classes=2,
+                F1=int(cfg.F1), D=int(cfg.D), F2=int(_derived_F2(cfg)),
+                kernel_length=int(cfg.kernel_length),
+                pooling_factor=int(cfg.pooling_factor),
+                pooling_factor_final=int(cfg.pooling_factor_final),
+                dropout=float(cfg.DROPOUT),
+            ).to(device)
 
-        criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.learning_rate))
+            criterion = nn.CrossEntropyLoss()
+            optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.learning_rate))
+        except Exception as e:
+            _log(logger, f"[CNN] FInal holdout training failed: {e}")
+            train_ok = False
 
         for ep in range(int(cfg.MAX_EPOCHS)):
             tr_loss, tr_acc = run_epoch(model, train_loader, train=True,
@@ -926,6 +931,7 @@ def train_final_cnn_and_export(
         cfg=cfg,
         out_onnx_path=Path(out_onnx_path),
         device=device,
+        logger=logger,
         holdout_frac=0.1,
     )
 
