@@ -69,12 +69,89 @@ from trainers.cnn_trainer import score_pair_cv_cnn, train_final_cnn_and_export
 #        - (...) any addtn args as required per specific model implementation
 #    - return: FinalTrainResults (REQUIRED FOR ALL* see utils dataclass)  
 
-HOP_SAMPLES = 80 # matches c++
+def validate_loaded_dataset(
+    *,
+    X: np.ndarray,
+    y_hz: np.ndarray,
+    trial_ids: np.ndarray,
+    window_ids: np.ndarray,
+) -> None:
+    # Basic shape checks (aborts if failure)
+    if X.ndim !=3:
+        utils.abort("DATA", "X must be (N,C,T)", {"shape": list(X.shape)})
+    N = int(X.shape[0])
+    if N <= 0:
+        utils.abort("DATA", "No windows loaded", "N=0")
+    if len(y_hz) != N or len(trial_ids) != N or len(window_ids) != N:
+        utils.abort("DATA", "length mismatch", f"N={N} y_hz={len(y_hz)} trial_ids={len(trial_ids)} window_ids={len(window_ids)}")
+    if N < utils.MIN_TOTAL_WINDOWS:
+        utils.abort("DATA", "Too few usable windows after loading", f"N={N} < MIN_TOTAL_WINDOWS={utils.MIN_TOTAL_WINDOWS}")
+    # Needs at least 2 usable frequencies
+    vals, counts = np.unique(y_hz, return_counts = True)
+    n_freqs = int(len(vals))
+    if n_freqs < utils.MIN_FREQS_FOR_PAIR_SEARCH:
+        utils.abort("DATA", "Not enough frequencies in training data", f"Need at least {utils.MIN_FREQS_FOR_PAIR_SEARCH} frequencies to train a binary SSVEP model. Found {n_freqs}: {vals.tolist()}")
+
+def validate_pair_dataset(
+    *,
+    hz_a: int,
+    hz_b: int,
+    Xp: np.ndarray,
+    yb: np.ndarray,
+    tp: np.ndarray,
+    k_req: int, 
+) -> tuple[bool, utils.TrainIssue | None]:
+    """
+    Returns (ok, reason)
+    If not ok, caller can skip this pair and try next
+    """
+    N = int(len(yb))
+    c0 = int((yb == 0).sum())
+    c1 = int((yb == 1).sum())
+
+    if N == 0:
+        return False, utils.issue(
+            "PAIR_SEARCH",
+            "pair forms empty dataset",
+            {"hz_a": hz_a, "hz_b": hz_b},
+        )
+
+    if c0 < utils.MIN_PAIR_WINDOWS_PER_CLASS or c1 < utils.MIN_PAIR_WINDOWS_PER_CLASS:
+        return False, utils.issue(
+            "PAIR_SEARCH",
+            "Insufficient windows per class",
+            {"hz_a": hz_a, "hz_b": hz_b, "c0": c0, "c1": c1, "min": utils.MIN_PAIR_WINDOWS_PER_CLASS}
+        )
+    
+    uniq_trials = np.unique(tp)
+    trials_by_class = {0: set(), 1: set()}
+    for tid in uniq_trials:
+        m = (tp == tid)
+        lab = 1 if float(yb[m].mean()) >= 0.5 else 0 # majority vote
+        trials_by_class[lab].add(int(tid))
+    
+    n_t0 = len(trials_by_class[0])
+    n_t1 = len(trials_by_class[1])
+    if n_t0 < utils.MIN_PAIR_TRIALS_PER_CLASS or n_t1 < utils.MIN_PAIR_TRIALS_PER_CLASS:
+        return False, utils.issue(
+            "PAIR_SEARCH",
+            "Insufficient trials per class for pair",
+            {"hz_a": hz_a, "hz_b": hz_b, "t0": n_t0, "t1": n_t1, "min": int(utils.MIN_PAIR_TRIALS_PER_CLASS)},
+        )
+    
+    # demand at least k = 2 for cross fold
+    if int(k_req) < utils.MIN_FOLDS_MIN:
+        return False, utils.issue(
+            "PAIR_SEARCH",
+            "Requested fold count too small",
+            {"k_req": int(k_req), "MIN_FOLDS_MIN": int(utils.MIN_FOLDS_MIN)},
+        )
+    
+    return True, None
 
 # ------------------------------
 # DEBUG
 # ------------------------------
-
 def _summarize_blocked_folds(
     *,
     yb: np.ndarray,
@@ -184,7 +261,6 @@ def _summarize_blocked_folds(
 # ------------------------------
 # PATH ROOTS (repo-anchored)
 # ------------------------------
-# TODO: Make it move upward dynamically (as it stands, breaks if we move folders)
 def find_repo_root(start: Path | None = None) -> Path:
     """
     Walk upward from `start` (default: this file) until we find a repo-root marker.
@@ -293,7 +369,7 @@ def list_window_csvs(data_session_dir: Path, calibsetting: str) -> list[CsvSourc
         sources.sort(key=lambda s: s.src_id)
         return sources
 
-    raise ValueError(f"Unknown calibsetting: {calibsetting}")
+    utils.abort("INIT", "Unknown calibsetting", {"calibsetting": calibsetting})
 
 def add_trial_ids_per_window(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -330,7 +406,7 @@ def add_trial_ids_per_window(df: pd.DataFrame) -> pd.DataFrame:
     # Merge trial_id back onto per-sample rows
     df = df.merge(win[["_src", "window_idx", "trial_id"]], on=["_src", "window_idx"], how="left")
     if df["trial_id"].isna().any():
-        raise RuntimeError("trial_id merge failed for some rows.")
+        utils.abort("LOAD", "TRIAL ID merge fail", "trial_id merge failed for some rows")
     df["trial_id"] = df["trial_id"].astype(np.int64)
     return df
 
@@ -347,7 +423,7 @@ def log_window_idx_gaps(
     - this is really PURELY FOR DEBUG
     """
     if "_src" not in df.columns:
-        raise ValueError("df must contain _src column before gap checking")
+        utils.abort("LOAD", "Missing src col", "df must contain _src column before gap checking")
     # one row per window
     win = (
         df.groupby(["_src", "window_idx"], sort=False)
@@ -368,7 +444,7 @@ def log_window_idx_gaps(
     else:
         logger.log(msg)
 
-def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, utils.DatasetInfo]:
+def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, utils.DatasetInfo, list[utils.TrainIssue]]:
     """
     BUILD TRAINING DATA
     Reads window-level CSV(s) and returns:
@@ -382,7 +458,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
       window_idx, is_trimmed, is_bad, sample_idx, eeg1..eeg8, testfreq_e, testfreq_hz
     """
     frames: list[pd.DataFrame] = []
-
+    load_issues: list[utils.TrainIssue] = []
     required = {"window_idx", "is_trimmed", "is_bad", "sample_idx", "testfreq_hz", "testfreq_e"}
 
     for src in sources:
@@ -393,7 +469,11 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
 
         missing = required - set(df.columns)
         if missing:
-            raise ValueError(f"{src.path} missing columns: {sorted(missing)}")
+            utils.abort(
+                "LOAD",
+                "CSV missing required columns",
+                {"path": str(src.path), "missing": sorted(missing)},
+            )
 
         # filters (keep only trimmed and not-bad)
         df = df[df["is_trimmed"] == 1].copy()
@@ -406,11 +486,12 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         # per-file read success + per-frequency window counts 
         n_rows = int(len(df))
         if n_rows == 0:
-            raise RuntimeError(
-                f"[PY] eeg_windows.csv has 0 usable rows after filters "
-                f"(is_trimmed==1, is_bad!=1) "
-                f"for session '{src.src_id}' at {src.path}"
-            )
+            load_issues.append(utils.issue(
+                "LOAD",
+                "eeg_windows.csv has 0 usable rows",
+                {"session": src.src_id, "path": str(src.path)},
+            ))
+            continue
         else:
             # count distinct windows per frequency (NOT rows)
             per_win = (
@@ -426,7 +507,11 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         frames.append(df)
 
     if not frames:
-        raise FileNotFoundError("No usable eeg_windows.csv found for requested setting.")
+        utils.abort(
+            "LOAD",
+            "No usable eeg_windows.csv found for requested setting.",
+            {"n_sources": len(sources)},
+        )
 
     df = pd.concat(frames, ignore_index=True)
 
@@ -441,7 +526,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
     ch_cols = cols[sample_i + 1 : tf_e_i]
     n_ch = len(ch_cols)
     if n_ch <= 0:
-        raise ValueError("No EEG channel columns detected between sample_idx and testfreq_e.")
+        utils.abort("LOAD", "No EEG channel columns detected between sample_idx and testfreq_e.")
 
     windows: list[np.ndarray] = []
     labels_hz: list[int] = []
@@ -450,6 +535,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
 
     # group by (_src, window_idx) to avoid collisions
     grouped = df.groupby(["_src", "window_idx"], sort=True)
+    target_T: int | None = None
 
     for (_src, wid), g in grouped:
         g = g.sort_values("sample_idx")
@@ -471,17 +557,11 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         else:
             target_T = windows[0].shape[1] # regular window length
 
-        if x_ct.shape[1] > target_T:
-            raise ValueError(
-                f"Bad window length (longer than target). "
-                f"_src={_src} window_idx={int(wid)} "
-                f"T={int(x_ct.shape[1])} target_T={int(target_T)} "
-            )
-        if x_ct.shape[1] < target_T:
-            raise ValueError(
-                f"Bad window length (shorter than target). "
-                f"_src={_src} window_idx={int(wid)} "
-                f"T={int(x_ct.shape[1])} target_T={int(target_T)} "
+        if int(x_ct.shape[1]) != int(target_T):
+            utils.abort(
+                "LOAD",
+                "Window length mismatch",
+                {"_src": str(_src), "window_idx": int(wid), "T": int(x_ct.shape[1]), "target_T": int(target_T)},
             )
 
         windows.append(x_ct)
@@ -490,7 +570,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         window_ids.append(int(wid))
 
     if not windows:
-        raise RuntimeError("No valid windows found after grouping/filters.")
+        utils.abort("LOAD", "No valid windows found after grouping/filters")
 
     X = np.stack(windows, axis=0).astype(np.float32)  # (N, C, T)
     y_hz = np.array(labels_hz, dtype=np.int64)
@@ -503,7 +583,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         n_time=int(X.shape[2]),
         classes_hz=sorted(set(y_hz.tolist())),
     )
-    return X, y_hz, trial_ids_np, window_ids_np, info
+    return X, y_hz, trial_ids_np, window_ids_np, info, load_issues
 
 # -----------------------------
 # CV Fold building
@@ -530,7 +610,7 @@ def _count_groups_per_class(
     for gi, g in enumerate(uniq_groups):
         idx_g = np.where(groups == g)[0]
         if idx_g.size == 0:
-            raise RuntimeError("Impossible: empty group encountered.")
+            utils.abort("FOLDS", "Empty group encountered (should be impossible)")
         group_label[gi] = int(yb[idx_g[0]])
 
     n_groups_c0 = int((group_label == 0).sum())
@@ -542,7 +622,7 @@ def _validate_folds_strict(
     yb: np.ndarray,
     groups: np.ndarray,
     folds: list[tuple[np.ndarray, np.ndarray]],
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[utils.TrainIssue]]:
     """
     Strict validation:
       - at least 2 folds
@@ -552,11 +632,11 @@ def _validate_folds_strict(
     """
     yb = np.asarray(yb).astype(np.int64)
     groups = np.asarray(groups).astype(np.int64)
+    issues: list[utils.TrainIssue] = []
 
-    reasons: list[str] = []
     if len(folds) < 2:
-        reasons.append("len(folds) < 2")
-        return False, reasons
+        issues.append(utils.issue("FOLDS", "len(folds) < 2", {"n_folds": int(len(folds))}))
+        return False, issues
 
     for fi, (tr_idx, va_idx) in enumerate(folds):
         tr_idx = np.asarray(tr_idx, dtype=np.int64)
@@ -567,27 +647,43 @@ def _validate_folds_strict(
         va_g = set(groups[va_idx].tolist())
         inter = tr_g.intersection(va_g)
         if inter:
-            reasons.append(f"fold {fi}: group leakage (n={len(inter)})")
+            issues.append(utils.issue(
+                "FOLDS",
+                "Group leakage between train and val",
+                {"fold": int(fi), "n_leak_groups": int(len(inter))},
+            ))
             continue
 
         # class presence check (val)
         va0 = int((yb[va_idx] == 0).sum())
         va1 = int((yb[va_idx] == 1).sum())
         if va0 == 0 or va1 == 0:
-            reasons.append(f"fold {fi}: val single-class (va0={va0}, va1={va1})")
+            issues.append(utils.issue(
+                "FOLDS",
+                "Validation split has only one class",
+                {"fold": int(fi), "va0": va0, "va1": va1},
+            ))
 
         # class presence check (train)
         tr0 = int((yb[tr_idx] == 0).sum())
         tr1 = int((yb[tr_idx] == 1).sum())
         if tr0 == 0 or tr1 == 0:
-            reasons.append(f"fold {fi}: train single-class (tr0={tr0}, tr1={tr1})")
+            issues.append(utils.issue(
+                "FOLDS",
+                "Training split has only one class",
+                {"fold": int(fi), "tr0": tr0, "tr1": tr1},
+            ))
 
         # size sanity
         if tr_idx.size == 0 or va_idx.size == 0:
-            reasons.append(f"fold {fi}: empty split (train={tr_idx.size}, val={va_idx.size})")
+            issues.append(utils.issue(
+                "FOLDS",
+                "Fold has empty train or val split",
+                {"fold": int(fi), "train_size": int(tr_idx.size), "val_size": int(va_idx.size)},
+            ))
 
-    ok = (len(reasons) == 0)
-    return ok, reasons
+    ok = (len(issues) == 0)
+    return ok, issues
 
 def make_cv_folds_binary_by_blocked_windows(
     *,
@@ -601,7 +697,7 @@ def make_cv_folds_binary_by_blocked_windows(
     fs_hz: float = 250.0,
     debug_logger: utils.DebugLogger | None = None,
     debug_tag: str = "CV",
-) -> list[tuple[np.ndarray, np.ndarray]]:
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[utils.TrainIssue]]:
     """
     Stratified CV on *blocked window groups*:
       - windows close in time (overlapping) are grouped into the same "block" group
@@ -627,13 +723,17 @@ def make_cv_folds_binary_by_blocked_windows(
       - each fold val has both classes
       - each fold train has both classes
     """
+    issues: list[utils.TrainIssue] = []
+    split_issues: list[utils.TrainIssue] = []
     yb = np.asarray(yb).astype(np.int64)
     trial_ids = np.asarray(trial_ids).astype(np.int64)
     window_ids = np.asarray(window_ids).astype(np.int64)
     if yb.shape[0] != window_ids.shape[0]:
-        raise ValueError("yb and window_ids must have same length")
+        utils.abort("FOLDS", "yb and window_ids must have same length",
+                    {"len_yb": int(yb.shape[0]), "len_window_ids": int(window_ids.shape[0])})
     if yb.shape[0] != trial_ids.shape[0]:
-        raise ValueError("yb and trial_ids must have same length")
+        utils.abort("FOLDS", "yb and trial_ids must have same length",
+                    {"len_yb": int(yb.shape[0]), "len_trial_ids": int(trial_ids.shape[0])})
 
     # 1) Build block groups
     block_size_windows = _compute_block_size_windows(
@@ -665,10 +765,12 @@ def make_cv_folds_binary_by_blocked_windows(
         debug_logger.log()
 
     if k_eff < 2:
-        if debug_logger is not None:
-            debug_logger.log(f"[{debug_tag}] FAIL: k_eff < 2 (not enough groups per class)")
-            debug_logger.log(f"[{debug_tag}] ========================================\n")
-        return []
+        issues.append(utils.issue(
+            "FOLDS",
+            "Not enough groups per class to build >=2 folds",
+            {"k_req": k_req, "k_eff": k_eff, "n_groups_c0": n_groups_c0, "n_groups_c1": n_groups_c1},
+        ))
+        return [], issues
 
     # Deterministic seed schedule:
     # - include the provided seed first
@@ -694,8 +796,11 @@ def make_cv_folds_binary_by_blocked_windows(
                 for tr_idx, va_idx in sgkf.split(idx, yb, groups):
                     folds.append((tr_idx.astype(np.int64), va_idx.astype(np.int64)))
             except Exception as e:
-                if debug_logger is not None:
-                    debug_logger.log(f"[{debug_tag}]   seed={s}: EXCEPTION during split: {e}")
+                split_issues.append(utils.issue(
+                    "FOLDS",
+                    "Exception during StratifiedGroupKFold split",
+                    {"seed": int(s), "k_try": int(k_try), "err": str(e)},
+                ))
                 continue
 
             ok, reasons = _validate_folds_strict(yb=yb, groups=groups, folds=folds)
@@ -704,7 +809,7 @@ def make_cv_folds_binary_by_blocked_windows(
                 debug_logger.log(f"[{debug_tag}]   seed={s}: built {len(folds)} folds -> ok={ok}")
                 if not ok:
                     for r in reasons[:6]:
-                        debug_logger.log(f"[{debug_tag}]     reason: {r}")
+                        debug_logger.log(f"[{debug_tag}]     issue: {r.stage} | {r.message}")
                     if len(reasons) > 6:
                         debug_logger.log(f"[{debug_tag}]     ... ({len(reasons)-6} more)")
 
@@ -724,16 +829,23 @@ def make_cv_folds_binary_by_blocked_windows(
                     )
                     debug_logger.log(f"[{debug_tag}] DONE: using k={k_try}, seed={s}")
                     debug_logger.log(f"[{debug_tag}] ========================================\n")
-                return folds
+                return folds, []
+            
+            for it in reasons:
+                split_issues.append(it)
 
         if debug_logger is not None:
             debug_logger.log(f"[{debug_tag}] No valid folds for k_try={k_try}. Degrading k...\n")
 
-    if debug_logger is not None:
-        debug_logger.log(f"[{debug_tag}] FAIL: Could not produce valid folds for any k>=2")
-        debug_logger.log(f"[{debug_tag}] ========================================\n")
+    issues.append(utils.issue(
+        "FOLDS",
+        "Could not produce valid folds for any k>=2",
+        {"k_eff": int(k_eff), "k_req": int(k_req)},
+    ))
 
-    return []
+    # Keep only a limited number to avoid giant JSON
+    issues.extend(split_issues[:25])
+    return [], issues
 
 
 def _compute_block_size_windows(
@@ -748,9 +860,9 @@ def _compute_block_size_windows(
     This groups windows that overlap in raw EEG samples into the same block.
     """
     if hop_samples <= 0:
-        raise ValueError(f"hop_samples must be > 0, got {hop_samples}")
+        utils.abort("FOLDS", "hop_samples must be > 0", {"hop_samples": int(hop_samples)})
     if n_time <= 0:
-        raise ValueError(f"n_time must be > 0, got {n_time}")
+        utils.abort("FOLDS", "n_time must be > 0", {"n_time": int(n_time)})
     # fs_hz isn't mathematically required for W/H, but we keep it in signature
     # because you'll likely want to log/validate it.
     block = int(np.ceil(float(n_time) / float(hop_samples)))
@@ -785,7 +897,11 @@ def make_block_groups_within_trials_by_window_idx(
     window_ids = np.asarray(window_ids).astype(np.int64)
 
     if not (len(trial_ids) == len(yb) == len(window_ids)):
-        raise ValueError("trial_ids, yb, window_ids must have same length")
+        utils.abort(
+            "FOLDS",
+            "trial_ids, yb, window_ids must have same length",
+            {"len_trial_ids": int(len(trial_ids)), "len_yb": int(len(yb)), "len_window_ids": int(len(window_ids))},
+        )
 
     # this bins each window into a chunk index, where chunks are size block_size_windows
     # and where block_size_windows = ceil (W/H), answering how many consecutive windows are overlapping
@@ -818,7 +934,7 @@ def shortlist_freqs(y_hz: np.ndarray, pick_top_k: int) -> list[int]:
     Keep only frequencies with enough windows, then take the top-K by count.
     """
     k_folds = 5 # REQUIRE AT LEAST K_FOLDS WINDOWS PER CLASS (bare minimum) and 20 for reasonability
-    min_windows_per_class = max(20, int(k_folds * 2))
+    min_windows_per_class = max(utils.MIN_WINDOWS_PER_FREQ_FOR_SHORTLIST, int(k_folds * 2))
     vals, counts = np.unique(y_hz, return_counts=True)
     keep = [(int(v), int(c)) for v, c in zip(vals, counts) if int(c) >= int(min_windows_per_class)]
     if len(keep) < 2:
@@ -842,19 +958,16 @@ def select_best_pair(
     Returns: (best_left_hz, best_right_hz, debug_info)
     Scoring metric: mean CV balanced accuracy.
     """
+    pair_issues: list[utils.TrainIssue] = [] # error catching
     cand_freqs = shortlist_freqs(
         y_hz,
         pick_top_k=6,
     )
-    if len(cand_freqs) < 2:
-        raise RuntimeError("Not enough usable frequencies after min_windows_per_class filtering.")
-
     pairs = [(cand_freqs[i], cand_freqs[j]) for i in range(len(cand_freqs)) for j in range(i + 1, len(cand_freqs))]
 
     best_metrics = None
     best_score = -1.0
     all_metrics = []
-
     print(f"[PY] Pair search candidates: freqs={cand_freqs} -> {len(pairs)} pairs, arch={args.arch}")
 
     for hz_a, hz_b in pairs:
@@ -862,33 +975,58 @@ def select_best_pair(
         # ====== 1) build binary dataset for this candidate pair =====
         Xp, yb, tp, wp = make_binary_pair_dataset(X, y_hz, trial_ids, window_ids, hz_a, hz_b)
 
-        # Guard: need enough samples per class for k-fold
-        c0 = int((yb == 0).sum())
-        c1 = int((yb == 1).sum())
-        if c0 < 2 or c1 < 2:
-            print(f"[PY] pair ({hz_a},{hz_b}) skipped: not enough data (c0={c0}, c1={c1})")
+        ok, issue = validate_pair_dataset(
+            hz_a=hz_a,
+            hz_b=hz_b,
+            Xp=Xp,
+            yb=yb,
+            tp=tp,
+            k_req=int(gen_cfg.number_cross_val_folds),
+        )
+        if not ok:
+            if issue is not None:
+                pair_issues.append(utils.issue(
+                "PAIR_SEARCH",
+                issue.message,
+                {
+                    "hz_a": int(hz_a),
+                    "hz_b": int(hz_b),
+                    "n_pair": int(len(yb)),
+                    "inner": utils.issue_to_dict(issue) if hasattr(utils, "issue_to_dict") else asdict(issue),
+                },
+            ))
+            else:
+                pair_issues.append(utils.issue(
+                    "PAIR_SEARCH", "Pair dataset invalid for unknown reason",
+                    {"hz_a": int(hz_a), "hz_b": int(hz_b), "n_pair": int(len(yb))}
+                ))
             continue
 
         k = int(gen_cfg.number_cross_val_folds)
-        folds = make_cv_folds_binary_by_blocked_windows(
+        folds, fold_issues = make_cv_folds_binary_by_blocked_windows(
             yb=yb,
             trial_ids=tp,
             window_ids=wp,
             k=k,
             seed=0,
             n_time=info.n_time,    # window length in samples
-            hop_samples=HOP_SAMPLES,
+            hop_samples=utils.HOP_SAMPLES,
             fs_hz=250.0,
             debug_logger=debug_logger,
             debug_tag=f"PAIR {hz_a}vs{hz_b}",
         )
         if len(folds) < 2:
-            print(f"[PY] pair ({hz_a},{hz_b}) skipped: fold build failed")
+            pair_issues.append(utils.issue(
+                "PAIR_SEARCH",
+                "Fold build failed for pair",
+                {"hz_a": int(hz_a), "hz_b": int(hz_b), "n_fold_issues": int(len(fold_issues))},
+            ))
+            pair_issues.extend(fold_issues)
             continue
 
         # ===== 2) score the pair using trainer API =====
         if args.arch == "CNN":
-            metrics = score_pair_cv_cnn(
+            metrics, score_issues = score_pair_cv_cnn(
                 X_pair=Xp,
                 y_pair=yb,
                 trial_ids_pair=tp,
@@ -899,16 +1037,22 @@ def select_best_pair(
                 freq_b_hz=hz_b,
                 logger=debug_logger,
             )
+            pair_issues.extend(score_issues)
         elif args.arch == "SVM":
             metrics = utils.ModelMetrics(0, -99, -99)
             print("hadeel todo for svm")
         else:
-            raise ValueError(f"Unknown arch: {args.arch}")
+            utils.abort("PAIR_SEARCH", "Unknown model train architecture", {"arch": str(args.arch)})
 
         all_metrics.append(metrics)
 
         if not metrics.cv_ok:
             print(f"[PY] pair ({hz_a},{hz_b}) skipped due to cv error")
+            pair_issues.append(utils.issue(
+                "PAIR_SEARCH",
+                "CV failed for pair",
+                {"hz_a": hz_a, "hz_b": hz_b}
+            ))
             continue
 
         score = metrics.avg_fold_balanced_accuracy # current scoring metric we're using
@@ -920,7 +1064,11 @@ def select_best_pair(
             best_metrics = metrics
 
     if best_metrics is None:
-        raise RuntimeError("Failed to select any valid pair (all candidates lacked data).")
+        utils.abort(
+            "PAIR_SEARCH",
+            "Failed to select any valid pair (all candidates skipped).",
+            {"cand_freqs": cand_freqs, "n_pairs": int(len(pairs)), "skip_count": int(len(pair_issues))},
+        )
 
     a = best_metrics.freq_a_hz
     b = best_metrics.freq_b_hz
@@ -933,6 +1081,7 @@ def select_best_pair(
         "candidate_freqs": cand_freqs,
         "pair_scores": [asdict(m) for m in all_metrics], # dictionary format for JSON serialization
         "best_score_mean_bal_acc": best_score,
+        "pair_skip_reasons": utils.issues_to_json(pair_issues),
     }
     return left_hz, right_hz, debug
 
@@ -940,19 +1089,26 @@ def select_best_pair(
 # -----------------------------
 # JSON Contract & ONNX Export
 # -----------------------------
-def write_train_result_json(model_dir: Path, *, train_ok: bool, onnx_ok: bool, arch: str, calibsetting: str,
+def write_train_result_json(model_dir: Path, *, train_ok: bool, onnx_ok: bool, cv_ok: bool, final_holdout_ok: bool, arch: str, calibsetting: str,
                             left_hz: int, right_hz: int,
                             left_e: int, right_e: int,
+                            final_holdout_bal_acc: float = 0.0, final_train_acc: float = 0.0,
+                            issues: list[utils.TrainIssue] | None = None,
                             extra: dict[str, Any] | None = None) -> Path:
-    payload: dict[str, Any] = {
+    payload = {
         "train_ok": bool(train_ok),
         "onnx_ok": bool(onnx_ok),
+        "cv_ok": bool(cv_ok),
+        "final_holdout_ok": bool(final_holdout_ok),
         "arch": arch,
         "calibsetting": calibsetting,
         "best_freq_left_hz": int(left_hz),
         "best_freq_right_hz": int(right_hz),
         "best_freq_left_e": int(left_e),
         "best_freq_right_e": int(right_e),
+        "final_holdout_acc": float(final_holdout_bal_acc),
+        "final_train_acc": float(final_train_acc),
+        "issues": utils.issues_to_json(issues or [])
     }
     if extra:
         payload["extra"] = extra
@@ -993,107 +1149,188 @@ def hz_to_enum_mapping() -> dict[int, int]:
 def main():
     args = get_args()
 
-    # 0: RESOLVE PATHS FROM ARGS
+    issues: list[utils.TrainIssue] = [] # should contain utils.TrainIssue
+
+    # 0) INITS (default final results)
+    best_left_hz = -1
+    best_right_hz = -1
+    final = utils.FinalTrainResults()
+    X = None
+    Xp = None
+    debug: dict[str, Any] = {}
+
+    # 1) RESOLVE PATHS FROM ARGS
     out_dir_arg = Path(args.model)
     out_dir = out_dir_arg if out_dir_arg.is_absolute() else (MODELS_ROOT / out_dir_arg)
     out_dir.mkdir(parents=True, exist_ok=True)
     print("[PY] model output dir:", out_dir.resolve())
+
+    # init centralized debug logger
     debug_log = utils.DebugLogger(out_dir / "train_ssvep_debug.txt")
     print(f"[PY] CV debug log -> {debug_log.path.resolve()}")
 
     data_arg = Path(args.data)
     data_session_dir = data_arg if data_arg.is_absolute() else (DATA_ROOT / data_arg)
     data_session_dir = data_session_dir.resolve()
-
     hparam_arg = args.tunehparams
-
+    
     gen_cfg = utils.GeneralTrainingConfigs()
 
-    # 1) Resolve sources based on calibsetting
-    sources = list_window_csvs(data_session_dir, args.calibsetting)
-    print(f"[PY] loading {len(sources)} eeg_windows.csv sources")
+    try:
+        # 2) Resolve sources based on calibsetting
+        sources = list_window_csvs(data_session_dir, args.calibsetting)
+        print(f"[PY] loading {len(sources)} eeg_windows.csv sources")
 
-    # 2) Load data
-    X, y_hz, trial_ids, window_ids, info = load_windows_csv(sources)
-    print("[PY] Loaded X:", X.shape, "y_hz:", y_hz.shape, "classes_hz:", info.classes_hz)
+        # 3) Load data
+        X, y_hz, trial_ids, window_ids, info, load_issues = load_windows_csv(sources)
+        issues.extend(load_issues)
+        print("[PY] Loaded X:", X.shape, "y_hz:", y_hz.shape, "classes_hz:", info.classes_hz)
+        validate_loaded_dataset(
+            X=X,
+            y_hz=y_hz,
+            trial_ids=trial_ids,
+            window_ids=window_ids,
+        )
 
-    # 3) Select best pair using CV scoring with same arch
-    best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, trial_ids=trial_ids, window_ids=window_ids, info=info, gen_cfg=gen_cfg, debug_logger=debug_log, args=args)
-    print(f"[PY] BEST PAIR: {best_left_hz}Hz vs {best_right_hz}Hz")
+        # 4) Select best pair using CV scoring with same arch
+        best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, trial_ids=trial_ids, window_ids=window_ids, info=info, gen_cfg=gen_cfg, debug_logger=debug_log, args=args)
+        print(f"[PY] BEST PAIR: {best_left_hz}Hz vs {best_right_hz}Hz")
 
-    # 4) Train final model on winning pair
-    Xp, yb, tp, wp = make_binary_pair_dataset(X, y_hz, trial_ids, window_ids, best_left_hz, best_right_hz)
-    # Build folds for the winning pair (used for final CV reporting)
-    c0 = int((yb == 0).sum())
-    c1 = int((yb == 1).sum())
-    k_final = int(gen_cfg.number_cross_val_folds)
-    folds_final: list[tuple[np.ndarray, np.ndarray]] = []
-    if c0 >= 2 and c1 >= 2:
-        folds_final = make_cv_folds_binary_by_blocked_windows(
+        # 5) Train final model on winning pair
+        Xp, yb, tp, wp = make_binary_pair_dataset(X, y_hz, trial_ids, window_ids, best_left_hz, best_right_hz)
+
+        # 6) Validate final folds
+        ok, reason = validate_pair_dataset(
+            hz_a=best_left_hz,
+            hz_b=best_right_hz,
+            Xp=Xp,
             yb=yb,
-            trial_ids=tp,
-            window_ids=wp,
-            k=k_final,
-            seed=0,
-            n_time=info.n_time,
-            hop_samples=HOP_SAMPLES,
-            fs_hz=250.0,
-            debug_logger=debug_log,
-            debug_tag=f"FINAL {best_left_hz}vs{best_right_hz}",
+            tp=tp,
+            k_req=int(gen_cfg.number_cross_val_folds),
         )
-    if len(folds_final) < 2:
-        print(f"[PY] warning: final folds not usable (k_final={k_final}, folds={len(folds_final)}). "
-              f"Final training will still run; CV metrics may be 0.")
+        if not ok:
+            utils.abort(
+                "FINAL",
+                "Winning pair failed sanity checks",
+                {"hz_a": int(best_left_hz), "hz_b": int(best_right_hz), "inner": utils.issue_to_dict(reason) if reason else None},
+            )
 
-    if args.arch == "CNN":
-        final = train_final_cnn_and_export(
-            X_pair=Xp,
-            y_pair=yb,
-            trial_ids_pair=tp,
-            folds=folds_final,
-            n_ch=info.n_ch,
-            n_time=info.n_time,
-            out_onnx_path=(out_dir / "ssvep_model.onnx"),
-            hparam_tuning=hparam_arg,
-            logger=debug_log,
+        # Build folds for the winning pair (used for final CV reporting)
+        c0 = int((yb == 0).sum())
+        c1 = int((yb == 1).sum())
+        k_final = int(gen_cfg.number_cross_val_folds)
+        folds_final: list[tuple[np.ndarray, np.ndarray]] = []
+        fold_issues: list[utils.TrainIssue] = []
+        if c0 >= 2 and c1 >= 2:
+            folds_final, fold_issues = make_cv_folds_binary_by_blocked_windows(
+                yb=yb,
+                trial_ids=tp,
+                window_ids=wp,
+                k=k_final,
+                seed=0,
+                n_time=info.n_time,
+                hop_samples=utils.HOP_SAMPLES,
+                fs_hz=250.0,
+                debug_logger=debug_log,
+                debug_tag=f"FINAL {best_left_hz}vs{best_right_hz}",
+            )
+        if len(folds_final) < 2:
+            fold_issues.append(utils.issue(
+                "FINAL",
+                "Final folds not usable; CV metrics may be zero",
+                {"k_final": int(gen_cfg.number_cross_val_folds), "n_folds": int(len(folds_final)), "n_fold_issues": int(len(fold_issues))},
+            ))
+        
+        issues.extend(fold_issues)
+
+        if args.arch == "CNN":
+            final, cnn_issues = train_final_cnn_and_export(
+                X_pair=Xp,
+                y_pair=yb,
+                trial_ids_pair=tp,
+                folds=folds_final,
+                n_ch=info.n_ch,
+                n_time=info.n_time,
+                out_onnx_path=(out_dir / "ssvep_model.onnx"),
+                hparam_tuning=hparam_arg,
+                logger=debug_log,
+            )
+            issues.extend(cnn_issues)
+
+        elif args.arch == "SVM":
+            raise NotImplementedError("Wire SVM final training + export here.")
+
+        # 7) Write train_result.json (contract consumed by C++)
+        hz2e = hz_to_enum_mapping()
+        if best_left_hz not in hz2e or best_right_hz not in hz2e:
+            utils.abort(
+                "FINALIZE",
+                "Best pair not in hz_to_enum_mapping()",
+                {"best_left_hz": int(best_left_hz), "best_right_hz": int(best_right_hz)},
+            )
+
+        write_train_result_json(
+            out_dir,
+            train_ok=final.train_ok,
+            onnx_ok=final.onnx_export_ok,
+            cv_ok=final.cv_ok,
+            final_holdout_ok=final.final_holdout_ok,
+            arch=args.arch,
+            calibsetting=args.calibsetting,
+            left_hz=best_left_hz,
+            right_hz=best_right_hz,
+            left_e=hz2e[best_left_hz],
+            right_e=hz2e[best_right_hz],
+            final_holdout_bal_acc=final.final_holdout_bal_acc,
+            final_train_acc=final.final_train_acc,
+            issues=issues,
+            extra={
+                "n_windows_total": int(X.shape[0]) if X is not None else 0,
+                "n_windows_pair": int(Xp.shape[0]) if Xp is not None else 0,
+                "pair_selection_metric": "mean_cv_balanced_accuracy",
+                "candidate_freqs": debug.get("candidate_freqs"),
+                "best_score_mean_bal_acc": debug.get("best_score_mean_bal_acc"),
+                "pair_scores": debug.get("pair_scores"),
+                "pair_skip_reasons": debug.get("pair_skip_reasons"),
+            },
         )
+        return 0
+    
+    # Known failures for UI reporting
+    except utils.TrainAbort as ta:
+        issues.append(ta.issue)
 
-    elif args.arch == "SVM":
-        raise NotImplementedError("Wire SVM final training + export here.")
+    # Unexpected crashes
+    except Exception as e:
+        issues.append(utils.issue("FATAL", "UNHANDLED_EXCEPTION", str(e)))
 
-    # 6) Write train_result.json (contract consumed by C++)
+    # unified failure write
     hz2e = hz_to_enum_mapping()
-    if best_left_hz not in hz2e or best_right_hz not in hz2e:
-        raise ValueError(f"Best pair ({best_left_hz},{best_right_hz}) not in hz_to_enum_mapping()")
+    left_e=hz2e.get(best_left_hz, -1),
+    right_e=hz2e.get(best_right_hz, -1),
 
     write_train_result_json(
         out_dir,
-        train_ok=final.train_ok,
-        onnx_ok=final.onnx_export_ok,
+        train_ok=False,
+        onnx_ok=False,
+        cv_ok=False,
+        final_holdout_ok=False,
         arch=args.arch,
         calibsetting=args.calibsetting,
         left_hz=best_left_hz,
         right_hz=best_right_hz,
-        left_e=hz2e[best_left_hz],
-        right_e=hz2e[best_right_hz],
+        left_e=left_e,
+        right_e=right_e,
+        issues=issues,
         extra={
-            "n_windows_total": int(X.shape[0]),
-            "n_windows_pair": int(Xp.shape[0]),
-            "pair_selection_metric": "mean_cv_balanced_accuracy",
-            "candidate_freqs": debug.get("candidate_freqs"),
-            "best_score_mean_bal_acc": debug.get("best_score_mean_bal_acc"),
-            "pair_scores": debug.get("pair_scores"),
-            "final_train_acc": final.final_train_acc,
-            "final_val_acc": final.final_val_acc,
+            "fatal_stage": issues[-1].stage if issues else "UNKNOWN",
+            "n_windows_total": int(X.shape[0]) if X is not None else 0,
         },
     )
+    return 1
 
-    return 0
 
 # ENTRY POINT
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except Exception as e:
-        print(f"[PY] FATAL TRAINING ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(main())
+
