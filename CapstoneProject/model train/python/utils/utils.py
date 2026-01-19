@@ -1,8 +1,8 @@
 # Collection of commonly used stats utils for features, scoring, etc...
-
+from __future__ import annotations
 import pandas as pd
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 from datetime import datetime
@@ -28,6 +28,22 @@ class DebugLogger:
         with self.path.open("a", encoding="utf-8") as f:
             f.write(msg.rstrip() + "\n")
 
+# =============== TRAINING DATA MINIMUM REQS & VALIDATOR FUNCTIONS ====================
+HOP_SAMPLES = 80                       # matches C++
+MIN_TOTAL_WINDOWS = 80                 # after filters (trimmed + not bad)
+MIN_FREQS_FOR_PAIR_SEARCH = 2          # need at least 2 freqs with enough windows
+MIN_WINDOWS_PER_FREQ_FOR_SHORTLIST = 40 
+# For pair-level training sanity
+MIN_PAIR_WINDOWS_PER_CLASS = 40        # for a stable pair evaluation/training
+MIN_PAIR_TRIALS_PER_CLASS = 2          # 
+# For CV fold building
+MIN_GROUPS_PER_CLASS_FOR_CV = 2        # absolute minimum 
+MIN_FOLDS_MIN = 2                      # hard minimum; k_eff will degrade from here
+# For holdout training
+MIN_TRIALS_PER_CLASS_FOR_HOLDOUT = 2   # if fewer, skip holdout (fall back to no-holdout)
+# For batches
+MIN_WINS_PER_BATCH_PER_CLASS = 5       # half class
+
 # =================== SHARED DATACLASSES ============================
 @dataclass(frozen=True)
 class DatasetInfo:
@@ -47,7 +63,7 @@ class ModelMetrics:
     freq_a_hz: int
     freq_b_hz: int
     cv_ok: bool                            # report any failures if not ok
-    avg_fold_balanced_accuracy: float      # currently the deciding factor
+    avg_fold_balanced_accuracy: float      # currently the deciding factor between paired models (protects against class imbalance)
     std_fold_balanced_accuracy: float
     avg_fold_accuracy: float
     std_fold_accuracy: float
@@ -55,29 +71,50 @@ class ModelMetrics:
 
 @dataclass(frozen=True)
 class FinalTrainResults:
-    train_ok: bool
-    onnx_export_ok: bool
+    train_ok: bool = False
+    onnx_export_ok: bool = False
     
     # Cross-validation summary
-    cv_ok: bool
-    cv_mean_bal_acc: float
-    cv_std_bal_acc: float
-    cv_mean_acc: float
-    cv_std_acc: float
-    cv_mean_val_loss: float
-    cv_std_val_loss: float
+    cv_ok: bool = False
+    cv_mean_bal_acc: float = 0.0
+    cv_std_bal_acc: float = 0.0
+    cv_mean_acc: float = 0.0
+    cv_std_acc: float = 0.0
+    cv_mean_val_loss: float = 0.0 # cross-entropy loss is objective that optimizer is minimizing
+    cv_std_val_loss: float = 0.0
 
     # Final exported model early-stop holdout metrics (not used for selection across freq pairs)
-    final_holdout_ok: bool
-    final_holdout_loss: float
-    final_holdout_acc: float
-    final_holdout_bal_acc: float
+    final_holdout_ok: bool = False
+    final_holdout_loss: float = float("inf") # loss on holdout set
+    final_holdout_acc: float = 0.0
+    final_holdout_bal_acc: float = 0.0
     cfg: dict[str, Any] | None = None # FOR CNN ARCH (svm may not need cfg)
-    # Optional extras (won’t be required at init)
     final_train_loss: float | None = None
     final_train_acc: float | None = None
-    final_val_loss: float | None = None
-    final_val_acc: float | None = None
+
+# ==================== SHARED ERROR HANDLING ============================
+# One shared error payload
+@dataclass(frozen=True)
+class TrainIssue:
+    stage: str
+    message: str
+    details: dict[str,Any] | None = None # optional
+
+# for NON-FATAL problems (e.g. skip a pair, etc)
+def issue(stage: str, message: str, details: dict[str, Any] | None = None) -> TrainIssue:
+    return TrainIssue(stage=stage, message=message, details=details)
+
+def issues_to_json(issues: list[TrainIssue]) -> list[dict[str, Any]]: # each issue becomes a dict
+    return [asdict(i) for i in issues]
+
+class TrainAbort(RuntimeError): # TrainAbort class inherits from RuntimeError
+    def __init__(self, issue: TrainIssue):
+        super().__init__(f"[{issue.stage}] {issue.message}") # calls parent class constructor RuntimeError.__init__ and changes message format to issue
+        self.issue = issue # assign issue to self so we can access it later e.g. "e.issue.stage"
+
+# for FATAL error conditions
+def abort(stage: str, message: str, details: dict[str,Any] | None = None):
+    raise TrainAbort(issue(stage,message,details)) # calls a new trainabort object
 
 # =================== METRIC CALCULATIONS ============================
 

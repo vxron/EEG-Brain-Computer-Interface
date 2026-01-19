@@ -15,10 +15,11 @@ import utils.utils as utils
 
 # TODO: option on UI to tune (longer) or use defaults (faster)?
 # TODO: add 3rd neutral class -> 3 class classifiers!!!
-# TODO: decide pooling args & hyperparam tuning range based on frequencies were looking at. shift up if using high freq to preserve more info (at least 60Hz by Nyquist)
+# TODO: plotting training ?? if time 
 
 # ===================== DEBUG HELPERS =====================
-def _log(logger: utils.DebugLogger | None, msg: str = "") -> None:
+def _log(logger, *parts) -> None:
+    msg = " ".join(str(p) for p in parts)
     if logger is None:
         print(msg)
     else:
@@ -50,7 +51,6 @@ def eval_pred_stats(model, loader, *, device) -> dict:
     n = int(len(y_true))
 
     return {"n": n, "tp": tp, "tn": tn, "fp": fp, "fn": fn, "pred0": pred0, "pred1": pred1}
-
 
 # CNN Hyperparameters & Configs DataClass
 # Capitals indicate const variables that should never be mutated in this architecture.
@@ -105,6 +105,20 @@ def iter_hparam_candidates(
         patch = dict(zip(keys, vals)) 
         yield replace(base_cfg, **patch) # patch updates base (default) cfg with only values that are different in current space key values from product loop
 
+def iter_hparam_candidates(
+    base_cfg: CNNTrainConfig,
+    space: dict[str,list],
+) -> Iterator[CNNTrainConfig]:
+    """
+    YIELDS CNNTrainConfig objects for every combination in the hparam grid (space) dict[str,list]
+    """
+    for patch in (
+        dict(zip(space.keys(), values)) # (1) zip assigns each prod (combination) we obtained in step 2 to the initial keys in order, so like [a,c] gets mapped back to relevant keys ("lr",a), ("kernel",b); then it becomes dict {"lr":a, "kernel":b} format
+        for values in product(*space.values()) # (2) takes values of dict, so the hparam lists here, [a,b..] and [c,d..] then makes products [a,c], [a,d], [b,c], [b,d] so every possible combination...
+    ):
+        yield replace(base_cfg, **patch) # (3) replace creates a copy of base_cfg with only the specified fields in patch changed and yield turns a fxn into an iterator that produces ('yields') values one at a time instead of all at once
+
+
 # EEGNET (CNN) MODEL DEFINITION
 # A layer is a block in the NN
 # A kernel is a set of learned weights inside a CONVOLUTIONAL layer specifically
@@ -138,14 +152,14 @@ def iter_hparam_candidates(
 #    - maps to k classes (B, k)
 class EEGNet(nn.Module):
     def __init__(self, n_ch: int, n_time: int, n_classes: int,
-                 F1: int = 8,
-                 D: int = 2,
-                 F2: int = 16,
-                 kernel_length: int = 125,
-                 pooling_factor: int = 5,
-                 pooling_factor_final: int = 10,
-                 dropout: float = 0.5):
-        super().__init__()
+                 F1: int,
+                 D: int,
+                 F2: int,
+                 kernel_length: int,
+                 pooling_factor: int,
+                 pooling_factor_final: int,
+                 dropout: float):
+        super().__init__() # init nn.Module parent class, then added stuff
         self.n_ch = n_ch
         self.n_time = n_time
         self.n_classes = n_classes
@@ -257,271 +271,22 @@ class ListBatchSampler(BatchSampler):
     def __len__(self):
         return len(self._batches)
 
-    
-def make_trial_batches(
-    trial_ids: np.ndarray,
-    *,
-    max_trials_per_batch: int = 1,
-    max_windows_per_batch: int = 16,
-    seed: int = 0,
-) -> list[list[int]]:
-    """
-    Builds batches as lists of indices.
-    - Groups by trial_id (no mixing across trials unless max_trials_per_batch > 1)
-    - Caps batch size so huge trials get split into multiple optimizer steps
-    - NOTE: max_windows_per_batch will always == batch size as long as trials are long enough compared to window length (which they are)
-    This is for comparing hparam configs + freq pairs.
-    """
-    trial_ids = np.asarray(trial_ids).astype(np.int64)
-    uniq = np.unique(trial_ids)
-
-    rng = np.random.default_rng(seed)
-    rng.shuffle(uniq)
-
-    # map: trial -> indices (shuffled inside trial)
-    trial_to_idx = {}
-    for t in uniq:
-        idx = np.where(trial_ids == t)[0].astype(np.int64)
-        rng.shuffle(idx)
-        trial_to_idx[int(t)] = idx.tolist()
-
-    batches: list[list[int]] = []
-    for i in range(0, len(uniq), max_trials_per_batch):
-        trials = uniq[i : i + max_trials_per_batch]
-
-        # collect windows from these trials
-        pool: list[int] = []
-        for t in trials:
-            pool.extend(trial_to_idx[int(t)])
-
-        # chunk pool into capped batches
-        for j in range(0, len(pool), max_windows_per_batch):
-            batches.append(pool[j : j + max_windows_per_batch])
-
-    return batches
-
-def make_stratified_trial_batches_new(
-    trial_ids: np.ndarray,
-    y: np.ndarray,
-    *,
-    max_windows_per_batch: int = 16,
-    seed: int = 0,
-    logger: utils.DebugLogger | None = None,
-) -> list[list[int]]:
-    """
-    Build batches ensuring BOTH classes present and roughly balanced.
-    Accepts slight imbalance in final batches to avoid dropping data.
-    """
-    rng = np.random.default_rng(seed)
-    trial_ids = np.asarray(trial_ids).astype(np.int64)
-    y = np.asarray(y).astype(np.int64)
-    
-    # Group trials by their majority class
-    trials_by_class: dict[int, list[int]] = {0: [], 1: []}
-    trial_to_indices: dict[int, np.ndarray] = {}
-    
-    for tid in np.unique(trial_ids):
-        mask = trial_ids == tid
-        indices = np.where(mask)[0]
-        majority_class = int(np.round(y[mask].mean()))
-        trials_by_class[majority_class].append(int(tid))
-        trial_to_indices[int(tid)] = indices
-    
-    # Validate we have trials for both classes
-    if len(trials_by_class[0]) == 0 or len(trials_by_class[1]) == 0:
-        raise ValueError(
-            f"Cannot create stratified batches: "
-            f"class0 has {len(trials_by_class[0])} trials, "
-            f"class1 has {len(trials_by_class[1])} trials. "
-            f"Need at least 1 trial per class."
-        )
-    
-    # Shuffle trials within each class
-    for class_trials in trials_by_class.values():
-        rng.shuffle(class_trials)
-    
-    # Collect ALL windows from each class
-    windows_class0: list[int] = []
-    windows_class1: list[int] = []
-    
-    for tid in trials_by_class[0]:
-        indices = trial_to_indices[tid].copy()
-        rng.shuffle(indices)
-        windows_class0.extend(indices.tolist())
-    
-    for tid in trials_by_class[1]:
-        indices = trial_to_indices[tid].copy()
-        rng.shuffle(indices)
-        windows_class1.extend(indices.tolist())
-    
-    # Shuffle the pools
-    rng.shuffle(windows_class0)
-    rng.shuffle(windows_class1)
-    
-    # Build batches with both classes
-    batches: list[list[int]] = []
-    windows_per_class = max_windows_per_batch // 2
-    
-    ptr0 = 0
-    ptr1 = 0
-    
-    while ptr0 < len(windows_class0) or ptr1 < len(windows_class1):
-        batch: list[int] = []
-        
-        # Take from class 0 (up to windows_per_class or whatever's left)
-        remaining0 = len(windows_class0) - ptr0
-        remaining1 = len(windows_class1) - ptr1
-        
-        # Decide how many to take from each class
-        if remaining0 >= windows_per_class and remaining1 >= windows_per_class:
-            # Normal case: take balanced amounts
-            n_take0 = windows_per_class
-            n_take1 = windows_per_class
-        elif remaining0 > 0 and remaining1 > 0:
-            # Leftover case: take what's available but keep it reasonable
-            # Don't allow more than 2:1 ratio
-            n_take0 = min(remaining0, windows_per_class)
-            n_take1 = min(remaining1, windows_per_class)
-            
-            # Enforce minimum representation (at least 2 from minority class if possible)
-            min_per_class = 2
-            if n_take0 >= min_per_class and n_take1 >= min_per_class:
-                # Both have enough - keep them balanced
-                n_take = min(n_take0, n_take1)
-                n_take0 = n_take
-                n_take1 = n_take
-        else:
-            # One class exhausted - stop making batches
-            break
-        
-        # Add windows to batch
-        batch.extend(windows_class0[ptr0:ptr0 + n_take0])
-        batch.extend(windows_class1[ptr1:ptr1 + n_take1])
-        
-        ptr0 += n_take0
-        ptr1 += n_take1
-        
-        # Verify both classes present
-        if len(batch) > 0:
-            batch_has_0 = any(y[idx] == 0 for idx in batch)
-            batch_has_1 = any(y[idx] == 1 for idx in batch)
-            
-            if batch_has_0 and batch_has_1:
-                rng.shuffle(batch)
-                batches.append(batch)
-    
-    if len(batches) == 0:
-        raise ValueError("Could not create any batches with both classes present")
-    
-    # Log what we kept
-    total_used = sum(len(b) for b in batches)
-    total_available = len(windows_class0) + len(windows_class1)
-    dropped = total_available - total_used
-    
-    if dropped > 0:
-        _log(logger, f"[BATCH INFO] Used {total_used}/{total_available} windows ({100*total_used/total_available:.1f}%), dropped {dropped} to maintain class balance")
-    
-    return batches
-
 
 def make_stratified_trial_batches(
     trial_ids: np.ndarray,
     y: np.ndarray,
     *,
-    max_windows_per_batch: int = 16,
+    max_windows_per_batch: int,
     seed: int = 0,
-) -> list[list[int]]:
+) -> tuple[list[list[int]], list[utils.TrainIssue]]:
     """
-    Build batches ensuring EVERY batch has samples from BOTH classes.
-    Uses cycling to handle unequal trial counts.
-    """
-    rng = np.random.default_rng(seed)
-    trial_ids = np.asarray(trial_ids).astype(np.int64)
-    y = np.asarray(y).astype(np.int64)
-    
-    # Group trials by their majority class
-    trials_by_class: dict[int, list[int]] = {0: [], 1: []}
-    trial_to_indices: dict[int, np.ndarray] = {}
-    
-    for tid in np.unique(trial_ids):
-        mask = trial_ids == tid
-        indices = np.where(mask)[0]
-        majority_class = int(np.round(y[mask].mean()))
-        trials_by_class[majority_class].append(int(tid))
-        trial_to_indices[int(tid)] = indices
-    
-    # Validate we have trials for both classes
-    if len(trials_by_class[0]) == 0 or len(trials_by_class[1]) == 0:
-        raise ValueError(
-            f"Cannot create stratified batches: "
-            f"class0 has {len(trials_by_class[0])} trials, "
-            f"class1 has {len(trials_by_class[1])} trials. "
-            f"Need at least 1 trial per class."
-        )
-    
-    # Shuffle trials within each class
-    for class_trials in trials_by_class.values():
-        rng.shuffle(class_trials)
-    
-    # ===== NEW APPROACH: Collect ALL windows, then batch them =====
-    # This ensures we use all data and can guarantee balanced batches
-    
-    all_windows_by_class: dict[int, list[int]] = {0: [], 1: []}
-    
-    for cls in [0, 1]:
-        for tid in trials_by_class[cls]:
-            indices = trial_to_indices[tid].copy()
-            rng.shuffle(indices)
-            all_windows_by_class[cls].extend(indices.tolist())
-    
-    # Now create batches by alternating between classes
-    batches: list[list[int]] = []
-    
-    ptr0 = 0  # Pointer for class 0 windows
-    ptr1 = 0  # Pointer for class 1 windows
-    
-    windows_per_class = max_windows_per_batch // 2
-    
-    while ptr0 < len(all_windows_by_class[0]) or ptr1 < len(all_windows_by_class[1]):
-        batch_windows: list[int] = []
-        
-        # Take from class 0
-        end0 = min(ptr0 + windows_per_class, len(all_windows_by_class[0]))
-        if ptr0 < len(all_windows_by_class[0]):
-            batch_windows.extend(all_windows_by_class[0][ptr0:end0])
-            ptr0 = end0
-        
-        # Take from class 1
-        end1 = min(ptr1 + windows_per_class, len(all_windows_by_class[1]))
-        if ptr1 < len(all_windows_by_class[1]):
-            batch_windows.extend(all_windows_by_class[1][ptr1:end1])
-            ptr1 = end1
-        
-        # Only add batch if it has windows from BOTH classes
-        has_class0 = any(y[idx] == 0 for idx in batch_windows)
-        has_class1 = any(y[idx] == 1 for idx in batch_windows)
-        
-        if has_class0 and has_class1:
-            rng.shuffle(batch_windows)
-            batches.append(batch_windows)
-        elif len(batch_windows) > 0:
-            # Last batch might be incomplete - merge with previous if possible
-            if batches:
-                batches[-1].extend(batch_windows)
-                rng.shuffle(batches[-1])
-    
-    return batches
+    Balanced, low-correlation batching for overlapping SSVEP windows.
 
-def make_stratified_trial_batches_old(
-    trial_ids: np.ndarray,
-    y: np.ndarray,
-    *,
-    max_windows_per_batch: int = 16,
-    seed: int = 0,
-) -> list[list[int]]:
-    """
-    Build batches ensuring each has samples from BOTH classes.
-    Each batch contains windows from exactly 1 trial per class.
+    Strategy:
+    - Build batches by pairing 1 trial from class 0 with 1 trial from class 1.
+    - If one class has fewer trials, cycle it.
+    - Within each trial pair, take up to max_windows_per_batch//2 per class.
+    - Every returned batch contains BOTH classes.
     
     This is optimal for heavily overlapping windows because:
     - Maximizes trial diversity per batch
@@ -537,73 +302,205 @@ def make_stratified_trial_batches_old(
     Returns:
         List of index lists (one per batch)
     """
+    batch_issues: utils.TrainIssue = []
     rng = np.random.default_rng(seed)
     trial_ids = np.asarray(trial_ids).astype(np.int64)
     y = np.asarray(y).astype(np.int64)
+
+    if max_windows_per_batch < 2:
+        utils.abort(
+            "CNN_BATCH",
+            "max_windows_per_batch must be >= 2",
+            {"max_windows_per_batch": int(max_windows_per_batch)},
+        )
+    if max_windows_per_batch % 2 != 0:
+        utils.abort(
+            "CNN_BATCH",
+            "max_windows_per_batch must be even for strict 50/50 class batching",
+            {"max_windows_per_batch": int(max_windows_per_batch)},
+        )
     
-    # Group trials by their majority class
-    trials_by_class: dict[int, list[int]] = {0: [], 1: []}
+    windows_per_class = max_windows_per_batch // 2
+    uniq_trials = np.unique(trial_ids)
     trial_to_indices: dict[int, np.ndarray] = {}
-    
-    for tid in np.unique(trial_ids):
-        mask = trial_ids == tid
-        indices = np.where(mask)[0]
-        
-        # Assign trial to class based on majority vote
-        majority_class = int(np.round(y[mask].mean()))  # 0 or 1
-        trials_by_class[majority_class].append(int(tid))
-        trial_to_indices[int(tid)] = indices
-    
-    # Shuffle trials within each class for randomness
-    for class_trials in trials_by_class.values():
-        rng.shuffle(class_trials)
-    
-    # Build batches by interleaving trials from each class
+    trials_by_class: dict[int, list[int]] = {0: [], 1: []}
+    for tid in uniq_trials:
+        mask = (trial_ids == tid)
+        idx = np.where(mask)[0].astype(np.int64)
+        if idx.size == 0:
+            continue
+        # Majority vote: trials should be mostly pure by construction (freq runs)
+        maj = int(np.round(y[idx].mean()))
+        maj = 1 if maj != 0 else 0  # clamp
+        trials_by_class[maj].append(int(tid))
+        trial_to_indices[int(tid)] = idx
+
+    # Must have at least one trial per class
+    if len(trials_by_class[0]) == 0 or len(trials_by_class[1]) == 0:
+        utils.abort(
+            "CNN_BATCH",
+            "Cannot create stratified batches: need at least one trial per class",
+            {
+                "n_trials_class0": int(len(trials_by_class[0])),
+                "n_trials_class1": int(len(trials_by_class[1])),
+                "uniq_trials_total": int(len(uniq_trials)),
+                "max_windows_per_batch": int(max_windows_per_batch),
+            },
+        )
+
+    # Shuffle trial order within each class (deterministic given seed)
+    rng.shuffle(trials_by_class[0])
+    rng.shuffle(trials_by_class[1])
+
+    # For each trial, shuffle its windows and split into half-batches of size windows_per_class
+    def _trial_chunks(tid: int) -> list[list[int]]:
+        idx = trial_to_indices[tid].copy()
+        rng.shuffle(idx)
+        chunks: list[list[int]] = []
+        for j in range(0, len(idx), windows_per_class):
+            chunk = idx[j : j + windows_per_class].tolist()
+            if chunk:
+                chunks.append(chunk)
+        return chunks
+    chunks_by_trial: dict[int, list[list[int]]] = {}
+    for cls in [0, 1]:
+        for tid in trials_by_class[cls]:
+            chunks_by_trial[tid] = _trial_chunks(tid)
+
+    # BUILD BACTHES BY PAIRING TRIALS WITH CYCLING
+    t0 = trials_by_class[0]
+    t1 = trials_by_class[1]
+    i0 = 0
+    i1 = 0
     batches: list[list[int]] = []
-    max_trials = max(len(trials_by_class[0]), len(trials_by_class[1]))
-    
-    for i in range(max_trials):
-        batch_windows: list[int] = []
-        
-        # Take windows from one trial per class (if available)
-        for cls in [0, 1]:
-            if i < len(trials_by_class[cls]):
-                tid = trials_by_class[cls][i]
-                indices = trial_to_indices[tid].copy()
-                rng.shuffle(indices)  # Shuffle within trial
-                
-                # Take up to half the batch size from this trial
-                n_take = min(len(indices), max_windows_per_batch // 2)
-                batch_windows.extend(indices[:n_take].tolist())
-        
-        if len(batch_windows) > 0:
-            rng.shuffle(batch_windows)  # Mix the two classes
+
+    # to avoid stuck in inf loop -> stop when we can't form any new balanced batch
+    while True:
+        made_batch = False
+
+        # try up to max(len(t0),len(t1)) pair-attempts before stopping
+        for _ in range(max(len(t0), len(t1))):
+            tid0 = t0[i0 % len(t0)]
+            tid1 = t1[i1 % len(t1)]
+            i0 += 1
+            i1 += 1
+            c0 = chunks_by_trial.get(tid0, [])
+            c1 = chunks_by_trial.get(tid1, [])
+            c0_enough = True
+            c1_enough = True
+
+            # one of the trials has no unused half-batches left overall... can't use it -> cycle
+            if len(c0)==0:
+                c0_enough = False
+                continue
+            elif len(c1) == 0:
+                c1_enough = False
+                continue
+            # pop one half-batch from each trial and combine into balanced batch
+            part0 = c0.pop(0)
+            part1 = c1.pop(0)
+            batch = part0 + part1
+
+            # balance checks
+            def _count_0():
+                return sum(y[idx] == 0 for idx in batch)
+            def _count_1():
+                return sum(y[idx] == 1 for idx in batch)
             
-            # Cap at max batch size
-            batch_windows = batch_windows[:max_windows_per_batch]
-            batches.append(batch_windows)
-    
-    return batches
+            # heuristic metric for class balance within batch 
+            # TODO: should be more acceptable class imbalance for no_ssvep since it comes up more frequently
+            while abs(_count_0() - _count_1())/(_count_0() + _count_1()) > 0.2:
+                # e.g. 5 class 1, 10 class 2, makes 5/15 = 1/3 
+                # 8 class 1, 7 class 2, makes 1/15 (way more balanced)
+                # remove excess to make them sufficiently balanced
+                excess = _count_0()-_count_1()
+                if excess>0:
+                    # so there's more count_0
+                    batch.remove(any(y[idx]==0 for idx in batch))
+                else:
+                    # so there's more count_1
+                    batch.remove(any(y[idx]==1 for idx in batch))
+
+            # ensure both classes present in the batch in sufficient number
+            if (_count_0() < int(max_windows_per_batch*0.7)):
+                c0_enough = False
+                continue
+            elif(_count_1() < int(max_windows_per_batch*0.7)):
+                c1_enough = False
+                continue
+        
+            rng.shuffle(batch)
+            batches.append(batch)
+            made_batch = True
+            _log(f"BATCH made with {_count_0()} in c0 and {_count_1()} in c1")
+        
+        # if we exhausted options and failed
+        if(not made_batch):
+            batch_issues.append(utils.TrainIssue("CNN_BATCH","Failed to make batch",f"bools c0_enough={c0_enough} and c1_enough={c1_enough}"))
+            break
+
+    # return
+    if len(batches) == 0:
+         utils.abort(
+            "CNN_BATCH",
+            "Could not create any balanced batches with both classes present",
+            {
+                "n_batches": int(len(batches)),
+                "n_trials_class0": int(len(trials_by_class[0])),
+                "n_trials_class1": int(len(trials_by_class[1])),
+                "max_windows_per_batch": int(max_windows_per_batch),
+            },
+        )
+    return batches, batch_issues
 
 def make_trial_holdout_split(
     trial_ids: np.ndarray,
+    y: np.ndarray,
     *,
     holdout_frac: float = 0.1,
     seed: int = 0,
+    logger: utils.DebugLogger | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Returns (train_idx, holdout_idx) by splitting UNIQUE trial IDs.
-    Prevents overlap leakage from heavily overlapping windows.
-    This is for FINAL MODEL EVALUATION ON SIMPLE HOLDOUT.
+    Stratified trial-wise holdout split.
+    - This is for FINAL MODEL EVALUATION ON SIMPLE HOLDOUT.
+    - Ensure both classes appear in holdout.
+    - Returns (train_idx, holdout_idx)
     """
     trial_ids = np.asarray(trial_ids).astype(np.int64)
     uniq_trials = np.unique(trial_ids)
+    y = np.asarray(y).astype(np.int64)
+    trial_label: dict[int, int] = {}
+    trials_by_class: dict[int, list[int]] = {0: [], 1: []}
+    for t in uniq_trials:
+        m = (trial_ids == t)
+        # majority vote (assumes trials are basically pure)
+        label = int(np.round(y[m].mean()))
+        trial_label[int(t)] = label
+        trials_by_class[label].append(int(t))
 
-    rng = np.random.default_rng(int(seed))
-    rng.shuffle(uniq_trials)
+    # IF WE ONLY HAVE ONE CLASS OF TRIALS -> RAISE ERROR
+    if len(trials_by_class[0]) < utils.MIN_TRIALS_PER_CLASS_FOR_HOLDOUT or len(trials_by_class[1]) < utils.MIN_TRIALS_PER_CLASS_FOR_HOLDOUT:
+        _log(logger,"[HOLDOUT] Too few trials per class for trial-wise holdout... Falling back to no-hodlout.")
+        return np.arange(len(trial_ids), dtype=np.int64), np.array([], dtype=np.int64)
 
-    n_holdout_trials = max(1, int(np.ceil(len(uniq_trials) * float(holdout_frac))))
-    holdout_trials = set(uniq_trials[:n_holdout_trials].tolist())
+    rng = np.random.default_rng(int(seed)) # get seeded examples by trial (class)
+    c0 = np.array(trials_by_class[0], dtype=np.int64)
+    c1 = np.array(trials_by_class[1], dtype=np.int64)
+    rng.shuffle(c0)
+    rng.shuffle(c1)
+    n0 = max(1, int(np.ceil(len(c0) * float(holdout_frac))))
+    n1 = max(1, int(np.ceil(len(c1) * float(holdout_frac))))
+    holdout_trials = set(c0[:n0].tolist()) | set(c1[:n1].tolist())
+
+    # don't take ALL trials from a class (would leave train missing that class...)
+    c0_set = set(c0.tolist())
+    c1_set = set(c1.tolist())
+    # attempt fixing train/test imbalance by dropping a trial from val if necessary
+    if len(c0_set - holdout_trials) == 0:
+        holdout_trials.remove(int(c0[0]))
+    if len(c1_set - holdout_trials) == 0: 
+        holdout_trials.remove(int(c1[0]))
 
     holdout_mask = np.isin(trial_ids, list(holdout_trials))
     holdout_idx = np.where(holdout_mask)[0].astype(np.int64)
@@ -611,6 +508,7 @@ def make_trial_holdout_split(
 
     # fall back to no-holdout
     if len(train_idx) == 0 or len(holdout_idx) == 0:
+        _log(logger, "Holdout split failed. Falling back to no-holdout final model training.")
         return np.arange(len(trial_ids), dtype=np.int64), np.array([], dtype=np.int64)
 
     return train_idx, holdout_idx
@@ -741,41 +639,43 @@ def train_single_final_model_with_holdout_and_export(
     device: torch.device,
     holdout_frac: float = 0.1,
     logger: utils.DebugLogger | None = None
-) -> tuple[bool, bool, float, float, float]:
+) -> tuple[bool, bool, float, float, float, float, list[utils.TrainIssue]]:
     """
     Trains ONE final model using a small trial-wise holdout for early stopping, then exports ONNX.
 
     Returns:
       (train_ok, export_ok, holdout_loss, holdout_acc, holdout_bal_acc)
     """
+    final_issues: utils.TrainIssue = []
+    train_ok = False
+    export_ok = False
     # Build trial-wise holdout split
     tr_idx, ho_idx = make_trial_holdout_split(
-        trial_ids_pair, holdout_frac=float(holdout_frac), seed=int(cfg.seed)
+        trial_ids_pair, y_pair, holdout_frac=float(holdout_frac), seed=int(cfg.seed), logger=logger,
     )
+    _log(logger, f"[HOLDOUT] train windows={len(tr_idx)} c0={(y_pair[tr_idx]==0).sum()} c1={(y_pair[tr_idx]==1).sum()}")
+    _log(logger, f"[HOLDOUT] hold  windows={len(ho_idx)} c0={(y_pair[ho_idx]==0).sum()} c1={(y_pair[ho_idx]==1).sum()}")
 
     if len(ho_idx) == 0:
-       
+        final_issues.append(utils.TrainIssue("HOLDOUT", "failed to make holdout; attempting to train on all data without early stopping"))
         # No holdout possible; train on all data without early stop and export.
         # (But in practice with multiple trials, ho_idx should not be empty.)
         ho_loss = 0.0
         ho_acc = 0.0
         ho_bal = 0.0
-        train_ok = True
-        export_ok = True
-
         # Train loader on all data
         X_all = apply_z_score_normalization(X_pair)
         X_all_t = torch.from_numpy(X_all[:, None, :, :]).float()
         y_all_t = torch.from_numpy(y_pair.astype(np.int64)).long()
         ds_all = TensorDataset(X_all_t, y_all_t)
-
         try:
-            batches = make_stratified_trial_batches_new(
+            batches, batch_issues = make_stratified_trial_batches(
                 trial_ids=trial_ids_pair,
                 y=y_pair,
                 max_windows_per_batch=int(cfg.batch_size),
                 seed=int(cfg.seed),
             )
+            final_issues.extend(batch_issues)
             train_loader = DataLoader(ds_all, batch_sampler=ListBatchSampler(batches))
 
             model = EEGNet(
@@ -786,48 +686,52 @@ def train_single_final_model_with_holdout_and_export(
                 pooling_factor_final=int(cfg.pooling_factor_final),
                 dropout=float(cfg.DROPOUT),
             ).to(device)
-
             criterion = nn.CrossEntropyLoss()
             optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.learning_rate))
+            train_ok = True
         except Exception as e:
-            _log(logger, f"[CNN] FInal holdout training failed: {e}")
-            train_ok = False
-
+            _log(logger, f"[CNN] Final holdout training failed: {e}")
+            return False, False, float(ho_loss), float(ho_acc), float(ho_bal), 0.0, final_issues
         for ep in range(int(cfg.MAX_EPOCHS)):
             tr_loss, tr_acc = run_epoch(model, train_loader, train=True,
                                         device=device, optimizer=optimizer, criterion=criterion)
-            _log(logger,f"[FINAL-NO-HOLDOUT] Epoch {ep+1:03d}/{int(cfg.MAX_EPOCHS)} "
-                  f"train_loss={tr_loss:.4f} train_acc={tr_acc:.3f}")
-
         try:
             export_cnn_onnx(model=model, n_ch=n_ch, n_time=n_time, out_path=Path(out_onnx_path))
+            export_ok = True
         except Exception as e:
             _log(logger, f"[CNN] ONNX export failed: {e}")
-            export_ok = False
+        return bool(train_ok), bool(export_ok), float(ho_loss), float(ho_acc), float(ho_bal), float(tr_acc), final_issues
 
-        return bool(train_ok), bool(export_ok), float(ho_loss), float(ho_acc), float(ho_bal)
-
-    # Use existing trainer on the split (this includes early stopping)
-    val_bal, val_acc, train_loss, train_acc, val_loss, model = train_cnn_on_split(
-        X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
-        X_val=X_pair[ho_idx],   y_val=y_pair[ho_idx],
-        trial_ids_train=trial_ids_pair[tr_idx],
-        trial_ids_val=trial_ids_pair[ho_idx],
-        n_ch=n_ch, n_time=n_time,
-        cfg=cfg,
-        max_epochs=int(cfg.MAX_EPOCHS),
-        device=device,
-        return_model=True,
-    )
-
-    export_ok = True
+    # REGULAR FLOW: Use existing trainer on the train/holdout split (this includes early stopping)
+    try:
+        val_bal, val_acc, _, train_acc, val_loss,  training_issues, model = train_cnn_on_split(
+            X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
+            X_val=X_pair[ho_idx],   y_val=y_pair[ho_idx],
+            trial_ids_train=trial_ids_pair[tr_idx],
+            trial_ids_val=trial_ids_pair[ho_idx],
+            n_ch=n_ch, n_time=n_time,
+            cfg=cfg,
+            max_epochs=int(cfg.MAX_EPOCHS),
+            device=device,
+            return_model=True,
+        )
+        final_issues.extend(training_issues)
+        train_ok = True
+    except Exception as e:
+        _log(logger, f"[CNN] Final training with holdout failed: {e}")
+        train_ok = False
+    
+    # only export if train ok
+    if not train_ok:
+        return False, False, float("inf"), 0.0, 0.0, 0.0, final_issues
     try:
         export_cnn_onnx(model=model, n_ch=n_ch, n_time=n_time, out_path=Path(out_onnx_path))
+        export_ok = True
     except Exception as e:
         _log(logger, f"[CNN] ONNX export failed: {e}")
         export_ok = False
 
-    return True, bool(export_ok), float(val_loss), float(val_acc), float(val_bal)
+    return bool(train_ok), bool(export_ok), float(val_loss), float(val_acc), float(val_bal), float(train_acc), final_issues
 
 def train_final_cnn_and_export(
     *,
@@ -840,7 +744,7 @@ def train_final_cnn_and_export(
     out_onnx_path: Path,
     hparam_tuning: str,
     logger: utils.DebugLogger | None = None,
-) -> utils.FinalTrainResults:
+) -> tuple[utils.FinalTrainResults, list[utils.TrainIssue]]:
     """
     FINAL TRAINING + EXPORT (shared trainer API)
 
@@ -866,7 +770,7 @@ def train_final_cnn_and_export(
         best_cfg = cfg
         best_score = -1.0
         
-        # grid search
+        # grid search -> iter releases new candidate each time it gets called
         for cand in iter_hparam_candidates(cfg, HPARAM_SPACE):
             score = score_hparam_cfg_cv_cnn(
                 cfg=cand,
@@ -904,7 +808,7 @@ def train_final_cnn_and_export(
             # per-fold seed for reproducibility
             fold_cfg = replace(cfg, seed=int(cfg.seed + 1000 * fi))
 
-            va_bal, va_acc, _, _, va_loss = train_cnn_on_split(
+            va_bal, va_acc, _, _, va_loss, training_issues = train_cnn_on_split(
                 X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
                 X_val=X_pair[va_idx],   y_val=y_pair[va_idx],
                 trial_ids_train=trial_ids_pair[tr_idx],
@@ -915,14 +819,14 @@ def train_final_cnn_and_export(
                 device=device,
                 logger=logger,
             )
-
+            issues.extend(training_issues)
             cv_bals.append(float(va_bal))
             cv_accs.append(float(va_acc))
             cv_val_losses.append(float(va_loss))
 
     # 4) BUILD FINAL MODEL FROM BEST CFGS AND TRAIN with simple holdout, THEN EXPORT
     # We train on ALL X_pair/y_pair except small 10% holdout for early stopping, so the exported model sees maximum calibration windows but doesn't overfit.
-    train_ok, export_ok, ho_loss, ho_acc, ho_bal = train_single_final_model_with_holdout_and_export(
+    train_ok, export_ok, ho_loss, ho_acc, ho_bal, tr_acc, issues = train_single_final_model_with_holdout_and_export(
         X_pair=X_pair,
         y_pair=y_pair,
         trial_ids_pair=trial_ids_pair,
@@ -955,8 +859,10 @@ def train_final_cnn_and_export(
         final_holdout_acc=float(ho_acc),
         final_holdout_bal_acc=float(ho_bal),
 
+        final_train_acc=float(tr_acc),
+
         cfg=asdict(cfg),
-    )
+    ), issues
 
 def train_cnn_on_split(
     *,
@@ -970,13 +876,14 @@ def train_cnn_on_split(
     device: torch.device,
     return_model: bool = False, # need model when we do onnx export at the end (once only)
     logger: utils.DebugLogger | None = None,
-) -> tuple[float, float, float, float, float] | tuple[float, float, float, float, float, EEGNet]:
+) -> tuple[float, float, float, float, float, list[utils.TrainIssue]] | tuple[float, float, float, float, float, list[utils.TrainIssue], EEGNet]:
     """
-    Trains CNN on a specific split and returns:
+    Trains CNN on a specific tr/val split and returns:
      (val_bal_acc, val_acc, train_loss, train_acc, val_loss)
     This avoids random_split so we can do proper CV.
     - Uses cfg for ALL hyperparams (F1/kernel/pooling/batch/lr/patience/etc).
     """
+    issue_list: utils.TrainIssue = []
     # Make training more repeatable across runs
     torch.manual_seed(int(cfg.seed))
     np.random.seed(int(cfg.seed))
@@ -1000,27 +907,15 @@ def train_cnn_on_split(
 
     # deterministic shuffling for the train loader
     if trial_ids_train is not None:
-        batches = make_stratified_trial_batches_new(
+        batches, batch_issues = make_stratified_trial_batches(
             trial_ids=trial_ids_train,
             y=y_train,
             max_windows_per_batch=int(cfg.batch_size),
             seed=int(cfg.seed),
             logger=logger,
         )
+        issue_list.extend(batch_issues)
         train_loader = DataLoader(train_ds, batch_sampler=ListBatchSampler(batches))
-        # In train_cnn_on_split(), after creating batches:
-        _log(logger,f"\n[BATCH VALIDATION]")
-        for i, batch_idx in enumerate(batches):
-            batch_labels = y_train[batch_idx]
-            n0 = int((batch_labels == 0).sum())
-            n1 = int((batch_labels == 1).sum())
-
-            if n0 == 0 or n1 == 0:
-                raise RuntimeError(f"Batch {i} is unbalanced: class0={n0}, class1={n1}")
-
-            _log(logger,f"  Batch {i}: size={len(batch_idx)}, class0={n0}, class1={n1}")
-
-        _log(logger,f"All {len(batches)} batches are balanced! ✓\n")
     else:
         # fallback: window batching (less good for strongly overlapping ssvep windows...)
         g = torch.Generator().manual_seed(int(cfg.seed))
@@ -1030,8 +925,9 @@ def train_cnn_on_split(
             shuffle=True,
             generator=g
         )
+        issue_list.append(utils.issue("CNN_BATCH","Batching fell back to window rather than grouped (degraded behavior for highly overlapping windows)"))
 
-    # val loader uses window batching
+    # val loader uses random window batching
     val_loader = DataLoader(
         val_ds,
         batch_size=min(int(cfg.batch_size), len(val_ds)) if len(val_ds) > 0 else int(cfg.batch_size),
@@ -1103,6 +999,7 @@ def train_cnn_on_split(
             float(train_loss),
             float(train_acc),
             float(val_loss),
+            issue_list,
             model,
         )
 
@@ -1112,6 +1009,7 @@ def train_cnn_on_split(
         float(train_loss),
         float(train_acc),
         float(val_loss),
+        issue_list
     )
 
 def score_hparam_cfg_cv_cnn(
@@ -1134,7 +1032,7 @@ def score_hparam_cfg_cv_cnn(
     bals: list[float] = []
     for fi, (tr_idx, va_idx) in enumerate(folds):
         fold_cfg = replace(cfg, seed=int(cfg.seed + 1000 * fi))
-        val_bal, _, _, _, _ = train_cnn_on_split(
+        val_bal, _, _, _, _, _ = train_cnn_on_split(
             X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
             X_val=X_pair[va_idx],   y_val=y_pair[va_idx],
             trial_ids_train=trial_ids_pair[tr_idx],
@@ -1159,13 +1057,17 @@ def score_pair_cv_cnn(
     freq_a_hz: int,
     freq_b_hz: int,
     logger: utils.DebugLogger | None = None
-) -> utils.ModelMetrics:
+) -> tuple[utils.ModelMetrics, list[utils.TrainIssue]]:
     """
     Cross-val scoring for ONE (already-binary) pair.
     Folds are built in train_ssvep.py (shared across archs).
     Returns ModelMetrics (shared contract).
     """
+    pair_issues: list[utils.TrainIssue] = []
     cfg = CNNTrainConfig() # use default configs
+    # if high frequency, reduce pooling factors to preserve greater freq range that supports Nyquist
+    if freq_a_hz >= 25.0 or freq_b_hz >= 25.0:
+        cfg.pooling_factor = 4                       # 250 Hz / 4 = 62.5 Hz preservation
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -1176,7 +1078,7 @@ def score_pair_cv_cnn(
         # per-fold seed so folds are repeatable but not identical
         fold_cfg = replace(cfg, seed=int(cfg.seed + 1000 * fi))
 
-        val_bal, val_acc, _, _, _ = train_cnn_on_split(
+        val_bal, val_acc, _, _, _, training_issues = train_cnn_on_split(
             X_train=X_pair[tr_idx], y_train=y_pair[tr_idx],
             X_val=X_pair[va_idx],   y_val=y_pair[va_idx],
             trial_ids_train=trial_ids_pair[tr_idx],
@@ -1187,6 +1089,7 @@ def score_pair_cv_cnn(
             device=device,
             logger=logger,
         )
+        pair_issues.extend(training_issues)
         bals.append(float(val_bal))
         accs.append(float(val_acc))
 
@@ -1199,7 +1102,7 @@ def score_pair_cv_cnn(
             std_fold_balanced_accuracy=0.0,
             avg_fold_accuracy=0.0,
             std_fold_accuracy=0.0,
-        )
+        ), pair_issues
 
     return utils.ModelMetrics(
         freq_a_hz=int(freq_a_hz),
@@ -1209,7 +1112,7 @@ def score_pair_cv_cnn(
         std_fold_balanced_accuracy=float(np.std(bals)),
         avg_fold_accuracy=float(np.mean(accs)),
         std_fold_accuracy=float(np.std(accs)),
-    )
+    ), pair_issues
 
 
 def export_cnn_onnx(
