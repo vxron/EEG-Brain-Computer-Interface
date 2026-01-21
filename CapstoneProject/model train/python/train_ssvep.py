@@ -32,8 +32,6 @@ import pandas as pd
 import numpy as np
 from typing import Any
 from dataclasses import dataclass, asdict
-
-from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import StratifiedGroupKFold
 
 import utils.utils as utils
@@ -87,6 +85,7 @@ def validate_loaded_dataset(
     if N < utils.MIN_TOTAL_WINDOWS:
         utils.abort("DATA", "Too few usable windows after loading", f"N={N} < MIN_TOTAL_WINDOWS={utils.MIN_TOTAL_WINDOWS}")
     # Needs at least 2 usable frequencies
+    y_hz = y_hz[y_hz != -1] # rest doesn't count
     vals, counts = np.unique(y_hz, return_counts = True)
     n_freqs = int(len(vals))
     if n_freqs < utils.MIN_FREQS_FOR_PAIR_SEARCH:
@@ -108,6 +107,7 @@ def validate_pair_dataset(
     N = int(len(yb))
     c0 = int((yb == 0).sum())
     c1 = int((yb == 1).sum())
+    c2 = int((yb == 2).sum())
 
     if N == 0:
         return False, utils.issue(
@@ -116,27 +116,28 @@ def validate_pair_dataset(
             {"hz_a": hz_a, "hz_b": hz_b},
         )
 
-    if c0 < utils.MIN_PAIR_WINDOWS_PER_CLASS or c1 < utils.MIN_PAIR_WINDOWS_PER_CLASS:
+    if c0 < utils.MIN_PAIR_WINDOWS_PER_CLASS or c1 < utils.MIN_PAIR_WINDOWS_PER_CLASS or c2 < utils.MIN_PAIR_WINDOWS_PER_CLASS:
         return False, utils.issue(
             "PAIR_SEARCH",
             "Insufficient windows per class",
-            {"hz_a": hz_a, "hz_b": hz_b, "c0": c0, "c1": c1, "min": utils.MIN_PAIR_WINDOWS_PER_CLASS}
+            {"hz_a": hz_a, "hz_b": hz_b, "c0": c0, "c1": c1, "c2": c2, "min": utils.MIN_PAIR_WINDOWS_PER_CLASS}
         )
     
     uniq_trials = np.unique(tp)
-    trials_by_class = {0: set(), 1: set()}
+    trials_by_class = {0: set(), 1: set(), 2: set()}
     for tid in uniq_trials:
-        m = (tp == tid)
-        lab = 1 if float(yb[m].mean()) >= 0.5 else 0 # majority vote
-        trials_by_class[lab].add(int(tid))
+        desidx = np.where(tp==tid)[0] # global idx for this trial id
+        classnum = yb[desidx][0] # protocol guarantees trial purity
+        trials_by_class[classnum].add(int(tid))
     
     n_t0 = len(trials_by_class[0])
     n_t1 = len(trials_by_class[1])
-    if n_t0 < utils.MIN_PAIR_TRIALS_PER_CLASS or n_t1 < utils.MIN_PAIR_TRIALS_PER_CLASS:
+    n_t2 = len(trials_by_class[2])
+    if n_t0 < utils.MIN_PAIR_TRIALS_PER_CLASS or n_t1 < utils.MIN_PAIR_TRIALS_PER_CLASS or n_t2 < utils.MIN_PAIR_TRIALS_PER_CLASS:
         return False, utils.issue(
             "PAIR_SEARCH",
             "Insufficient trials per class for pair",
-            {"hz_a": hz_a, "hz_b": hz_b, "t0": n_t0, "t1": n_t1, "min": int(utils.MIN_PAIR_TRIALS_PER_CLASS)},
+            {"hz_a": hz_a, "hz_b": hz_b, "t0": n_t0, "t1": n_t1, "t2": n_t2, "min": int(utils.MIN_PAIR_TRIALS_PER_CLASS)},
         )
     
     # demand at least k = 2 for cross fold
@@ -152,7 +153,7 @@ def validate_pair_dataset(
 # ------------------------------
 # DEBUG
 # ------------------------------
-def _summarize_blocked_folds(
+def summarize_blocked_folds(
     *,
     yb: np.ndarray,
     trial_ids: np.ndarray,
@@ -212,7 +213,8 @@ def _summarize_blocked_folds(
     # overall class balance (windows)
     c0 = int((yb == 0).sum())
     c1 = int((yb == 1).sum())
-    logger.log(f"[{tag}] overall class counts: c0={c0}, c1={c1}")
+    c2 = int((yb == 2).sum())
+    logger.log(f"[{tag}] overall class counts: c0={c0}, c1={c1}, c2={c2}")
     logger.log()
 
     # per-fold stats
@@ -223,8 +225,10 @@ def _summarize_blocked_folds(
         # window counts
         tr0 = int((yb[tr_idx] == 0).sum())
         tr1 = int((yb[tr_idx] == 1).sum())
+        tr2 = int((yb[tr_idx] == 2).sum())
         va0 = int((yb[va_idx] == 0).sum())
         va1 = int((yb[va_idx] == 1).sum())
+        va2 = int((yb[va_idx] == 2).sum())
 
         # leakage check: any group present in both train and val?
         tr_gset = set(groups[tr_idx].tolist())
@@ -233,8 +237,8 @@ def _summarize_blocked_folds(
 
         logger.log(
             f"[{tag}] Fold {fi:02d}: "
-            f"train N={len(tr_idx)} (c0={tr0}, c1={tr1}) | "
-            f"val N={len(va_idx)} (c0={va0}, c1={va1}) | "
+            f"train N={len(tr_idx)} (c0={tr0}, c1={tr1}, c2={tr2}) | "
+            f"val N={len(va_idx)} (c0={va0}, c1={va1}, c2={va2}) | "
             f"leak_groups={len(inter)}"
         )
 
@@ -248,13 +252,15 @@ def _summarize_blocked_folds(
         va_groups = np.array(sorted(va_gset), dtype=np.int64)
         tr_g0 = int(sum(group_to_label[int(g)] == 0 for g in tr_groups))
         tr_g1 = int(sum(group_to_label[int(g)] == 1 for g in tr_groups))
+        tr_g2 = int(sum(group_to_label[int(g)] == 2 for g in tr_groups))
         va_g0 = int(sum(group_to_label[int(g)] == 0 for g in va_groups))
         va_g1 = int(sum(group_to_label[int(g)] == 1 for g in va_groups))
+        va_g2 = int(sum(group_to_label[int(g)] == 2 for g in va_groups))
 
         logger.log(
             f"[{tag}]   groups: "
-            f"train G={len(tr_groups)} (g0={tr_g0}, g1={tr_g1}) | "
-            f"val G={len(va_groups)} (g0={va_g0}, g1={va_g1})"
+            f"train G={len(tr_groups)} (g0={tr_g0}, g1={tr_g1}, g2={tr_g2}) | "
+            f"val G={len(va_groups)} (g0={va_g0}, g1={va_g1}, g2={va_g2})"
         )
     logger.log(f"[{tag}] ===== End summary =====\n")
 
@@ -519,7 +525,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
     df = add_trial_ids_per_window(df)
 
     # Detect channel columns as the ones between sample_idx and testfreq_e
-    # TODO: detect by name instead of between these columns, cuz it's too brittle if we change column arch
+    # make sure csv log doesn't deviate from this format!!
     cols = list(df.columns)
     sample_i = cols.index("sample_idx")
     tf_e_i = cols.index("testfreq_e")
@@ -541,7 +547,7 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         g = g.sort_values("sample_idx")
 
         tf_hz = int(g["testfreq_hz"].iloc[0])
-        if tf_hz < 0:
+        if tf_hz < 0 and tf_hz != -1:
             continue
 
         trial_id = int(g["trial_id"].iloc[0])
@@ -589,17 +595,21 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
 # CV Fold building
 # -----------------------------
 
-def _count_groups_per_class(
+def count_groups_per_class(
     *,
     yb: np.ndarray,
     groups: np.ndarray,
-) -> tuple[int, int, np.ndarray, np.ndarray]:
+) -> tuple[int, int, int, np.ndarray, np.ndarray]:
     """
     Returns:
-      n_groups_c0, n_groups_c1,
+      n_groups_c0, n_groups_c1, n_groups_c2
       uniq_groups (sorted),
-      group_label aligned with uniq_groups (0/1)
-    Assumes each group is label-pure (we still verify elsewhere).
+      group_label aligned with uniq_groups (0/1/2)
+    Assumes each group is label-pure -> ONE CLASS PER GROUP
+
+    one group = BLOCK OF SAMPLES THAT MUST STAY TOGETHER, like:
+    yb     = [0, 0, 0, 1, 1, 2, 2, 2]   # class labels  
+    groups = [5, 5, 5, 8, 8, 9, 9, 9]   # group IDs
     """
     yb = np.asarray(yb).astype(np.int64)
     groups = np.asarray(groups).astype(np.int64)
@@ -608,16 +618,18 @@ def _count_groups_per_class(
     group_label = np.empty(len(uniq_groups), dtype=np.int64)
 
     for gi, g in enumerate(uniq_groups):
-        idx_g = np.where(groups == g)[0]
+        idx_g = np.where(groups == g)[0] # np. where is boolean mask: true at idxs where groups == g, and [0] returns first element of array
         if idx_g.size == 0:
             utils.abort("FOLDS", "Empty group encountered (should be impossible)")
-        group_label[gi] = int(yb[idx_g[0]])
+        group_label[gi] = int(yb[idx_g[0]]) # assign the class label for each unique group based on first idx we found for it (assumes label purity)
 
+    # count the total num of groups in each class
     n_groups_c0 = int((group_label == 0).sum())
     n_groups_c1 = int((group_label == 1).sum())
-    return n_groups_c0, n_groups_c1, uniq_groups, group_label
+    n_groups_c2 = int((group_label == 2).sum())
+    return n_groups_c0, n_groups_c1, n_groups_c2, uniq_groups, group_label
 
-def _validate_folds_strict(
+def validate_folds_strict(
     *,
     yb: np.ndarray,
     groups: np.ndarray,
@@ -633,6 +645,7 @@ def _validate_folds_strict(
     yb = np.asarray(yb).astype(np.int64)
     groups = np.asarray(groups).astype(np.int64)
     issues: list[utils.TrainIssue] = []
+    ok = True
 
     if len(folds) < 2:
         issues.append(utils.issue("FOLDS", "len(folds) < 2", {"n_folds": int(len(folds))}))
@@ -652,40 +665,64 @@ def _validate_folds_strict(
                 "Group leakage between train and val",
                 {"fold": int(fi), "n_leak_groups": int(len(inter))},
             ))
+            ok = False
             continue
 
-        # class presence check (val)
+        # class presence check (val) 
         va0 = int((yb[va_idx] == 0).sum())
         va1 = int((yb[va_idx] == 1).sum())
-        if va0 == 0 or va1 == 0:
+        va2 = int((yb[va_idx] == 2).sum())
+        if va0 == 0 or va1 == 0 or va2 == 0:
             issues.append(utils.issue(
                 "FOLDS",
-                "Validation split has only one class",
-                {"fold": int(fi), "va0": va0, "va1": va1},
+                "Validation split is missing a class",
+                {"fold": int(fi), "va0": va0, "va1": va1, "va2 rest": va2},
             ))
+            ok = False
+        # more strict: at least 25% of each class
+        total_val_examples = va0 + va1 + va2
+        if total_val_examples != 0: 
+            if float(va0/total_val_examples) < 0.25 or float(va1/total_val_examples) < 0.25 or float(va2/total_val_examples) < 0.25:
+                issues.append(utils.issue(
+                    "FOLDS",
+                    "Validation split is not sufficiently class-balanced",
+                    {"fold": int(fi), "va0": va0, "va1": va1, "va2 rest": va2},
+                ))
+                # keep ok true because we can technically still run
 
         # class presence check (train)
         tr0 = int((yb[tr_idx] == 0).sum())
         tr1 = int((yb[tr_idx] == 1).sum())
-        if tr0 == 0 or tr1 == 0:
+        tr2 = int((yb[tr_idx] == 2).sum())
+        if tr0 == 0 or tr1 == 0 or tr2 == 0:
             issues.append(utils.issue(
                 "FOLDS",
-                "Training split has only one class",
-                {"fold": int(fi), "tr0": tr0, "tr1": tr1},
+                "Training split is missing a class",
+                {"fold": int(fi), "tr0": tr0, "tr1": tr1, "tr2 rest": tr2},
             ))
+            ok = False
+        # more strict: at least 25% of each class
+        total_tr_examples = tr0 + tr1 + tr2
+        if total_tr_examples != 0:
+            if float(tr0/total_tr_examples) < 0.25 or float(tr1/total_tr_examples) < 0.25 or float(tr2/total_tr_examples) < 0.25:
+                issues.append(utils.issue(
+                    "FOLDS",
+                    "Training split is not sufficiently class-balanced",
+                    {"fold": int(fi), "tr0": tr0, "tr1": tr1, "tr2 rest": tr2},
+                ))
 
-        # size sanity
+        # split size sanity
         if tr_idx.size == 0 or va_idx.size == 0:
             issues.append(utils.issue(
                 "FOLDS",
                 "Fold has empty train or val split",
                 {"fold": int(fi), "train_size": int(tr_idx.size), "val_size": int(va_idx.size)},
             ))
+            ok = False
 
-    ok = (len(issues) == 0)
     return ok, issues
 
-def make_cv_folds_binary_by_blocked_windows(
+def make_cv_folds_by_blocked_windows(
     *,
     yb: np.ndarray,
     trial_ids: np.ndarray,
@@ -697,7 +734,7 @@ def make_cv_folds_binary_by_blocked_windows(
     fs_hz: float = 250.0,
     debug_logger: utils.DebugLogger | None = None,
     debug_tag: str = "CV",
-) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[utils.TrainIssue]]:
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[utils.TrainIssue], np.ndarray]:
     """
     Stratified CV on *blocked window groups*:
       - windows close in time (overlapping) are grouped into the same "block" group
@@ -736,23 +773,30 @@ def make_cv_folds_binary_by_blocked_windows(
                     {"len_yb": int(yb.shape[0]), "len_trial_ids": int(trial_ids.shape[0])})
 
     # 1) Build block groups
-    block_size_windows = _compute_block_size_windows(
+    block_size_windows = compute_block_size_windows(
         n_time=int(n_time),
         hop_samples=int(hop_samples),
     )
-    groups = make_block_groups_within_trials_by_window_idx(
+    groups, keep = make_block_groups_within_trials_by_window_idx(
         trial_ids=trial_ids,
         yb=yb,
         window_ids=window_ids,
         block_size_windows=int(block_size_windows),
     )
+    # apply keep mmask to all window-level arrays
+    yb  = yb[keep==1]
+    trial_ids  = trial_ids[keep==1]
+    window_ids = window_ids[keep==1]
+    groups = groups[keep==1]
+    # remap for cleanliness so we don't have gaps in group numbers
+    groups = pd.factorize(groups)[0].astype(np.int64)
 
     # 2) Compute k bound from groups-per-class
-    n_groups_c0, n_groups_c1, uniq_groups, group_label = _count_groups_per_class(
+    n_groups_c0, n_groups_c1, n_groups_c2, uniq_groups, group_label = count_groups_per_class(
         yb=yb, groups=groups
     )
     k_req = int(k)
-    k_eff = int(min(k_req, n_groups_c0, n_groups_c1))
+    k_eff = int(min(k_req, n_groups_c0, n_groups_c1, n_groups_c2))
 
     if debug_logger is not None:
         debug_logger.log(f"[{debug_tag}] ===== Fold builder (blocked groups) =====")
@@ -760,7 +804,7 @@ def make_cv_folds_binary_by_blocked_windows(
         debug_logger.log(f"[{debug_tag}] n_time={int(n_time)} hop_samples={int(hop_samples)} fs_hz={float(fs_hz)}")
         debug_logger.log(f"[{debug_tag}] block_size_windows=ceil(W/H)={block_size_windows}")
         debug_logger.log(f"[{debug_tag}] n_groups_total={len(uniq_groups)}")
-        debug_logger.log(f"[{debug_tag}] n_groups_c0={n_groups_c0}, n_groups_c1={n_groups_c1}")
+        debug_logger.log(f"[{debug_tag}] n_groups_c0={n_groups_c0}, n_groups_c1={n_groups_c1}, n_groups_c2={n_groups_c2}")
         debug_logger.log(f"[{debug_tag}] k requested={k_req} -> k_eff (group-limited)={k_eff}")
         debug_logger.log()
 
@@ -768,9 +812,9 @@ def make_cv_folds_binary_by_blocked_windows(
         issues.append(utils.issue(
             "FOLDS",
             "Not enough groups per class to build >=2 folds",
-            {"k_req": k_req, "k_eff": k_eff, "n_groups_c0": n_groups_c0, "n_groups_c1": n_groups_c1},
+            {"k_req": k_req, "k_eff": k_eff, "n_groups_c0": n_groups_c0, "n_groups_c1": n_groups_c1, "n_groups_c2": n_groups_c2},
         ))
-        return [], issues
+        return [], issues, keep
 
     # Deterministic seed schedule:
     # - include the provided seed first
@@ -803,7 +847,7 @@ def make_cv_folds_binary_by_blocked_windows(
                 ))
                 continue
 
-            ok, reasons = _validate_folds_strict(yb=yb, groups=groups, folds=folds)
+            ok, reasons = validate_folds_strict(yb=yb, groups=groups, folds=folds)
 
             if debug_logger is not None:
                 debug_logger.log(f"[{debug_tag}]   seed={s}: built {len(folds)} folds -> ok={ok}")
@@ -816,7 +860,7 @@ def make_cv_folds_binary_by_blocked_windows(
             if ok:
                 # 4) Summarize the successful folds in detail
                 if debug_logger is not None:
-                    _summarize_blocked_folds(
+                    summarize_blocked_folds(
                         yb=yb,
                         trial_ids=trial_ids,
                         groups=groups,
@@ -829,7 +873,7 @@ def make_cv_folds_binary_by_blocked_windows(
                     )
                     debug_logger.log(f"[{debug_tag}] DONE: using k={k_try}, seed={s}")
                     debug_logger.log(f"[{debug_tag}] ========================================\n")
-                return folds, []
+                return folds, issues, keep
             
             for it in reasons:
                 split_issues.append(it)
@@ -845,10 +889,10 @@ def make_cv_folds_binary_by_blocked_windows(
 
     # Keep only a limited number to avoid giant JSON
     issues.extend(split_issues[:25])
-    return [], issues
+    return [], issues, keep
 
 
-def _compute_block_size_windows(
+def compute_block_size_windows(
     *,
     n_time: int,
     hop_samples: int,
@@ -874,7 +918,8 @@ def make_block_groups_within_trials_by_window_idx(
     yb: np.ndarray,
     window_ids: np.ndarray,
     block_size_windows: int,
-) -> np.ndarray:
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Goal: 
     - assign each window to a "group ID" so StratifiedGroupKFold can keep overlapping windows together.
@@ -891,6 +936,10 @@ def make_block_groups_within_trials_by_window_idx(
       - within each (trial_id, label, block_bin) segment, consecutive windows are chunked into blocks
         of size block_size_windows
       - this supports cases when some window_idx are missing due to artifacts
+
+    Returns:
+      groups: (N,) int group id per window
+      keep_mask: (N,) bool, True for windows we keep (drops only REST if needed)
     """
     trial_ids = np.asarray(trial_ids).astype(np.int64)
     yb = np.asarray(yb).astype(np.int64)
@@ -909,24 +958,86 @@ def make_block_groups_within_trials_by_window_idx(
     # group nearby-in-time windows within the trial into overlap-safe chunks
     # build a composit key for every window
     key = list(zip(trial_ids.tolist(), yb.tolist(), block_bin.tolist()))
-    groups = pd.factorize(key)[0].astype(np.int64)
-    return groups
+    groups = pd.factorize(key)[0].astype(np.int64) # array of group numbers
+
+    # (2) downsample REST group (because protocol is such that we likely we have way more rest examples, and we don't want imbalance)
+    # REST can be downsampled randomly rather than by trial, since all background frequency pairs are random anyways
+    # to minimize eventual size differences within rest groups & maximize training diversity, we structurally select REST examples from one group at a time
+    
+    rest_group_to_indices: dict[int, np.ndarray] = {} # dictionary mapping rest group (g) -> rest indices [x1,x2..]
+    
+    REST_RATIO = 1.3 # amount of rest examples relative to max(a,b)
+    num_examples_a = (yb == 0).sum()
+    num_examples_b = (yb == 1).sum()
+    num_examples_rest = (yb == 2).sum()
+    rest_target = int(min(REST_RATIO*max(num_examples_a,num_examples_b), num_examples_rest))
+    if(rest_target == num_examples_rest):
+        return groups, np.ones(len(yb), dtype = bool)
+    
+    # Random shuffling
+    rest_idx = np.where(yb == 2)[0].astype(np.int64) # get the array of idx elements
+    rng = np.random.default_rng(int(seed))
+    # for each rest group g, collect global idxs (build dict)
+    rest_grps = np.unique(groups[rest_idx])
+    rng.shuffle(rest_grps) # random order of groups
+    for g in rest_grps:
+        rest_grp_idxs = np.where(groups == g)[0] # assuming groups are label pure
+        rest_grp_idxs = rest_grp_idxs.astype(np.int64).copy()
+        rng.shuffle(rest_grp_idxs) # random order of idxs per group
+        rest_group_to_indices[int(g)] = rest_grp_idxs
+
+    # Round-robin approach
+    keep_rest_mask: list[int] = [] # indices
+    keep_rest_bool_mask = np.ones(len(yb),dtype=bool) # should be 1 at selected indices
+    selected_pos_in_group: dict[int,int] = {int(g): 0 for g in rest_group_to_indices.keys()} # init all values 0, group keys
+    while len(keep_rest_mask) < rest_target:
+        made_progress = False
+        for g in rest_grps:
+            if len(keep_rest_mask) >= rest_target: # recheck
+                break
+            g = int(g)
+            idx_list = rest_group_to_indices.get(g) # alr randomly shuffled
+            if idx_list is None:
+                continue
+            p = selected_pos_in_group[g]
+            if p < idx_list.size: # less than members per group
+                keep_rest_mask.append(int(idx_list[p]))
+                # next pass when choosing from this group, we'll take next idx
+                selected_pos_in_group[g] = p + 1
+                made_progress = True
+        
+        if not made_progress: # after having iterated through all groups
+            # we've exhausted all groups
+            break
+    
+    keep_rest_bool_mask[rest_idx] = 0
+    keep_rest_bool_mask[keep_rest_mask] = 1 # only select these from REST idxs, the rest stay 0
+
+    return groups, keep_rest_bool_mask
 
 # -----------------------------
 # Best Pair Selection Logic
 # -----------------------------
 def make_binary_pair_dataset(X: np.ndarray, y_hz: np.ndarray, trial_ids: np.ndarray, window_ids: np.ndarray, hz_a: int, hz_b: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Filters to only windows in {hz_a, hz_b} and returns:
+    Filters to only windows in {hz_a, hz_b, -1} and returns:
       Xp: (Npair, C, T)
-      yb: (Npair,) where hz_a -> 0, hz_b -> 1
+      yb: (Npair,) where hz_a -> 0, hz_b -> 1, hz_rest -> 2
     """
-    mask = (y_hz == hz_a) | (y_hz == hz_b)
+    mask = (y_hz == hz_a) | (y_hz == hz_b) | (y_hz == -1)
     Xp = X[mask]
     yp = y_hz[mask]
     tp = trial_ids[mask]
     wp = window_ids[mask]
-    yb = np.where(yp == hz_a, 0, 1).astype(np.int64)
+    
+    # remap
+    a_mask = (yp == hz_a)
+    b_mask = (yp == hz_b)
+    # init new array all 2s (rest = default)
+    yb = np.full((yp.shape), 2)
+    yb[a_mask] = 0
+    yb[b_mask] = 1
+
     return Xp, yb, tp, wp
 
 def shortlist_freqs(y_hz: np.ndarray, pick_top_k: int) -> list[int]:
@@ -935,6 +1046,10 @@ def shortlist_freqs(y_hz: np.ndarray, pick_top_k: int) -> list[int]:
     """
     k_folds = 5 # REQUIRE AT LEAST K_FOLDS WINDOWS PER CLASS (bare minimum) and 20 for reasonability
     min_windows_per_class = max(utils.MIN_WINDOWS_PER_FREQ_FOR_SHORTLIST, int(k_folds * 2))
+    
+    y_hz = np.asarray(y_hz, dtype=np.int64)
+    y_hz = y_hz[y_hz!=-1] # don't count rest as candidate frequency
+    
     vals, counts = np.unique(y_hz, return_counts=True)
     keep = [(int(v), int(c)) for v, c in zip(vals, counts) if int(c) >= int(min_windows_per_class)]
     if len(keep) < 2:
@@ -1003,7 +1118,7 @@ def select_best_pair(
             continue
 
         k = int(gen_cfg.number_cross_val_folds)
-        folds, fold_issues = make_cv_folds_binary_by_blocked_windows(
+        folds, fold_issues, keep = make_cv_folds_by_blocked_windows(
             yb=yb,
             trial_ids=tp,
             window_ids=wp,
@@ -1011,10 +1126,15 @@ def select_best_pair(
             seed=0,
             n_time=info.n_time,    # window length in samples
             hop_samples=utils.HOP_SAMPLES,
-            fs_hz=250.0,
             debug_logger=debug_logger,
             debug_tag=f"PAIR {hz_a}vs{hz_b}",
         )
+        # re-index based on keep
+        Xp = Xp[keep]
+        yb = yb[keep]
+        tp = tp[keep]
+        wp = wp[keep]
+
         if len(folds) < 2:
             pair_issues.append(utils.issue(
                 "PAIR_SEARCH",
@@ -1218,11 +1338,12 @@ def main():
         # Build folds for the winning pair (used for final CV reporting)
         c0 = int((yb == 0).sum())
         c1 = int((yb == 1).sum())
+        c2 = int((yb == 2).sum())
         k_final = int(gen_cfg.number_cross_val_folds)
         folds_final: list[tuple[np.ndarray, np.ndarray]] = []
         fold_issues: list[utils.TrainIssue] = []
-        if c0 >= 2 and c1 >= 2:
-            folds_final, fold_issues = make_cv_folds_binary_by_blocked_windows(
+        if c0 >= 2 and c1 >= 2 and c2 >= 2: # simple guard for min 2 folds
+            folds_final, fold_issues, keep = make_cv_folds_by_blocked_windows(
                 yb=yb,
                 trial_ids=tp,
                 window_ids=wp,
@@ -1230,10 +1351,17 @@ def main():
                 seed=0,
                 n_time=info.n_time,
                 hop_samples=utils.HOP_SAMPLES,
-                fs_hz=250.0,
                 debug_logger=debug_log,
                 debug_tag=f"FINAL {best_left_hz}vs{best_right_hz}",
             )
+            # re-index based on keep
+            Xp = Xp[keep]
+            yb = yb[keep]
+            tp = tp[keep]
+            wp = wp[keep]
+        else:
+            fold_issues.append(utils.issue("FINAL", "Not enough windows in final fold construction", {"c0": c0, "c1": c1, "c2": c2}))
+
         if len(folds_final) < 2:
             fold_issues.append(utils.issue(
                 "FINAL",
@@ -1306,8 +1434,8 @@ def main():
 
     # unified failure write
     hz2e = hz_to_enum_mapping()
-    left_e=hz2e.get(best_left_hz, -1),
-    right_e=hz2e.get(best_right_hz, -1),
+    left_e=hz2e.get(best_left_hz, -1)
+    right_e=hz2e.get(best_right_hz, -1)
 
     write_train_result_json(
         out_dir,
