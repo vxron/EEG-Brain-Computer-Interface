@@ -11,7 +11,7 @@ import os
 
 # Global constants
 MAX_EPOCHS = 300        # hard cap
-PATIENCE   = 30         # epochs allowed with no improvement
+PATIENCE   = 25         # epochs allowed with no improvement
 MIN_DELTA  = 1e-4       # smallest improvement to consider as an 'improvement'
 # Variables to keep track
 best_val_loss = float("inf")
@@ -125,7 +125,7 @@ dataset = TensorDataset(X_t, y_t)
 n_val = max(1, int(0.2 * len(dataset)))
 n_train = len(dataset) - n_val
 train_ds, val_ds = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(0))
-batch_size = 16  # small since dataset is currently very small (will need to be tuned fs)
+batch_size = 18  # small since dataset is currently very small (will need to be tuned fs)
 train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 

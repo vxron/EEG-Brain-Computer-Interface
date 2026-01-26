@@ -35,14 +35,21 @@ MIN_FREQS_FOR_PAIR_SEARCH = 2          # need at least 2 freqs with enough windo
 MIN_WINDOWS_PER_FREQ_FOR_SHORTLIST = 40 
 # For pair-level training sanity
 MIN_PAIR_WINDOWS_PER_CLASS = 40        # for a stable pair evaluation/training
-MIN_PAIR_TRIALS_PER_CLASS = 2          # 
+MIN_PAIR_TRIALS_PER_CLASS = 2 
 # For CV fold building
-MIN_GROUPS_PER_CLASS_FOR_CV = 2        # absolute minimum 
+MIN_GROUPS_PER_CLASS_FOR_CV = 3        # absolute minimum 
 MIN_FOLDS_MIN = 2                      # hard minimum; k_eff will degrade from here
+MIN_WINDOWS_PER_CLASS_VAL = 10          # 5 validation samples per class
+MIN_WINDOWS_PER_CLASS_TRAIN = 20       # 10 training samples per class
 # For holdout training
-MIN_TRIALS_PER_CLASS_FOR_HOLDOUT = 2   # if fewer, skip holdout (fall back to no-holdout)
+MIN_TRIALS_PER_CLASS_FOR_HOLDOUT = 1   # if fewer, skip holdout (fall back to no-holdout)
 # For batches
-MIN_WINS_PER_BATCH_PER_CLASS = 5       # half class
+MIN_TRIALS_PER_CLASS_FOR_BATCHING = 2
+MIN_NUM_BATCHES_PER_CLASS = 10
+MIN_FRAC_PER_CLASS_IN_BATCH = 0.20
+MAX_REST_FRAC_IN_BATCH = 0.55
+MAX_CLASS_IMBALANCE_IN_BATCH = 0.30    # |c0-c1|/(c0+c1)
+MAX_SMALL_BATCHES = 2 # balance trying to use maximum data with consistent batch sizing
 
 # =================== SHARED DATACLASSES ============================
 @dataclass(frozen=True)
@@ -98,11 +105,16 @@ class FinalTrainResults:
 class TrainIssue:
     stage: str
     message: str
-    details: dict[str,Any] | None = None # optional
+    details: dict[str,Any] | None = None
+    data_insufficiency: dict[str, Any] | None = None  # receives NONE when not ui-facing issue
+    # frequency: which freq was insufficient
+    # metric: trials | windows | groups
+    # required
+    # actual
 
 # for NON-FATAL problems (e.g. skip a pair, etc)
-def issue(stage: str, message: str, details: dict[str, Any] | None = None) -> TrainIssue:
-    return TrainIssue(stage=stage, message=message, details=details)
+def issue(stage: str, message: str, details: dict[str, Any] | None = None, data_insufficiency: dict[str,Any] | None = None) -> TrainIssue:
+    return TrainIssue(stage=stage, message=message, details=details, data_insufficiency=data_insufficiency)
 
 def issues_to_json(issues: list[TrainIssue]) -> list[dict[str, Any]]: # each issue becomes a dict
     return [asdict(i) for i in issues]
@@ -113,8 +125,8 @@ class TrainAbort(RuntimeError): # TrainAbort class inherits from RuntimeError
         self.issue = issue # assign issue to self so we can access it later e.g. "e.issue.stage"
 
 # for FATAL error conditions
-def abort(stage: str, message: str, details: dict[str,Any] | None = None):
-    raise TrainAbort(issue(stage,message,details)) # calls a new trainabort object
+def abort(stage: str, message: str, details: dict[str,Any] | None = None, data_insufficiency: dict[str,Any] | None = None):
+    raise TrainAbort(issue(stage,message,details,data_insufficiency)) # calls a new trainabort object
 
 # =================== METRIC CALCULATIONS ============================
 
@@ -133,6 +145,18 @@ def balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             continue
         accs.append(float((y_pred[m] == cls).mean()))
     return float(np.mean(accs)) if accs else 0.0
+
+def balanced_accuracy_multiclass(y_true: np.ndarray, y_pred: np.ndarray, n_classes: int = 3) -> float:
+    y_true = np.asarray(y_true, dtype=np.int64)
+    y_pred = np.asarray(y_pred, dtype=np.int64)
+    recalls = []
+    for c in range(n_classes):
+        mask = (y_true == c)
+        denom = int(mask.sum())
+        if denom == 0:
+            return 0.0  # if a class is missing, treat as invalid fold
+        recalls.append(float((y_pred[mask] == c).mean()))
+    return float(np.mean(recalls))
 
 # ======================= BASIC STATS ===================================
 def mean(xs: list[float]) -> float:
