@@ -21,6 +21,7 @@ Expected args:
     --arch <CNN|SVM>
     --calibsetting <all_sessions|most_recent_only>
     --tunehparams <on|off>
+    --zscorenormalization <on|off>
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ import pandas as pd
 import numpy as np
 from typing import Any
 from dataclasses import dataclass, asdict
+from collections import defaultdict
 from sklearn.model_selection import StratifiedGroupKFold
 
 import utils.utils as utils
@@ -116,11 +118,43 @@ def validate_pair_dataset(
             {"hz_a": hz_a, "hz_b": hz_b},
         )
 
-    if c0 < utils.MIN_PAIR_WINDOWS_PER_CLASS or c1 < utils.MIN_PAIR_WINDOWS_PER_CLASS or c2 < utils.MIN_PAIR_WINDOWS_PER_CLASS:
+    if c0 < utils.MIN_PAIR_WINDOWS_PER_CLASS:
         return False, utils.issue(
             "PAIR_SEARCH",
-            "Insufficient windows per class",
-            {"hz_a": hz_a, "hz_b": hz_b, "c0": c0, "c1": c1, "c2": c2, "min": utils.MIN_PAIR_WINDOWS_PER_CLASS}
+            "Insufficient windows in class 0 (Note, given order of checks, other freq classes may be missing data as well)",
+            {"hz_a": hz_a, "hz_b": hz_b, "c0": c0, "c1": c1, "c2": c2, "min": utils.MIN_PAIR_WINDOWS_PER_CLASS},
+            data_insufficiency={
+                    "frequency_hz": hz_a,
+                    "metric": "windows",
+                    "required": utils.MIN_PAIR_WINDOWS_PER_CLASS,
+                    "actual": c0,
+            }
+        )
+    
+    if c1 < utils.MIN_PAIR_WINDOWS_PER_CLASS:
+        return False, utils.issue(
+            "PAIR_SEARCH",
+            "Insufficient windows in class 1 (Note, given order of checks, rest class may also be missing wins)",
+            {"hz_a": hz_a, "hz_b": hz_b, "c0": c0, "c1": c1, "c2": c2, "min": utils.MIN_PAIR_WINDOWS_PER_CLASS},
+            data_insufficiency={
+                    "frequency_hz": hz_b,
+                    "metric": "windows",
+                    "required": utils.MIN_PAIR_WINDOWS_PER_CLASS,
+                    "actual": c1,
+            }
+        )
+    
+    if c2 < utils.MIN_PAIR_WINDOWS_PER_CLASS:
+        return False, utils.issue(
+            "PAIR_SEARCH",
+            "Insufficient windows in rest class (Note this means freqs a & b have enough wins)",
+            {"hz_a": hz_a, "hz_b": hz_b, "c0": c0, "c1": c1, "c2": c2, "min": utils.MIN_PAIR_WINDOWS_PER_CLASS},
+            data_insufficiency={
+                    "frequency_hz": -1,
+                    "metric": "windows",
+                    "required": utils.MIN_PAIR_WINDOWS_PER_CLASS,
+                    "actual": c2,
+            }
         )
     
     uniq_trials = np.unique(tp)
@@ -133,13 +167,43 @@ def validate_pair_dataset(
     n_t0 = len(trials_by_class[0])
     n_t1 = len(trials_by_class[1])
     n_t2 = len(trials_by_class[2])
-    if n_t0 < utils.MIN_PAIR_TRIALS_PER_CLASS or n_t1 < utils.MIN_PAIR_TRIALS_PER_CLASS or n_t2 < utils.MIN_PAIR_TRIALS_PER_CLASS:
+    if n_t0 < utils.MIN_PAIR_TRIALS_PER_CLASS:
         return False, utils.issue(
             "PAIR_SEARCH",
-            "Insufficient trials per class for pair",
+            "Insufficient trials in freq class 0",
             {"hz_a": hz_a, "hz_b": hz_b, "t0": n_t0, "t1": n_t1, "t2": n_t2, "min": int(utils.MIN_PAIR_TRIALS_PER_CLASS)},
+            data_insufficiency={
+                        "frequency_hz": hz_a,
+                        "metric": "trials",
+                        "required": utils.MIN_PAIR_TRIALS_PER_CLASS,
+                        "actual": n_t0,
+            }
         )
-    
+    if n_t1 < utils.MIN_PAIR_TRIALS_PER_CLASS:
+        return False, utils.issue(
+            "PAIR_SEARCH",
+            "Insufficient trials in freq class 1",
+            {"hz_a": hz_a, "hz_b": hz_b, "t0": n_t0, "t1": n_t1, "t2": n_t2, "min": int(utils.MIN_PAIR_TRIALS_PER_CLASS)},
+            data_insufficiency={
+                        "frequency_hz": hz_b,
+                        "metric": "trials",
+                        "required": utils.MIN_PAIR_TRIALS_PER_CLASS,
+                        "actual": n_t1,
+            }
+        )
+    if n_t2 < utils.MIN_PAIR_TRIALS_PER_CLASS:
+        return False, utils.issue(
+            "PAIR_SEARCH",
+            "Insufficient trials in rest class",
+            {"hz_a": hz_a, "hz_b": hz_b, "t0": n_t0, "t1": n_t1, "t2": n_t2, "min": int(utils.MIN_PAIR_TRIALS_PER_CLASS)},
+            data_insufficiency={
+                        "frequency_hz": -1,
+                        "metric": "trials",
+                        "required": utils.MIN_PAIR_TRIALS_PER_CLASS,
+                        "actual": n_t2,
+            }
+        )
+
     # demand at least k = 2 for cross fold
     if int(k_req) < utils.MIN_FOLDS_MIN:
         return False, utils.issue(
@@ -331,6 +395,14 @@ def get_args():
         required=True,
         choices=["ON", "OFF"],
         help="Choice of using default values for hyperparams (faster) or running explicit tuning algorithms (slower)."
+    )
+
+    parser.add_argument(
+        "--zscorenormalization",
+        type=str,
+        required=True,
+        choices=["ON", "OFF"],
+        help="Whether or not we normalize input EEG data or rely on C++ processing"
     )
     
     return parser.parse_args()
@@ -634,6 +706,8 @@ def validate_folds_strict(
     yb: np.ndarray,
     groups: np.ndarray,
     folds: list[tuple[np.ndarray, np.ndarray]],
+    hz_a: int | None = None,  
+    hz_b: int | None = None,
 ) -> tuple[bool, list[utils.TrainIssue]]:
     """
     Strict validation:
@@ -651,6 +725,8 @@ def validate_folds_strict(
         issues.append(utils.issue("FOLDS", "len(folds) < 2", {"n_folds": int(len(folds))}))
         return False, issues
 
+    max_imbalance = 0.0
+    max_imbalance_tr = 0.0
     for fi, (tr_idx, va_idx) in enumerate(folds):
         tr_idx = np.asarray(tr_idx, dtype=np.int64)
         va_idx = np.asarray(va_idx, dtype=np.int64)
@@ -679,21 +755,43 @@ def validate_folds_strict(
                 {"fold": int(fi), "va0": va0, "va1": va1, "va2 rest": va2},
             ))
             ok = False
-        # more strict: at least 25% of each class
-        total_val_examples = va0 + va1 + va2
-        if total_val_examples != 0: 
-            if float(va0/total_val_examples) < 0.25 or float(va1/total_val_examples) < 0.25 or float(va2/total_val_examples) < 0.25:
+        # minimum windows per class in validation
+        for cls, count in [(0, va0), (1, va1), (2, va2)]:
+            if count < utils.MIN_WINDOWS_PER_CLASS_VAL and count > 0:
                 issues.append(utils.issue(
                     "FOLDS",
-                    "Validation split is not sufficiently class-balanced",
-                    {"fold": int(fi), "va0": va0, "va1": va1, "va2 rest": va2},
+                    f"Too few validation samples for class {cls} in fold {fi}",
+                    {"fold": fi, "class": cls, "count": count, "min": utils.MIN_WINDOWS_PER_CLASS_VAL},
+                    data_insufficiency={
+                        "frequency_hz": hz_a if cls == 0 else hz_b if cls == 1 else -1,
+                        "metric": "windows",
+                        "required": utils.MIN_WINDOWS_PER_CLASS_VAL,
+                        "actual": count,
+                    }
                 ))
-                # keep ok true because we can technically still run
+        # minimum groups per class in validation
+        va_groups = groups[va_idx]
+        for cls in [0, 1, 2]:
+            cls_mask = yb[va_idx] == cls
+            n_groups = len(np.unique(va_groups[cls_mask]))
+            if n_groups < utils.MIN_GROUPS_PER_CLASS_FOR_CV and n_groups > 0:
+                issues.append(utils.issue(
+                    "FOLDS",
+                    f"Too few validation groups for class {cls} in fold {fi}",
+                    {"fold": fi, "class": cls, "n_groups": n_groups, "min": utils.MIN_GROUPS_PER_CLASS_FOR_CV},
+                    data_insufficiency={
+                        "frequency_hz": hz_a if cls == 0 else hz_b if cls == 1 else -1,
+                        "metric": "groups",
+                        "required": utils.MIN_GROUPS_PER_CLASS_FOR_CV,
+                        "actual": n_groups,
+                    }
+                ))
 
         # class presence check (train)
         tr0 = int((yb[tr_idx] == 0).sum())
         tr1 = int((yb[tr_idx] == 1).sum())
         tr2 = int((yb[tr_idx] == 2).sum())
+        tr_total = tr0+tr1+tr2
         if tr0 == 0 or tr1 == 0 or tr2 == 0:
             issues.append(utils.issue(
                 "FOLDS",
@@ -701,15 +799,32 @@ def validate_folds_strict(
                 {"fold": int(fi), "tr0": tr0, "tr1": tr1, "tr2 rest": tr2},
             ))
             ok = False
-        # more strict: at least 25% of each class
-        total_tr_examples = tr0 + tr1 + tr2
-        if total_tr_examples != 0:
-            if float(tr0/total_tr_examples) < 0.25 or float(tr1/total_tr_examples) < 0.25 or float(tr2/total_tr_examples) < 0.25:
+        # minimum windows per class in training
+        for cls, count in [(0, tr0), (1, tr1), (2, tr2)]:
+            if count < utils.MIN_WINDOWS_PER_CLASS_TRAIN and count > 0:
                 issues.append(utils.issue(
                     "FOLDS",
-                    "Training split is not sufficiently class-balanced",
-                    {"fold": int(fi), "tr0": tr0, "tr1": tr1, "tr2 rest": tr2},
+                    f"Too few training samples for class {cls} in fold {fi}",
+                    {"fold": fi, "class": cls, "count": count, "min": utils.MIN_WINDOWS_PER_CLASS_TRAIN},
+                    data_insufficiency={
+                        "frequency_hz": hz_a if cls == 0 else hz_b if cls == 1 else -1,
+                        "metric": "windows",
+                        "required": utils.MIN_WINDOWS_PER_CLASS_TRAIN,
+                        "actual": count,
+                    }
                 ))
+        
+        # check class balance in val
+        imbalance_pct, _ = mean_val_imbalance_pct(yb, folds, n_classes=3)  # e.g. returns 0..100
+        max_imbalance = max(max_imbalance, imbalance_pct)
+
+       # check class balance in train
+        if tr_total > 0:
+            fracs_tr = [tr0/tr_total, tr1/tr_total, tr2/tr_total]
+            max_frac_tr = max(fracs_tr)
+            min_frac_tr = min(fracs_tr)
+            imbalance_tr = max_frac_tr - min_frac_tr
+            max_imbalance_tr = max(max_imbalance_tr, imbalance_tr)
 
         # split size sanity
         if tr_idx.size == 0 or va_idx.size == 0:
@@ -720,6 +835,19 @@ def validate_folds_strict(
             ))
             ok = False
 
+    if max_imbalance > 0.15:
+        # keep ok = true but warn...
+        issues.append(utils.issue(
+                "FOLDS",
+                "Imbalance in val fold",
+            ))
+    if max_imbalance_tr > 0.20:
+        # keep ok = true but warn...
+        issues.append(utils.issue(
+                "FOLDS",
+                "Imbalance in train fold",
+            ))
+    
     return ok, issues
 
 def make_cv_folds_by_blocked_windows(
@@ -731,29 +859,23 @@ def make_cv_folds_by_blocked_windows(
     seed: int,
     n_time: int,
     hop_samples: int,
-    fs_hz: float = 250.0,
     debug_logger: utils.DebugLogger | None = None,
+    hz_a: int,
+    hz_b: int,
     debug_tag: str = "CV",
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[utils.TrainIssue], np.ndarray]:
     """
     Stratified CV on *blocked window groups*:
       - windows close in time (overlapping) are grouped into the same "block" group
         block_size_windows ~= ceil(W/H) where W=n_time and H=hop_samples
-      - we then do StratifiedGroupKFold so each fold has both classes, but blocks
-        never get split across train/val.
     This is desired compromise:
       random-ish windows in each fold, but overlap leakage is prevented because
       overlapping neighbors live in the same group.
     
-    Steps:
-      1) Build blocked groups (overlap-safe) within trials.
-      2) Compute k upper bound based on groups-per-class.
-      3) For k_try from k_eff down to 2:
-            try a fixed seed list (deterministic),
-            build StratifiedGroupKFold splits,
-            validate strictly.
-         Return first valid folds.
-      4) If nothing valid, return [].
+    Strategy:
+    1. Create overlap-safe groups (same as before)
+    2. Compute window count per group
+    3. Use weighted sampling to ensure val folds have ~equal windows per class
 
     Guarantees (if returns non-empty):
       - leak_groups=0 in every fold
@@ -761,7 +883,6 @@ def make_cv_folds_by_blocked_windows(
       - each fold train has both classes
     """
     issues: list[utils.TrainIssue] = []
-    split_issues: list[utils.TrainIssue] = []
     yb = np.asarray(yb).astype(np.int64)
     trial_ids = np.asarray(trial_ids).astype(np.int64)
     window_ids = np.asarray(window_ids).astype(np.int64)
@@ -791,105 +912,143 @@ def make_cv_folds_by_blocked_windows(
     # remap for cleanliness so we don't have gaps in group numbers
     groups = pd.factorize(groups)[0].astype(np.int64)
 
-    # 2) Compute k bound from groups-per-class
-    n_groups_c0, n_groups_c1, n_groups_c2, uniq_groups, group_label = count_groups_per_class(
-        yb=yb, groups=groups
-    )
-    k_req = int(k)
-    k_eff = int(min(k_req, n_groups_c0, n_groups_c1, n_groups_c2))
+    # 2) Build group metadata & Compute k bound from groups-per-class
+    uniq_groups = np.unique(groups)
+    group_label = np.zeros(len(uniq_groups), dtype=np.int64)
+    group_size = np.zeros(len(uniq_groups), dtype=np.int64)
+    
+    for gi, g in enumerate(uniq_groups):
+        idx_g = np.where(groups == g)[0]
+        group_label[gi] = int(yb[idx_g[0]])
+        group_size[gi] = len(idx_g)
+    
+    # Count groups and windows per class
+    groups_c0 = uniq_groups[group_label == 0]
+    groups_c1 = uniq_groups[group_label == 1]
+    groups_c2 = uniq_groups[group_label == 2]
+    # shuffle for randomness
+    rng = np.random.default_rng(seed)
+    rng.shuffle(groups_c0)
+    rng.shuffle(groups_c1)
+    rng.shuffle(groups_c2)
+    
+    k_eff = min(k, len(groups_c0), len(groups_c1), len(groups_c2))
+    
+    if k_eff < 2:
+        issues.append({"stage": "FOLDS", "message": "Not enough groups per class"})
+        return [], issues, keep
 
+    # 3) Distribute groups with size-awareness
+    # This helps distribute large and small groups more evenly
+    fold_groups = [[] for _ in range(k_eff)]
+
+    def assign_groups_lfd(groups_list, k_folds):
+        """Assign groups to folds using largest-first strategy"""
+        # Get sizes
+        group_info = [(g, int(group_size[uniq_groups == g][0])) for g in groups_list]
+        # Sort by size descending
+        group_info.sort(key=lambda x: -x[1])
+        
+        # Initialize folds
+        fold_assignments = [[] for _ in range(k_folds)]
+        fold_totals = [0] * k_folds
+        
+        # Assign each group to fold with minimum current total
+        for g, size in group_info:
+            min_fold_idx = min(range(k_folds), key=lambda i: fold_totals[i])
+            fold_assignments[min_fold_idx].append(int(g))
+            fold_totals[min_fold_idx] += size
+        
+        return fold_assignments
+    
+    # Assign each class with LFD
+    c0_assignments = assign_groups_lfd(list(groups_c0), k_eff)
+    c1_assignments = assign_groups_lfd(list(groups_c1), k_eff)
+    c2_assignments = assign_groups_lfd(list(groups_c2), k_eff)
+    
+    # Combine into fold_groups
+    fold_groups = []
+    for fold_i in range(k_eff):
+        combined = c0_assignments[fold_i] + c1_assignments[fold_i] + c2_assignments[fold_i]
+        fold_groups.append(combined)
+    
+    # 4) Create folds
+    folds = []
+    all_indices = np.arange(len(yb), dtype=np.int64)
+    
+    for fold_i in range(k_eff):
+        val_groups_set = set(fold_groups[fold_i])
+        val_mask = np.isin(groups, list(val_groups_set))
+        val_idx = all_indices[val_mask]
+        train_idx = all_indices[~val_mask]
+        folds.append((train_idx, val_idx))
+
+    # 5) Validation & Logging (Check window balance)
     if debug_logger is not None:
         debug_logger.log(f"[{debug_tag}] ===== Fold builder (blocked groups) =====")
         debug_logger.log(f"[{debug_tag}] N_windows={len(yb)}")
-        debug_logger.log(f"[{debug_tag}] n_time={int(n_time)} hop_samples={int(hop_samples)} fs_hz={float(fs_hz)}")
         debug_logger.log(f"[{debug_tag}] block_size_windows=ceil(W/H)={block_size_windows}")
         debug_logger.log(f"[{debug_tag}] n_groups_total={len(uniq_groups)}")
-        debug_logger.log(f"[{debug_tag}] n_groups_c0={n_groups_c0}, n_groups_c1={n_groups_c1}, n_groups_c2={n_groups_c2}")
-        debug_logger.log(f"[{debug_tag}] k requested={k_req} -> k_eff (group-limited)={k_eff}")
+        debug_logger.log(f"[{debug_tag}] k_eff (group-limited)={k_eff}")
         debug_logger.log()
 
-    if k_eff < 2:
-        issues.append(utils.issue(
-            "FOLDS",
-            "Not enough groups per class to build >=2 folds",
-            {"k_req": k_req, "k_eff": k_eff, "n_groups_c0": n_groups_c0, "n_groups_c1": n_groups_c1, "n_groups_c2": n_groups_c2},
-        ))
+    # group_label aligns with uniq_groups (one label per group)
+    g0 = int((group_label == 0).sum())
+    g1 = int((group_label == 1).sum())
+    g2 = int((group_label == 2).sum())
+    # group sizes (how many windows per group)
+    group_sizes = np.bincount(groups.astype(np.int64))
+    gsize_min = int(group_sizes.min()) if group_sizes.size else 0
+    gsize_med = int(np.median(group_sizes)) if group_sizes.size else 0
+    gsize_max = int(group_sizes.max()) if group_sizes.size else 0
+    def _class_gsizes(cls: int) -> tuple[int,int,int]:
+        cls_groups = uniq_groups[group_label == cls]
+        if cls_groups.size == 0:
+            return (0,0,0)
+        sizes = np.array([group_sizes[int(g)] for g in cls_groups], dtype=np.int64)
+        return (int(sizes.min()), int(np.median(sizes)), int(sizes.max()))
+    c0_min, c0_med, c0_max = _class_gsizes(0)
+    c1_min, c1_med, c1_max = _class_gsizes(1)
+    c2_min, c2_med, c2_max = _class_gsizes(2)
+    msg = (
+        f"[{debug_tag}] GROUPS per class: g0={g0} g1={g1} g2={g2} | "
+        f"group_size(min/med/max)={gsize_min}/{gsize_med}/{gsize_max} | "
+        f"c0(min/med/max)={c0_min}/{c0_med}/{c0_max} "
+        f"c1(min/med/max)={c1_min}/{c1_med}/{c1_max} "
+        f"c2(min/med/max)={c2_min}/{c2_med}/{c2_max}"
+    )
+    if debug_logger is None:
+        print(msg)
+    else:
+        debug_logger.log(msg)
+
+    # Validate call
+    ok, reasons = validate_folds_strict(yb=yb, groups=groups, folds=folds, hz_a=hz_a, hz_b=hz_b)
+    
+    if not ok:
+        issues.extend(reasons)
+        if debug_logger:
+            debug_logger.log(f"[{debug_tag}] Fold validation FAILED")
+            for r in reasons[:10]:
+                debug_logger.log(f"[{debug_tag}]   {r.stage}: {r.message}")
         return [], issues, keep
-
-    # Deterministic seed schedule:
-    # - include the provided seed first
-    # - then a fixed list of additional seeds
-    seed_base = int(seed)
-    seed_list = [seed_base, 0, 1, 2, 3, 5, 7, 11, 13, 17]
-    # remove duplicates while preserving order
-    seen = set()
-    seed_list = [s for s in seed_list if not (s in seen or seen.add(s))]
-
-    idx = np.arange(len(yb), dtype=np.int64)
-
-    # 3) Retry + degrade loop
-    for k_try in range(k_eff, 1, -1):
-        if debug_logger is not None:
-            debug_logger.log(f"[{debug_tag}] Trying k_try={k_try} with seeds={seed_list}")
-
-        for s in seed_list:
-            sgkf = StratifiedGroupKFold(n_splits=int(k_try), shuffle=True, random_state=int(s))
-            folds: list[tuple[np.ndarray, np.ndarray]] = []
-
-            try:
-                for tr_idx, va_idx in sgkf.split(idx, yb, groups):
-                    folds.append((tr_idx.astype(np.int64), va_idx.astype(np.int64)))
-            except Exception as e:
-                split_issues.append(utils.issue(
-                    "FOLDS",
-                    "Exception during StratifiedGroupKFold split",
-                    {"seed": int(s), "k_try": int(k_try), "err": str(e)},
-                ))
-                continue
-
-            ok, reasons = validate_folds_strict(yb=yb, groups=groups, folds=folds)
-
-            if debug_logger is not None:
-                debug_logger.log(f"[{debug_tag}]   seed={s}: built {len(folds)} folds -> ok={ok}")
-                if not ok:
-                    for r in reasons[:6]:
-                        debug_logger.log(f"[{debug_tag}]     issue: {r.stage} | {r.message}")
-                    if len(reasons) > 6:
-                        debug_logger.log(f"[{debug_tag}]     ... ({len(reasons)-6} more)")
-
-            if ok:
-                # 4) Summarize the successful folds in detail
-                if debug_logger is not None:
-                    summarize_blocked_folds(
-                        yb=yb,
-                        trial_ids=trial_ids,
-                        groups=groups,
-                        folds=folds,
-                        block_size_windows=int(block_size_windows),
-                        hop_samples=int(hop_samples),
-                        n_time=int(n_time),
-                        logger=debug_logger,
-                        tag=debug_tag,
-                    )
-                    debug_logger.log(f"[{debug_tag}] DONE: using k={k_try}, seed={s}")
-                    debug_logger.log(f"[{debug_tag}] ========================================\n")
-                return folds, issues, keep
-            
-            for it in reasons:
-                split_issues.append(it)
-
-        if debug_logger is not None:
-            debug_logger.log(f"[{debug_tag}] No valid folds for k_try={k_try}. Degrading k...\n")
-
-    issues.append(utils.issue(
-        "FOLDS",
-        "Could not produce valid folds for any k>=2",
-        {"k_eff": int(k_eff), "k_req": int(k_req)},
-    ))
-
-    # Keep only a limited number to avoid giant JSON
-    issues.extend(split_issues[:25])
-    return [], issues, keep
+    
+    # Success - summarize
+    if debug_logger:
+        summarize_blocked_folds(
+            yb=yb,
+            trial_ids=trial_ids,
+            groups=groups,
+            folds=folds,
+            block_size_windows=int(block_size_windows),
+            hop_samples=int(hop_samples),
+            n_time=int(n_time),
+            logger=debug_logger,
+            tag=debug_tag,
+        )
+        debug_logger.log(f"[{debug_tag}] SUCCESS: Created {k_eff} balanced folds (manual round-robin)")
+    
+    return folds, issues, keep
 
 
 def compute_block_size_windows(
@@ -966,12 +1125,12 @@ def make_block_groups_within_trials_by_window_idx(
     
     rest_group_to_indices: dict[int, np.ndarray] = {} # dictionary mapping rest group (g) -> rest indices [x1,x2..]
     
-    REST_RATIO = 1.3 # amount of rest examples relative to max(a,b)
+    REST_RATIO = 1.1 # amount of rest examples relative to max(a,b)
     num_examples_a = (yb == 0).sum()
     num_examples_b = (yb == 1).sum()
     num_examples_rest = (yb == 2).sum()
     rest_target = int(min(REST_RATIO*max(num_examples_a,num_examples_b), num_examples_rest))
-    if(rest_target == num_examples_rest):
+    if(rest_target >= num_examples_rest):
         return groups, np.ones(len(yb), dtype = bool)
     
     # Random shuffling
@@ -981,7 +1140,7 @@ def make_block_groups_within_trials_by_window_idx(
     rest_grps = np.unique(groups[rest_idx])
     rng.shuffle(rest_grps) # random order of groups
     for g in rest_grps:
-        rest_grp_idxs = np.where(groups == g)[0] # assuming groups are label pure
+        rest_grp_idxs = np.where((groups == g) & (yb==2))[0] # assuming groups are label pure
         rest_grp_idxs = rest_grp_idxs.astype(np.int64).copy()
         rng.shuffle(rest_grp_idxs) # random order of idxs per group
         rest_group_to_indices[int(g)] = rest_grp_idxs
@@ -997,7 +1156,7 @@ def make_block_groups_within_trials_by_window_idx(
                 break
             g = int(g)
             idx_list = rest_group_to_indices.get(g) # alr randomly shuffled
-            if idx_list is None:
+            if idx_list is None or idx_list.size == 0:
                 continue
             p = selected_pos_in_group[g]
             if p < idx_list.size: # less than members per group
@@ -1060,6 +1219,19 @@ def shortlist_freqs(y_hz: np.ndarray, pick_top_k: int) -> list[int]:
     freqs = [hz for hz, _ in keep]
     return freqs[: min(pick_top_k, len(freqs))]
 
+def mean_val_imbalance_pct(y: np.ndarray, folds: list[tuple[np.ndarray, np.ndarray]], n_classes: int = 3) -> tuple[float, list[float]]:
+    imbs = []
+    for _, va_idx in folds:
+        yv = y[va_idx]
+        counts = np.bincount(yv.astype(np.int64), minlength=n_classes)
+        n = int(counts.sum())
+        if n == 0:
+            imbs.append(100.0)
+            continue
+        pct = counts / n
+        imbs.append(float((pct.max() - pct.min()) * 100.0))
+    return float(np.mean(imbs)) if imbs else 100.0, imbs
+
 def select_best_pair(
     *,
     X: np.ndarray, y_hz: np.ndarray, trial_ids: np.ndarray,
@@ -1079,7 +1251,7 @@ def select_best_pair(
         pick_top_k=6,
     )
     pairs = [(cand_freqs[i], cand_freqs[j]) for i in range(len(cand_freqs)) for j in range(i + 1, len(cand_freqs))]
-
+    rejected_pairs = []
     best_metrics = None
     best_score = -1.0
     all_metrics = []
@@ -1107,8 +1279,8 @@ def select_best_pair(
                     "hz_a": int(hz_a),
                     "hz_b": int(hz_b),
                     "n_pair": int(len(yb)),
-                    "inner": utils.issue_to_dict(issue) if hasattr(utils, "issue_to_dict") else asdict(issue),
                 },
+                issue.data_insufficiency
             ))
             else:
                 pair_issues.append(utils.issue(
@@ -1127,6 +1299,8 @@ def select_best_pair(
             n_time=info.n_time,    # window length in samples
             hop_samples=utils.HOP_SAMPLES,
             debug_logger=debug_logger,
+            hz_a=hz_a,
+            hz_b=hz_b,
             debug_tag=f"PAIR {hz_a}vs{hz_b}",
         )
         # re-index based on keep
@@ -1135,6 +1309,23 @@ def select_best_pair(
         tp = tp[keep]
         wp = wp[keep]
 
+        # reject based on val imbalance before training
+        mean_imb, per_fold_imbs = mean_val_imbalance_pct(yb, folds, n_classes=3)
+        if mean_imb >= 15.0:
+            rejected_pairs.append({
+                "hz_a": int(hz_a),
+                "hz_b": int(hz_b),
+                "mean_val_imbalance_pct": float(mean_imb),
+                "per_fold_val_imbalance_pct": [float(x) for x in per_fold_imbs],
+                "n": int(len(yb)),
+            })
+            if debug_logger:
+                debug_logger.log(
+                    f"[PAIR_SEARCH] REJECT ({hz_a},{hz_b}) mean_val_imbalance={mean_imb:.1f}% (>=15%) "
+                    f"per_fold={','.join(f'{x:.1f}' for x in per_fold_imbs)}"
+                )
+            continue
+
         if len(folds) < 2:
             pair_issues.append(utils.issue(
                 "PAIR_SEARCH",
@@ -1142,7 +1333,7 @@ def select_best_pair(
                 {"hz_a": int(hz_a), "hz_b": int(hz_b), "n_fold_issues": int(len(fold_issues))},
             ))
             pair_issues.extend(fold_issues)
-            continue
+            continue # skip this pair
 
         # ===== 2) score the pair using trainer API =====
         if args.arch == "CNN":
@@ -1155,6 +1346,7 @@ def select_best_pair(
                 n_time=info.n_time,
                 freq_a_hz=hz_a,
                 freq_b_hz=hz_b,
+                zscorearg=args.zscorenormalization,
                 logger=debug_logger,
             )
             pair_issues.extend(score_issues)
@@ -1177,7 +1369,7 @@ def select_best_pair(
 
         score = metrics.avg_fold_balanced_accuracy # current scoring metric we're using
         std_score = metrics.std_fold_balanced_accuracy
-        print(f"[PY] pair ({hz_a},{hz_b}) mean_bal_acc={score:.3f} (+/-{std_score:.3f})")
+        debug_logger.log(f"[PAIR_SEARCH] pair ({hz_a},{hz_b}) mean_bal_acc={score:.3f} (+/-{std_score:.3f})")
 
         if score > best_score:
             best_score = score
@@ -1198,6 +1390,7 @@ def select_best_pair(
     left_hz, right_hz = (a, b) if a < b else (b, a)
 
     debug = {
+        "rejected_pairs_from_class_skew": rejected_pairs,
         "candidate_freqs": cand_freqs,
         "pair_scores": [asdict(m) for m in all_metrics], # dictionary format for JSON serialization
         "best_score_mean_bal_acc": best_score,
@@ -1213,6 +1406,7 @@ def write_train_result_json(model_dir: Path, *, train_ok: bool, onnx_ok: bool, c
                             left_hz: int, right_hz: int,
                             left_e: int, right_e: int,
                             final_holdout_bal_acc: float = 0.0, final_train_acc: float = 0.0,
+                            rejected_pairs_from_class_skew: list[str],
                             issues: list[utils.TrainIssue] | None = None,
                             extra: dict[str, Any] | None = None) -> Path:
     payload = {
@@ -1228,6 +1422,7 @@ def write_train_result_json(model_dir: Path, *, train_ok: bool, onnx_ok: bool, c
         "best_freq_right_e": int(right_e),
         "final_holdout_acc": float(final_holdout_bal_acc),
         "final_train_acc": float(final_train_acc),
+        "rejected_pairs_from_class_skew": rejected_pairs_from_class_skew,
         "issues": utils.issues_to_json(issues or [])
     }
     if extra:
@@ -1293,6 +1488,7 @@ def main():
     data_session_dir = data_arg if data_arg.is_absolute() else (DATA_ROOT / data_arg)
     data_session_dir = data_session_dir.resolve()
     hparam_arg = args.tunehparams
+    zscore_arg = args.zscorenormalization
     
     gen_cfg = utils.GeneralTrainingConfigs()
 
@@ -1314,6 +1510,7 @@ def main():
 
         # 4) Select best pair using CV scoring with same arch
         best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, trial_ids=trial_ids, window_ids=window_ids, info=info, gen_cfg=gen_cfg, debug_logger=debug_log, args=args)
+        rejected_pairs_from_class_skew = debug["rejected_pairs_from_class_skew"]
         print(f"[PY] BEST PAIR: {best_left_hz}Hz vs {best_right_hz}Hz")
 
         # 5) Train final model on winning pair
@@ -1352,6 +1549,8 @@ def main():
                 n_time=info.n_time,
                 hop_samples=utils.HOP_SAMPLES,
                 debug_logger=debug_log,
+                hz_a=best_left_hz,
+                hz_b=best_right_hz,
                 debug_tag=f"FINAL {best_left_hz}vs{best_right_hz}",
             )
             # re-index based on keep
@@ -1381,6 +1580,7 @@ def main():
                 n_time=info.n_time,
                 out_onnx_path=(out_dir / "ssvep_model.onnx"),
                 hparam_tuning=hparam_arg,
+                zscore_norm=zscore_arg,
                 logger=debug_log,
             )
             issues.extend(cnn_issues)
@@ -1411,6 +1611,7 @@ def main():
             right_e=hz2e[best_right_hz],
             final_holdout_bal_acc=final.final_holdout_bal_acc,
             final_train_acc=final.final_train_acc,
+            rejected_pairs_from_class_skew=rejected_pairs_from_class_skew,
             issues=issues,
             extra={
                 "n_windows_total": int(X.shape[0]) if X is not None else 0,
@@ -1450,6 +1651,7 @@ def main():
         left_e=left_e,
         right_e=right_e,
         issues=issues,
+        rejected_pairs_from_class_skew=[-1],
         extra={
             "fatal_stage": issues[-1].stage if issues else "UNKNOWN",
             "n_windows_total": int(X.shape[0]) if X is not None else 0,
