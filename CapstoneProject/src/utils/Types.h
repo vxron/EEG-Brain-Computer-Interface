@@ -18,7 +18,6 @@
 #include <chrono>
 #include "RingBuffer.hpp"
 #include <deque>
-#include "../classifier/ONNXClassifier.hpp"
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -151,6 +150,7 @@ enum SettingTrainArch_E {
 	TrainArch_CNN,
 	TrainArch_SVM,
 	TrainArch_RNN, 
+	TrainArch_Unknown
 };
 
 enum SettingStimMode_E : int {
@@ -240,6 +240,14 @@ inline std::string TrainArchEnumToString(SettingTrainArch_E e){
         case TrainArch_CNN: return "CNN";
         default:            return "Unknown";
     }
+}
+
+inline SettingTrainArch_E TrainArchStringToEnum(std::string e){
+    if(e=="SVM") { return TrainArch_SVM; }
+	else if (e=="CNN") { return TrainArch_CNN; }
+	else {
+		return TrainArch_Unknown;
+	}   
 }
 
 inline std::string CalibDataEnumToString(SettingCalibData_E e){
