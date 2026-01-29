@@ -4,7 +4,7 @@
 
 namespace JSON {
 
-bool extract_json_string(const std::string& body, const char* key, std::string& out) {
+inline bool extract_json_string(const std::string& body, const char* key, std::string& out) {
     auto p = body.find(key);
     if (p == std::string::npos) return false;
     p = body.find(':', p);
@@ -17,7 +17,7 @@ bool extract_json_string(const std::string& body, const char* key, std::string& 
     return true;
 }
 
-bool extract_json_int(const std::string& body, const char* key, int& out) {
+inline bool extract_json_int(const std::string& body, const char* key, int& out) {
     auto p = body.find(key);
     if (p == std::string::npos) return false;
     p = body.find(':', p);
@@ -39,7 +39,7 @@ bool extract_json_int(const std::string& body, const char* key, int& out) {
     return true;
 }
 
-void json_extract_fail(const char* context,
+inline void json_extract_fail(const char* context,
                               const char* field)
 {
     LOG_ALWAYS("[JSON] extract failed | context="
