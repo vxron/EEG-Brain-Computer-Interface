@@ -23,6 +23,8 @@
 #include <filesystem>
 #include "utils/SessionPaths.hpp"
 #include "classifier/ONNXClassifier.hpp"
+#include "actuation/ServoDriver.h"
+#include "utils/JsonUtils.hpp"
 
 #ifdef USE_EEG_FILTERS
 #include "utils/Filters.hpp"
@@ -176,6 +178,11 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     
     // single instance of onnx env
     ONNX_RT_C ONNX_RT;
+
+    // actually don't require concurrent actuation... since it should occur right after consumer requests it, and consumer shouldn't do anything else while actuating
+    // actually ACTUALLY haha we do want actuation on its own thread because we need to run it at a fixed frequency (control loop)
+    // TODO: EXCEPT if user presses button on UI that's "STOP IMMEDIATELY" -> then it should get interrupted immediately (torque cmd to zero)
+    // thus need to decide frequency at which controller is operating (sending out torque cmds) & that will be freq at which we poll atomic g_actuation_stop_requested from state store
 
 try{
     SignalQualityAnalyzer_C SignalQualityAnalyzer(&stateStoreRef);
@@ -573,7 +580,7 @@ try{
                 int currSessIdx = stateStoreRef.currentSessionIdx.load(std::memory_order_acquire);
                 std::string model_dir = stateStoreRef.saved_sessions[currSessIdx].model_dir;
                 std::string model_arch = stateStoreRef.saved_sessions[currSessIdx].model_arch;
-                ONNX_RT.init_onnx_model(model_dir, model_arch);
+                ONNX_RT.init_onnx_model(model_dir, TrainArchStringToEnum(model_arch));
                 // reload complete
                 stateStoreRef.g_onnx_session_needs_reload.store(false, std::memory_order_release);
             }
@@ -827,6 +834,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         int rc = std::system(cmd.c_str());
 
         // TODO: parse json result to write best freqs to state store
+        /*
         const std::string& body = req.body; // req needs to be path
         std::string best_freq_left_hz = "";
         std::string best_freq_right_hz = "";
@@ -839,6 +847,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         JSON::extract_json_int(body, "best_freq_left_e", freq_left_hz_e);
         JSON::extract_json_int(body, "best_freq_right_e", freq_right_hz_e);
         JSON::extract_json_string(body, "issues", issues_str);
+        */
 
         //(4) Publich result to state store
         if (rc == 0) { // TODO: ALSO CHECK ISSUES HERE
@@ -894,13 +903,17 @@ void actuation_controller_thread_fn(StateStore_s& stateStoreRef){
     // ^^w guards
     // OR could call their python script directly w the appropriate 'turn_left' or 'turn_right' args...,
     // but this would introduce a lot of latency overheads & is def not optimal soln
+    ServoDriver_C ServoDriver;
 
     // (1) wait for cv request from consumer thread -> then wake up
-    std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request()); // acquire lock momentarily
-    stateStoreRef.actuation_request.wait(actuation_lock, []{return stateStoreRef.actuation_requested;}); // go to sleep until notified -> then reacquire lock and lambda fxn[] to check predicate (arg2)
+    std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request); // acquire lock momentarily
+    stateStoreRef.actuation_request.wait(actuation_lock, [&]{return stateStoreRef.actuation_requested;}); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
+    // [&] = capture all by reference
     SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
     
     // (2) Implement requested_direction cycle
+
+    // sleep (fixed rate frequency)
 
 }
 
@@ -950,5 +963,6 @@ int main() {
     http.join();
     stim.join();
     train.join();
+    actuate.join();
     return 0; 
 }

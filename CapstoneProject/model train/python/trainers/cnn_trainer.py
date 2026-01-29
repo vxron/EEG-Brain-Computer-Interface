@@ -107,7 +107,7 @@ HPARAM_SPACE_MINIMAL = {
     "pooling_factor_final": [8, 10],  # final layer temporal downsampling
     "F1": [8, 16],                    # number of output temporal combinations from layer 1
     "dropout": [0.3, 0.5],
-    # total combos = 3 x 3 x 2 x 2 x 2 x 2 = 144
+    # total combos = 3 x 3 x 2 x 2 x 2 = 72
 }
 
 def _derived_F2(cfg: CNNTrainConfig) -> int:
