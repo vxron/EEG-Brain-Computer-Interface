@@ -163,7 +163,11 @@ enum SettingWaveform_E : int {
   Waveform_Sinusoid = 1,
 };
 
-
+enum SettingHparam_E {
+	HPARAM_OFF,
+	HPARAM_FULL,
+	HPARAM_QUICK
+};
 
 /* END ENUMS */
 
@@ -271,6 +275,15 @@ inline std::string WaveformEnumToString(SettingWaveform_E e){
         case Waveform_Square:   return "square";
         case Waveform_Sinusoid: return "sinusoid";
         default:                return "Unknown";
+    }
+}
+
+inline std::string HParamEnumToString(SettingHparam_E e){
+    switch (e) {
+        case HPARAM_FULL:  return "FULL";
+        case HPARAM_OFF:   return "OFF";
+		case HPARAM_QUICK: return "QUICK";
+        default:           return "Unknown";
     }
 }
 

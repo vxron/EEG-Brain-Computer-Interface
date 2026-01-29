@@ -120,11 +120,12 @@ const selModulation = document.getElementById("set-modulation");
 const elSettingsStatus = document.getElementById("settings-status");
 const elFreqWarning = document.getElementById("freq-warning");
 const freqInputs = Array.from(
-  document.querySelectorAll('input[name="freq-select"]')
+  document.querySelectorAll('input[name="freq-select"]'),
 );
 const FREQ_MAX_SELECT = 6;
 let currentWaveform = "square"; // "square" | "sine"
 let currentModulation = "flicker"; // "flicker" | "grow"
+let currentHparam = 0; // 0=Off, 2=Quick, 1=Full (match backend Types.h)
 let settingsInitiallyUpdated = false;
 // Slider elements
 const elDurActive = document.getElementById("set-duration-active");
@@ -135,6 +136,13 @@ const elDurActiveLbl = document.getElementById("set-duration-active-label");
 const elDurNoneLbl = document.getElementById("set-duration-none-label");
 const elDurRestLbl = document.getElementById("set-duration-rest-label");
 const elCycleRepLbl = document.getElementById("set-cycle-repeats-label");
+// hparam elements
+const elHparamCard = document.getElementById("hparam-card");
+const elHparamBadge = document.getElementById("hparam-badge");
+const elHparamMeter = document.getElementById("hparam-meter");
+const elHparamHint = document.getElementById("hparam-hint");
+const elHparamCnnOnly = document.getElementById("hparam-cnn-only");
+const hparamBtns = Array.from(document.querySelectorAll(".hparam-seg-btn"));
 
 // No SSVEP Block DOM elements
 const viewNoSSVEP = document.getElementById("view-neutral");
@@ -331,6 +339,7 @@ function updateSettingsFromState(data) {
   const calib = data.settings.calib_data_setting;
   const stim_mode_i = data.settings.stim_mode; // 0=flicker, 1=grow
   const waveform_i = data.settings.waveform; // 0=square, 1=sine
+  const hparam_i = data.settings.hparam;
   const duractive_i = Number(data.settings.duration_active_s);
   const durnone_i = Number(data.settings.duration_none_s);
   const durrest_i = Number(data.settings.duration_rest_s);
@@ -343,6 +352,8 @@ function updateSettingsFromState(data) {
     selModulation.value = stim_mode_i === 1 ? "grow" : "flicker";
   currentWaveform = selWaveform?.value ?? "square";
   currentModulation = selModulation?.value ?? "flicker";
+  const trainArchNow = Number(selTrainArch?.value ?? arch ?? 0);
+  renderHparamUI(hparam_i ?? 0, trainArchNow); // dep on train arch...
 
   if (elDurActive && !Number.isNaN(duractive_i))
     elDurActive.value = String(duractive_i);
@@ -454,8 +465,8 @@ function updateFreqCounterUI() {
     n === 0
       ? "rgba(250, 204, 21, 0.95)"
       : n <= FREQ_MAX_SELECT
-      ? "var(--success)"
-      : "var(--danger)";
+        ? "var(--success)"
+        : "var(--danger)";
 }
 function attachFreqGridHandlers() {
   freqInputs.forEach((inp) => {
@@ -470,7 +481,7 @@ function attachFreqGridHandlers() {
         showModal(
           "Too many frequencies selected",
           `Please select up to ${FREQ_MAX_SELECT} frequencies.`,
-          { okText: "OK" }
+          { okText: "OK" },
         );
         return;
       }
@@ -487,6 +498,99 @@ function bindSliderValue(sliderEl, labelEl) {
   const update = () => (labelEl.textContent = String(sliderEl.value));
   sliderEl.addEventListener("input", update);
   update();
+}
+
+// (10) Hparam helpers for settings page
+function getHparamBtn(val) {
+  return hparamBtns.find((b) => Number(b.dataset.hp) === Number(val)) || null;
+}
+function renderHparamUI(hpVal, trainArchVal) {
+  // trainArchVal: 0=CNN, 1=SVM (based on <select>)
+  const isCnn = Number(trainArchVal) === 0;
+
+  // If not CNN, force Off
+  const effectiveHp = isCnn ? Number(hpVal) : 0;
+
+  // CNN-only note visibility
+  if (elHparamCnnOnly) elHparamCnnOnly.classList.toggle("hidden", isCnn);
+
+  // Disable buttons when SVM
+  hparamBtns.forEach((b) => {
+    b.disabled = !isCnn;
+    b.classList.toggle("is-disabled", !isCnn); // if you want a CSS hook
+  });
+
+  // Active button styling
+  hparamBtns.forEach((b) =>
+    b.classList.toggle("is-active", Number(b.dataset.hp) === effectiveHp),
+  );
+
+  // Badge text + classes
+  if (elHparamBadge) {
+    elHparamBadge.classList.remove("off", "quick", "full");
+    if (effectiveHp === 2) {
+      elHparamBadge.textContent = "Quick";
+      elHparamBadge.classList.add("quick");
+    } else if (effectiveHp === 1) {
+      elHparamBadge.textContent = "Full";
+      elHparamBadge.classList.add("full");
+    } else {
+      elHparamBadge.textContent = "Off";
+      elHparamBadge.classList.add("off");
+    }
+  }
+
+  // Meter fill class
+  if (elHparamMeter) {
+    elHparamMeter.classList.remove("off", "quick", "full");
+    elHparamMeter.classList.add(
+      effectiveHp === 2 ? "quick" : effectiveHp === 1 ? "full" : "off",
+    );
+  }
+
+  // Hint text
+  if (elHparamHint) {
+    if (!isCnn) {
+      elHparamHint.textContent =
+        "Hyperparameter tuning is only available for CNN training.";
+    } else if (effectiveHp === 0) {
+      elHparamHint.textContent = "Fastest training. Uses default settings.";
+    } else if (effectiveHp === 2) {
+      elHparamHint.textContent =
+        "Good tradeoff: small search to improve generalization.";
+    } else {
+      elHparamHint.textContent = "Best potential model. Can take a long time.";
+    }
+  }
+  currentHparam = effectiveHp;
+}
+function attachHparamHandlers() {
+  hparamBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const hp = Number(btn.dataset.hp);
+
+      const trainArch = Number(selTrainArch?.value ?? 0); // 0=CNN, 1=SVM
+      // If SVM, ignore clicks (or show a modal)
+      if (trainArch !== 0) {
+        showModal(
+          "CNN only",
+          "Hyperparameter tuning currently applies to CNN training only.",
+        );
+        return;
+      }
+
+      renderHparamUI(hp, trainArch);
+      // NOTE: this does NOT save yet — it just updates UI state like waveform selection does
+    });
+  });
+
+  // Also re-render if user flips Model Architecture (CNN <-> SVM)
+  if (selTrainArch) {
+    selTrainArch.addEventListener("change", () => {
+      const trainArch = Number(selTrainArch.value);
+      renderHparamUI(currentHparam, trainArch);
+    });
+  }
 }
 
 // ==================== 4) CONNECTION STATUS HELPER =====================
@@ -867,13 +971,13 @@ function updateUiFromState(data) {
       case 1: // UIPopup_MustCalibBeforeRun
         showModal(
           "No trained models found",
-          "Please complete at least one calibration session before trying to start run mode."
+          "Please complete at least one calibration session before trying to start run mode.",
         );
         break;
       case 3: // UIPopup_TooManyBadWindowsInRun
         showModal(
           "Too many artifactual windows detected",
-          "Please check headset placement and rerun hardware checks to verify signal."
+          "Please check headset placement and rerun hardware checks to verify signal.",
         );
         break;
       case 5: // UIPopup_ConfirmOverwriteCalib
@@ -886,25 +990,25 @@ function updateUiFromState(data) {
             showCancel: true,
             okText: "Overwrite",
             cancelText: "Cancel",
-          }
+          },
         );
         break;
       case 6: // UIPopup_ConfirmHighFreqOk
         showModal(
           "High frequency SSVEP decoding (>20Hz) will be attempted",
-          "The final model's performance may be poor, and device functionality may be limited."
+          "The final model's performance may be poor, and device functionality may be limited.",
         );
         break;
       case 7: // UIPopup_TrainJobFailed
         showModal(
           "Training job failed",
-          "There was an internal error. Please try calibration again."
+          "There was an internal error. Please try calibration again.",
         );
         break;
       default:
         showModal(
           "DEBUG MSG",
-          "we should not reach here! check that UIPopup Enum matches JS cases"
+          "we should not reach here! check that UIPopup Enum matches JS cases",
         );
         break;
     }
@@ -1572,7 +1676,7 @@ async function sendCalibOptionsAndStart() {
   if (raw === "2" || raw === "3") {
     showModal(
       "Cannot proceed",
-      "This device is not safe for use for individuals with photosensitivity."
+      "This device is not safe for use for individuals with photosensitivity.",
     );
     return;
   }
@@ -1615,7 +1719,7 @@ async function sendSettingsAndSave() {
   if (Number.isNaN(trainArch) || Number.isNaN(calibData)) {
     showModal(
       "Missing selection",
-      "Please select both training architecture and calibration data options."
+      "Please select both training architecture and calibration data options.",
     );
     return;
   }
@@ -1630,6 +1734,7 @@ async function sendSettingsAndSave() {
     calib_data_setting: calibData,
     stim_mode: stimModeToInt(modStr),
     waveform: waveformToInt(waveformStr),
+    hparam: trainArch === 0 ? currentHparam : 0, // force off for SVM
     duration_active_s: Number(elDurActive?.value ?? 11), // otherwise default
     duration_none_s: Number(elDurNone?.value ?? 10),
     duration_rest_s: Number(elDurRest?.value ?? 8),
@@ -1638,7 +1743,7 @@ async function sendSettingsAndSave() {
   };
   console.log("SET_SETTINGS payload:", payload);
   logLine(
-    `Saving timers: active=${payload.duration_active_s}s none=${payload.duration_none_s}s rest=${payload.duration_rest_s}s reps=${payload.num_times_cycle_repeats}`
+    `Saving timers: active=${payload.duration_active_s}s none=${payload.duration_none_s}s rest=${payload.duration_rest_s}s reps=${payload.num_times_cycle_repeats}`,
   );
 
   try {
@@ -1660,7 +1765,7 @@ async function sendSettingsAndSave() {
     currentModulation = modStr;
 
     logLine(
-      `Settings saved (train_arch=${trainArch}, calib_data=${calibData})`
+      `Settings saved (train_arch=${trainArch}, calib_data=${calibData} hparam=${currentHparam})`,
     );
     if (elSettingsStatus) {
       elSettingsStatus.textContent = "Saved ✓";
@@ -1693,16 +1798,17 @@ async function init() {
   rightStimulus = new FlickerStimulus(elRunRight, measuredRefreshHz);
   neutralLeftStimulus = new FlickerStimulus(
     elNeutralLeftArrow,
-    measuredRefreshHz
+    measuredRefreshHz,
   );
   neutralRightStimulus = new FlickerStimulus(
     elNeutralRightArrow,
-    measuredRefreshHz
+    measuredRefreshHz,
   );
 
   stimAnimationLoop();
   startPolling();
   attachFreqGridHandlers();
+  attachHparamHandlers();
 
   // add event listeners for all the sliders (settings page)
   bindSliderValue(elDurActive, elDurActiveLbl);

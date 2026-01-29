@@ -394,7 +394,7 @@ def get_args():
         "--tunehparams",
         type=str,
         required=True,
-        choices=["ON", "OFF"],
+        choices=["FULL", "QUICK", "OFF"],
         help="Choice of using default values for hyperparams (faster) or running explicit tuning algorithms (slower)."
     )
 

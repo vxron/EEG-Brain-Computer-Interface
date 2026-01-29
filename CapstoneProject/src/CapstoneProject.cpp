@@ -277,6 +277,9 @@ try{
 
         SettingWaveform_E waveform =
             stateStoreRef.settings.waveform.load(std::memory_order_acquire);
+        
+        SettingHparam_E hparam =
+            stateStoreRef.settings.hparam_setting.load(std::memory_order_acquire);
 
         // snapshot selected frequency pool 
         std::array<TestFreq_E, 6> selected_freqs_e{};
@@ -954,14 +957,19 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         // poll current settings to pass to Python
         SettingTrainArch_E train_arch = stateStoreRef.settings.train_arch_setting.load(std::memory_order_acquire);
         SettingCalibData_E calib_data = stateStoreRef.settings.calib_data_setting.load(std::memory_order_acquire);
+        SettingHparam_E hparam = stateStoreRef.settings.hparam_setting.load(std::memory_order_acquire);
         std::string arch_str  = TrainArchEnumToString(train_arch);
         std::string cdata_str = CalibDataEnumToString(calib_data);
+        std::string hparam_str = HParamEnumToString(hparam);
         LOG_ALWAYS("Training settings snapshot: train_arch=" << TrainArchEnumToString(train_arch)
-          << ", calib_data=" << CalibDataEnumToString(calib_data));
+          << ", calib_data=" << CalibDataEnumToString(calib_data)
+          << ", hparam=" << HParamEnumToString(hparam));
 
         // (2) Validate inputs (don’t launch if missing)
-        if (data_dir.empty() || model_dir.empty() || subject_id.empty() || session_id.empty() || arch_str == "Unknown" || cdata_str == "Unknown") {
+        if (data_dir.empty() || model_dir.empty() || subject_id.empty() || session_id.empty() || arch_str == "Unknown" || cdata_str == "Unknown" || hparam_str == "Unknown") {
             LOG_ALWAYS("Training request missing session info; skipping.");
+            // todo: this is a failure (should show failure popup & bring to home)
+            stateStoreRef.g_ui_event.store(UIStateEvent_TrainingFailed);
             continue;
         }
 
@@ -972,6 +980,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
             if (ec) {
                 LOG_ALWAYS("ERROR: could not create model_dir=" << model_dir
                           << " (" << ec.message() << ")");
+                stateStoreRef.g_ui_event.store(UIStateEvent_TrainingFailed);
                 continue;
             }
         }
@@ -982,12 +991,14 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         // TODO: MUST MATCH PYTHON TRAINING SCRIPT PATH AND ARGS
         ss << "python "
                << "\"" << scriptPath.string() << "\""
-               << " --data \""     << data_dir   << "\""
-               << " --model \""    << model_dir  << "\""
-               << " --subject \""  << subject_id << "\""
-               << " --session \""  << session_id << "\""
-               << " --arch \""     << arch_str   << "\""
-               << " --calibsetting \""<< cdata_str  << "\"";
+               << " --data \""               << data_dir   << "\""
+               << " --model \""              << model_dir  << "\""
+               << " --subject \""            << subject_id << "\""
+               << " --session \""            << session_id << "\""
+               << " --arch \""               << arch_str   << "\""
+               << " --calibsetting \""       << cdata_str  << "\""
+               << " --tunehparams \""        << hparam_str << "\""
+               << " --zscorenormalization \""<< "ON"       << "\"";
 
         const std::string cmd = ss.str();
         /* std::system executes the cmd string using host shell

@@ -109,6 +109,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int train_arch_e = stateStoreRef_.settings.train_arch_setting.load(std::memory_order_acquire);
     int stim_mode_e = stateStoreRef_.settings.stim_mode.load(std::memory_order_acquire);
     int waveform_e  = stateStoreRef_.settings.waveform.load(std::memory_order_acquire);
+    int hparam_e = stateStoreRef_.settings.hparam_setting.load(std::memory_order_acquire);
     int sel_n = stateStoreRef_.settings.selected_freqs_n.load(std::memory_order_acquire);
     if (sel_n < 0) sel_n = 0;
     if (sel_n > 6) sel_n = 6;
@@ -139,6 +140,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
             << "\"train_arch_setting\":" << train_arch_e << ","
             << "\"stim_mode\":"          << stim_mode_e << ","
             << "\"waveform\":"           << waveform_e  << ","
+            << "\"hparam\":"             << hparam_e    << ","
             << "\"num_times_cycle_repeats\":" << total_cycles << ","
             << "\"duration_active_s\":"  << duration_active << ","
             << "\"duration_rest_s\":"    << duration_rest << ","
@@ -279,6 +281,14 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                         return;
                     }
                     stateStoreRef_.settings.waveform.store(static_cast<SettingWaveform_E>(waveform_i), std::memory_order_release);
+
+                    int hparam_i = static_cast<int>(HPARAM_OFF); // default
+                    if (!JSON::extract_json_int(body, "\"hparam\"", hparam_i)) {
+                        JSON::json_extract_fail("http_server", "hparam");
+                        write_json_error(res, 400, "missing_or_invalid_field", "hparam");
+                        return;
+                    }
+                    stateStoreRef_.settings.hparam_setting.store(static_cast<SettingHparam_E>(hparam_i), std::memory_order_release);
 
                     int total_cycles_i = 1;
                     if (!JSON::extract_json_int(body, "\"num_times_cycle_repeats\"", total_cycles_i)) {
