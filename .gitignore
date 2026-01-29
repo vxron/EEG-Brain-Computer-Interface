@@ -1,6 +1,7 @@
 # Build trees
 /build/
 /out/
+out/
 /CMakeFiles/
 /CMakeCache.txt
 /cmake_install.cmake
@@ -9,6 +10,8 @@
 # Data & Model dirs
 /data/
 /models/
+plots/
+__pycache__/
 
 # Visual Studio / VS Code junk
 /.vs/

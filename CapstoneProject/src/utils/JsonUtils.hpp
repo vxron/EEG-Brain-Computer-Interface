@@ -49,7 +49,7 @@ inline void json_extract_fail(const char* context,
 
 
 // Parse int array from JSON body for input like "selected_freqs_e":[1,2,3]
-bool extract_json_int_array_limited(const std::string& body,
+inline bool extract_json_int_array_limited(const std::string& body,
                                           const char* key_with_quotes,
                                           std::vector<int>& out,
                                           int max_elems)
