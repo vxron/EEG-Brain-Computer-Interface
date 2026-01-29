@@ -7,10 +7,11 @@
 #include <filesystem>
 #include <algorithm>
 #include <thread>
+#include <optional>
 #include <numeric> 
 #include <stdexcept>
 #include <cmath> // std::exp(value)
-#include <onnxruntime_cxx_api.h> //TODO: install
+#include <onnxruntime_cxx_api.h>
 
 // consumer can use currentSessionIdx CHANGE to detect when it must reload model
 // ^^i.e. call init_onnx_model...
@@ -18,7 +19,7 @@
 constexpr std::size_t RESERVED_THREADS = 7; // number of threads in app + margin of
 constexpr int32_t CNN_EXPECTED_C = NUM_CH_CHUNK; // num channels
 constexpr int32_t CNN_EXPECTED_T = WINDOW_SCANS; // num time samples in window
-ONNXTensorElementDataType CNN_EXPECTED_INPUT_DATA_TYPE = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+constexpr ONNXTensorElementDataType CNN_EXPECTED_INPUT_DATA_TYPE = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
 constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.75; // required confidence in active prediction to publish to consumer (else rtn unknown -> acts like no-op)
 // TODO: debounce window in consumer thread
 // - req sustained prediction for actuation before beginning actuation
@@ -51,7 +52,7 @@ struct LoadedModel_s {
 
     // IO Contract
     // expected datatype for tensors
-    std::array<int,3> input_shape; // should never be more than 3 in length
+    std::array<int64_t,3> input_shape; // should never be more than 3 in length
     bool input_tensor_order_is_1ct = true; // true for [1,C,T], false for [1,T,C]
     // artifact cleaning happens at window-level, so we should always have same-size windows.
     int32_t expected_C;

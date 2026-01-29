@@ -74,7 +74,6 @@ class ModelMetrics:
     std_fold_balanced_accuracy: float
     avg_fold_accuracy: float
     std_fold_accuracy: float
-    # TODO: investigate metrics used in literature for this purpose
 
 @dataclass(frozen=True)
 class FinalTrainResults:

@@ -162,7 +162,7 @@ struct StateStore_s{
 
     // atomic to notify consumer when actuator is actuating (consumer should sleep during this brief period)
     std::atomic<bool> g_is_currently_actuating{false}; // consumer should freeze during actuation
-    std::atomic<bool> g_consumer_ack_actuation_stop{false}; // 
+    std::atomic<bool> g_consumer_ack_actuation_stop{true}; // force consumer to ack actuation stop (this gets set to false when actuating starts and must be set to true again by cons)
 
     // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success
