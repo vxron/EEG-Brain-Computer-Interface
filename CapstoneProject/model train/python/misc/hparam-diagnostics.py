@@ -1,8 +1,3 @@
-"""
-COMPREHENSIVE DIAGNOSTIC SCRIPT for CNN Training Debug Logs
-Analyzes fold balance, batch quality, convergence, holdout splits, and hyperparameter tuning
-"""
-
 import re
 import numpy as np
 from collections import defaultdict, Counter
@@ -758,11 +753,6 @@ def quick_check(log_text_or_path):
         'groups': group_ok,
     }
 
-
-# ============================================================================
-# USAGE EXAMPLES
-# ============================================================================
-
 if __name__ == "__main__":
     
     print("CNN Training Diagnostic Tool")
@@ -774,12 +764,3 @@ if __name__ == "__main__":
         print(f"Reading log from: {log_path}\n")
         log_text = parse_log_file(log_path)
         generate_report(log_text, verbose=True, save_plots=True)
-    else:
-        # Use embedded log or prompt user
-        print("\nUsage options:")
-        print("  python diagnose_training_v3.py <path_to_debug_log.txt>")
-        print("\nOr paste your log text into the log_text variable below and run.")
-        print("\nFor quick check only:")
-        print("  >>> from diagnose_training_v3 import quick_check")
-        print("  >>> ok, summary = quick_check('path/to/log.txt')")
-        print("  >>> print(f'Training OK: {ok}')")

@@ -22,6 +22,7 @@
 #include "utils/SignalQualityAnalyzer.h"
 #include <filesystem>
 #include "utils/SessionPaths.hpp"
+#include "classifier/ONNXClassifier.hpp"
 
 #ifdef USE_EEG_FILTERS
 #include "utils/Filters.hpp"
@@ -161,6 +162,20 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     size_t run_mode_bad_window_count = 0;
     size_t run_mode_clean_window_count = 0;
     SW_Timer_C run_mode_bad_window_timer;
+
+    // run mode pseudo state machine
+    int window_class = -1;
+    SSVEPState_E last_stable_prediction = SSVEP_Unknown;
+    SSVEPState_E curr_win_prediction = SSVEP_Unknown;
+    SSVEPState_E last_win_prediction = SSVEP_Unknown;
+    int num_windows_stable_prediction = 0;
+    int num_windows_unknown = 0;
+    // new window every 0.32s -> means we'll have 3s/0.32s = 9.375 windows necessary for 2s
+    int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10; // req users to look at stimulus for min 3s
+    int NUM_ALLOWED_WRONG_WINDOWS_BEFORE_DEBOUNCE_RESET = 3; // TODO
+    
+    // single instance of onnx env
+    ONNX_RT_C ONNX_RT;
 
 try{
     SignalQualityAnalyzer_C SignalQualityAnalyzer(&stateStoreRef);
@@ -416,8 +431,12 @@ try{
     TestFreq_E prevLabel = TestFreq_None;
 
     while(!g_stop.load(std::memory_order_relaxed)){
-        // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============
-    
+        // if currently actuating -> skip everything
+        if(stateStoreRef.g_is_currently_actuating.load(std::memory_order_acquire)){
+            continue;
+        }
+        
+        // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============ 
         // check if we need to stop writing calib data and start training thread
         handle_finalize_if_requested();
 
@@ -543,8 +562,21 @@ try{
         }
         
         else if(currState == UIState_Active_Run){
-            // run ftr extraction + classifier pipeline to get decision
-            // TODO WHEN READY: add ftr vector + make decision here for run mode
+            // if actuation stop must be acked -> ack and reset all counters/preds to be safe
+            if(!stateStoreRef.g_consumer_ack_actuation_stop.load(std::memory_order_acquire)){
+                stateStoreRef.g_consumer_ack_actuation_stop.store(true, std::memory_order_release);
+                // resets
+            }
+
+            if(stateStoreRef.g_onnx_session_needs_reload.load(std::memory_order_acquire)){
+                std::lock_guard<std::mutex> saved_sess_lock(stateStoreRef.saved_sessions_mutex);
+                int currSessIdx = stateStoreRef.currentSessionIdx.load(std::memory_order_acquire);
+                std::string model_dir = stateStoreRef.saved_sessions[currSessIdx].model_dir;
+                std::string model_arch = stateStoreRef.saved_sessions[currSessIdx].model_arch;
+                ONNX_RT.init_onnx_model(model_dir, model_arch);
+                // reload complete
+                stateStoreRef.g_onnx_session_needs_reload.store(false, std::memory_order_release);
+            }
             
             // TODO: NEEDS TESTING IN RUN MODE (BCUZ WE HAVENT IMPLEMENTED THIS MODE YET)
             SignalQualityAnalyzer.check_artifact_and_flag_window(window);
@@ -565,6 +597,8 @@ try{
                     run_mode_bad_window_timer.start_timer(std::chrono::milliseconds{9000});
                 }
                 run_mode_bad_window_count++;
+                // reset counter for debounce (TODO: DECIDE IF WANT TO KEEP OR REMOVE FOR MORE AGGRESSIVENESS IN PRED)
+                num_windows_stable_prediction = 0; // reset
                 continue; // don't use this window
             } else {
                 // clean window
@@ -572,9 +606,60 @@ try{
                     // add to within-timer clean window count for comparison
                     run_mode_clean_window_count++;
                 }
+                window_class = ONNX_RT.classify_window(window);
+                // mapping from output logits->freqs
+                // hz_a -> 0, hz_b -> 1, hz_rest -> 2
+                // Convention: left = freq a, right = freq b
+                // logit 0 = LEFT, logit 1 = RIGHT, logit 2 = NONE
+                switch(window_class){
+                    case -1:
+                        curr_win_prediction = SSVEP_Unknown;
+                        break;
+                    case 0:
+                        curr_win_prediction = SSVEP_Left;
+                        break;
+                    case 1:
+                        curr_win_prediction = SSVEP_Right;
+                        break;
+                    case 2:
+                        curr_win_prediction = SSVEP_None;
+                        break;
+                    default:
+                        curr_win_prediction = SSVEP_Unknown;
+                        break; // should never reach here
+                }
+
+                if(curr_win_prediction==SSVEP_Unknown){
+                    num_windows_unknown++;
+                }
+                
+                if(curr_win_prediction==last_win_prediction){
+                    // building twds new prediction
+                    num_windows_stable_prediction++;
+                }
+                else if(curr_win_prediction!=last_win_prediction){
+                    num_windows_stable_prediction = 0; // reset
+                }
+                // debounce for minimum windows before we publish new cmd to actuation
+                // should have consistent windows for about 2 seconds to register user really looking at target
+                // in that span, allow A FEW SSVEP_Nones or SSVEP_Unknowns in case of bad windows - before calling off 
+                // check if debounce period has passed
+                if(num_windows_stable_prediction > NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION){
+                    // check if it's diff than the state we're alr in
+                    if(last_stable_prediction == curr_win_prediction){
+                        // do nothn
+                    } else {
+                        // request actuation if it's an actuating state
+                        if(curr_win_prediction == SSVEP_Left || curr_win_prediction == SSVEP_Right){
+                            std::lock_guard<std::mutex> lock_actuation(stateStoreRef.mtx_actuation_request);
+                            stateStoreRef.actuation_requested = true;
+                            stateStoreRef.actuation_direction = curr_win_prediction;
+                            stateStoreRef.actuation_request.notify_one(); // notify actuator thread
+                        }
+                    }
+                }   
             }
         }
-        
 	}
     // exiting due to producer exiting means we need to close window rb
     window.sliding_window.close();
@@ -637,9 +722,9 @@ void http_thread_fn(HttpServer_C& http){
     }
 }
 
-/* HADEEL, THE SCRIPT MUST OUTPUT
+/* THE SCRIPT MUST OUTPUT
 (1) ONNX MODELS
-(2) BEST TWO FREQUENCIES TO USE (HIGHEST SNR FOR THIS PERSON)
+(2) BEST TWO FREQUENCIES TO USE 
 --> Script must output to <model_dir>/train_result.json
 */
 void training_manager_thread_fn(StateStore_s& stateStoreRef){
@@ -742,10 +827,21 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         int rc = std::system(cmd.c_str());
 
         // TODO: parse json result to write best freqs to state store
-
+        const std::string& body = req.body; // req needs to be path
+        std::string best_freq_left_hz = "";
+        std::string best_freq_right_hz = "";
+        TestFreq_E freq_left_hz_e = TestFreq_None;
+        TestFreq_E freq_right_hz_e = TestFreq_None;
+        bool issuesFound = false;
+        std::string issues_str = "";
+        JSON::extract_json_int(body, "best_freq_left_hz", best_freq_left_hz);
+        JSON::extract_json_int(body, "best_freq_right_hz", best_freq_right_hz);
+        JSON::extract_json_int(body, "best_freq_left_e", freq_left_hz_e);
+        JSON::extract_json_int(body, "best_freq_right_e", freq_right_hz_e);
+        JSON::extract_json_string(body, "issues", issues_str);
 
         //(4) Publich result to state store
-        if (rc == 0) {
+        if (rc == 0) { // TODO: ALSO CHECK ISSUES HERE
             // signal to stim controller that model is ready
             {
                 std::lock_guard<std::mutex> lock3(stateStoreRef.mtx_model_ready);
@@ -761,6 +857,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
             s.id        = subject_id + "_" + session_id;
             s.label     = session_id; // TODO: make better
             s.model_dir = model_dir;
+            
             // TODO: PARSE JSON AND SET THE FREQS PROPERLY
             // temporary for now:
             s.freq_left_hz = 10;
@@ -789,6 +886,24 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
     }
 }
 
+void actuation_controller_thread_fn(StateStore_s& stateStoreRef){
+    // TODO: turn their Python code into C++ here
+    // implement cv to notify from consumer when ssvep signal is detected
+    // send torque commands as needed 
+    // do this by implementing custom driver for servos that exposes api to turn one way or the other
+    // ^^w guards
+    // OR could call their python script directly w the appropriate 'turn_left' or 'turn_right' args...,
+    // but this would introduce a lot of latency overheads & is def not optimal soln
+
+    // (1) wait for cv request from consumer thread -> then wake up
+    std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request()); // acquire lock momentarily
+    stateStoreRef.actuation_request.wait(actuation_lock, []{return stateStoreRef.actuation_requested;}); // go to sleep until notified -> then reacquire lock and lambda fxn[] to check predicate (arg2)
+    SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
+    
+    // (2) Implement requested_direction cycle
+
+}
+
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");
 
@@ -814,6 +929,7 @@ int main() {
     std::thread http(http_thread_fn, std::ref(server));
     std::thread stim(stimulus_thread_fn, std::ref(stateStore));
     std::thread train(training_manager_thread_fn, std::ref(stateStore));
+    std::thread actuate(actuation_controller_thread_fn, std::ref(stateStore));
 
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
     while(g_stop.load(std::memory_order_acquire) == 0){

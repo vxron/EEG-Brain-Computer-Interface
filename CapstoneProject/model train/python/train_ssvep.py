@@ -35,6 +35,7 @@ from typing import Any
 from dataclasses import dataclass, asdict
 from collections import defaultdict
 from sklearn.model_selection import StratifiedGroupKFold
+import time
 
 import utils.utils as utils
 
@@ -667,6 +668,91 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
 # CV Fold building
 # -----------------------------
 
+def compute_optimal_k_folds(
+    *,
+    n_groups_c0: int,
+    n_groups_c1: int,
+    n_groups_c2: int,
+    n_windows_c0: int,
+    n_windows_c1: int,
+    n_windows_c2: int,
+    min_groups_per_fold: int = 2,
+    min_windows_per_fold: int = 12,
+    preferred_k: int = 5,
+    logger = None,
+) -> tuple[int, str]:
+    """
+    Intelligently determines optimal number of CV folds based on data availability.
+    
+    Args:
+        n_groups_cX: Number of groups for each class
+        n_windows_cX: Total windows for each class
+        min_groups_per_fold: Minimum groups per class per fold
+        min_windows_per_fold: Minimum windows per class per fold
+        preferred_k: Ideal number of folds (if data supports it)
+        logger: Optional logger
+    
+    Returns:
+        (k_optimal, reason_str)
+    """
+    
+    k_limits = []
+    reasons = []
+    
+    # Constraint 1: Groups per fold (with safety factor for variance)
+    safety_factor = 1.5  # Account for group size variance
+    
+    for cls_idx, n_groups in enumerate([n_groups_c0, n_groups_c1, n_groups_c2]):
+        if n_groups == 0:
+            k_limits.append(0)
+            reasons.append(f"c{cls_idx} has 0 groups")
+            continue
+        
+        required_groups_per_fold = min_groups_per_fold * safety_factor
+        max_k_groups = int(n_groups / required_groups_per_fold)
+        k_limits.append(max_k_groups)
+        
+        if max_k_groups < preferred_k:
+            reasons.append(
+                f"c{cls_idx} ({n_groups} groups → max k={max_k_groups} with variance safety)"
+            )
+    
+    # Constraint 2: Windows per fold
+    for cls_idx, n_windows in enumerate([n_windows_c0, n_windows_c1, n_windows_c2]):
+        if n_windows == 0:
+            k_limits.append(0)
+            reasons.append(f"c{cls_idx} has 0 windows")
+            continue
+        
+        max_k_windows = n_windows // min_windows_per_fold
+        k_limits.append(max_k_windows)
+        
+        if max_k_windows < preferred_k:
+            reasons.append(
+                f"c{cls_idx} windows ({n_windows} windows → max k={max_k_windows})"
+            )
+    
+    # Take most restrictive constraint
+    k_optimal = min(k_limits) if k_limits else 0
+    k_optimal = max(3, min(k_optimal, preferred_k)) # min 3 folds
+    
+    # Build explanation
+    if k_optimal == preferred_k:
+        reason_str = f"Using preferred k={preferred_k}"
+    elif k_optimal >= 2:
+        limiting_reasons = [r for i, r in enumerate(reasons) if k_limits[i] == min(k_limits)]
+        reason_str = f"Reduced to k={k_optimal}. {limiting_reasons[0] if limiting_reasons else ''}"
+    else:
+        reason_str = f"FATAL: Cannot create valid folds"
+    
+    if logger:
+        logger.log(f"[K_FOLDS] Groups: c0={n_groups_c0} c1={n_groups_c1} c2={n_groups_c2}")
+        logger.log(f"[K_FOLDS] Windows: c0={n_windows_c0} c1={n_windows_c1} c2={n_windows_c2}")
+        logger.log(f"[K_FOLDS] Selected k={k_optimal} (preferred={preferred_k})")
+        logger.log(f"[K_FOLDS] {reason_str}")
+    
+    return k_optimal, reason_str
+
 def count_groups_per_class(
     *,
     yb: np.ndarray,
@@ -813,12 +899,8 @@ def validate_folds_strict(
                         "actual": count,
                     }
                 ))
-        
-        # check class balance in val
-        imbalance_pct, _ = mean_val_imbalance_pct(yb, folds, n_classes=3)  # e.g. returns 0..100
-        max_imbalance = max(max_imbalance, imbalance_pct)
 
-       # check class balance in train
+        # check class balance in train
         if tr_total > 0:
             fracs_tr = [tr0/tr_total, tr1/tr_total, tr2/tr_total]
             max_frac_tr = max(fracs_tr)
@@ -835,13 +917,17 @@ def validate_folds_strict(
             ))
             ok = False
 
-    if max_imbalance > 0.15:
+    # check class balance in val
+    imbalance_pct, _ = mean_val_imbalance_pct(yb, folds, n_classes=3)  # e.g. returns 0..100
+    max_imbalance = max(max_imbalance, imbalance_pct)
+
+    if max_imbalance > 15: # in percent
         # keep ok = true but warn...
         issues.append(utils.issue(
                 "FOLDS",
                 "Imbalance in val fold",
             ))
-    if max_imbalance_tr > 0.20:
+    if max_imbalance_tr > 0.2: # in decimal
         # keep ok = true but warn...
         issues.append(utils.issue(
                 "FOLDS",
@@ -855,7 +941,7 @@ def make_cv_folds_by_blocked_windows(
     yb: np.ndarray,
     trial_ids: np.ndarray,
     window_ids: np.ndarray,
-    k: int,
+    k: int | None = None, # can autodetect
     seed: int,
     n_time: int,
     hop_samples: int,
@@ -863,7 +949,7 @@ def make_cv_folds_by_blocked_windows(
     hz_a: int,
     hz_b: int,
     debug_tag: str = "CV",
-) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[utils.TrainIssue], np.ndarray]:
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[utils.TrainIssue], np.ndarray, np.ndarray]:
     """
     Stratified CV on *blocked window groups*:
       - windows close in time (overlapping) are grouped into the same "block" group
@@ -903,6 +989,7 @@ def make_cv_folds_by_blocked_windows(
         yb=yb,
         window_ids=window_ids,
         block_size_windows=int(block_size_windows),
+        seed=seed,
     )
     # apply keep mmask to all window-level arrays
     yb  = yb[keep==1]
@@ -926,17 +1013,43 @@ def make_cv_folds_by_blocked_windows(
     groups_c0 = uniq_groups[group_label == 0]
     groups_c1 = uniq_groups[group_label == 1]
     groups_c2 = uniq_groups[group_label == 2]
+    n_windows_c0 = int((yb == 0).sum())
+    n_windows_c1 = int((yb == 1).sum())
+    n_windows_c2 = int((yb == 2).sum())
     # shuffle for randomness
     rng = np.random.default_rng(seed)
     rng.shuffle(groups_c0)
     rng.shuffle(groups_c1)
     rng.shuffle(groups_c2)
     
-    k_eff = min(k, len(groups_c0), len(groups_c1), len(groups_c2))
+    if k is None or k <= 0:
+        # Auto-detect optimal k
+        k_eff, k_reason = compute_optimal_k_folds(
+            n_groups_c0=len(groups_c0),
+            n_groups_c1=len(groups_c1),
+            n_groups_c2=len(groups_c2),
+            n_windows_c0=n_windows_c0,
+            n_windows_c1=n_windows_c1,
+            n_windows_c2=n_windows_c2,
+            min_groups_per_fold=2,
+            min_windows_per_fold=12,
+            preferred_k=5,  # Default preference
+            logger=debug_logger,
+        )
+    else:
+        # User specified k, but still bound by available groups
+        k_requested = k
+        k_eff = min(k, len(groups_c0), len(groups_c1), len(groups_c2))
+        
+        if k_eff < k_requested and debug_logger:
+            debug_logger.log(
+                f"[{debug_tag}] Requested k={k_requested} reduced to k={k_eff} "
+                f"(limited by groups: c0={len(groups_c0)} c1={len(groups_c1)} c2={len(groups_c2)})"
+            )
     
     if k_eff < 2:
         issues.append({"stage": "FOLDS", "message": "Not enough groups per class"})
-        return [], issues, keep
+        return [], issues, keep, []
 
     # 3) Distribute groups with size-awareness
     # This helps distribute large and small groups more evenly
@@ -1031,7 +1144,7 @@ def make_cv_folds_by_blocked_windows(
             debug_logger.log(f"[{debug_tag}] Fold validation FAILED")
             for r in reasons[:10]:
                 debug_logger.log(f"[{debug_tag}]   {r.stage}: {r.message}")
-        return [], issues, keep
+        return [], issues, keep, groups
     
     # Success - summarize
     if debug_logger:
@@ -1048,7 +1161,7 @@ def make_cv_folds_by_blocked_windows(
         )
         debug_logger.log(f"[{debug_tag}] SUCCESS: Created {k_eff} balanced folds (manual round-robin)")
     
-    return folds, issues, keep
+    return folds, issues, keep, groups
 
 
 def compute_block_size_windows(
@@ -1290,11 +1403,11 @@ def select_best_pair(
             continue
 
         k = int(gen_cfg.number_cross_val_folds)
-        folds, fold_issues, keep = make_cv_folds_by_blocked_windows(
+        folds, fold_issues, keep, groups_pair = make_cv_folds_by_blocked_windows(
             yb=yb,
             trial_ids=tp,
             window_ids=wp,
-            k=k,
+            k=None,
             seed=0,
             n_time=info.n_time,    # window length in samples
             hop_samples=utils.HOP_SAMPLES,
@@ -1308,6 +1421,15 @@ def select_best_pair(
         yb = yb[keep]
         tp = tp[keep]
         wp = wp[keep]
+
+        if len(folds) < 2:
+            pair_issues.append(utils.issue(
+                "PAIR_SEARCH",
+                "Fold build failed for pair",
+                {"hz_a": int(hz_a), "hz_b": int(hz_b), "n_fold_issues": int(len(fold_issues))},
+            ))
+            pair_issues.extend(fold_issues)
+            continue # skip this pair
 
         # reject based on val imbalance before training
         mean_imb, per_fold_imbs = mean_val_imbalance_pct(yb, folds, n_classes=3)
@@ -1325,15 +1447,6 @@ def select_best_pair(
                     f"per_fold={','.join(f'{x:.1f}' for x in per_fold_imbs)}"
                 )
             continue
-
-        if len(folds) < 2:
-            pair_issues.append(utils.issue(
-                "PAIR_SEARCH",
-                "Fold build failed for pair",
-                {"hz_a": int(hz_a), "hz_b": int(hz_b), "n_fold_issues": int(len(fold_issues))},
-            ))
-            pair_issues.extend(fold_issues)
-            continue # skip this pair
 
         # ===== 2) score the pair using trainer API =====
         if args.arch == "CNN":
@@ -1386,8 +1499,9 @@ def select_best_pair(
     b = best_metrics.freq_b_hz
 
     # Make left/right deterministic
-    # Convention: left = lower Hz, right = higher Hz
-    left_hz, right_hz = (a, b) if a < b else (b, a)
+    # Convention: left = freq a, right = freq b
+    left_hz = a
+    right_hz = b
 
     debug = {
         "rejected_pairs_from_class_skew": rejected_pairs,
@@ -1406,7 +1520,7 @@ def write_train_result_json(model_dir: Path, *, train_ok: bool, onnx_ok: bool, c
                             left_hz: int, right_hz: int,
                             left_e: int, right_e: int,
                             final_holdout_bal_acc: float = 0.0, final_train_acc: float = 0.0,
-                            rejected_pairs_from_class_skew: list[str],
+                            rejected_pairs_from_class_skew: list[str], elapsed_time: float = 0.0,
                             issues: list[utils.TrainIssue] | None = None,
                             extra: dict[str, Any] | None = None) -> Path:
     payload = {
@@ -1423,6 +1537,7 @@ def write_train_result_json(model_dir: Path, *, train_ok: bool, onnx_ok: bool, c
         "final_holdout_acc": float(final_holdout_bal_acc),
         "final_train_acc": float(final_train_acc),
         "rejected_pairs_from_class_skew": rejected_pairs_from_class_skew,
+        "training_time": elapsed_time,
         "issues": utils.issues_to_json(issues or [])
     }
     if extra:
@@ -1462,6 +1577,7 @@ def hz_to_enum_mapping() -> dict[int, int]:
 # Orchestrator (MAIN)
 # -----------------------------
 def main():
+    start_time = time.time()
     args = get_args()
 
     issues: list[utils.TrainIssue] = [] # should contain utils.TrainIssue
@@ -1536,15 +1652,15 @@ def main():
         c0 = int((yb == 0).sum())
         c1 = int((yb == 1).sum())
         c2 = int((yb == 2).sum())
-        k_final = int(gen_cfg.number_cross_val_folds)
+        k_final = int(gen_cfg.number_cross_val_folds) #TODO: might not need anymore w adaptive k??
         folds_final: list[tuple[np.ndarray, np.ndarray]] = []
         fold_issues: list[utils.TrainIssue] = []
         if c0 >= 2 and c1 >= 2 and c2 >= 2: # simple guard for min 2 folds
-            folds_final, fold_issues, keep = make_cv_folds_by_blocked_windows(
+            folds_final, fold_issues, keep, groups_pair = make_cv_folds_by_blocked_windows(
                 yb=yb,
                 trial_ids=tp,
                 window_ids=wp,
-                k=k_final,
+                k=None,
                 seed=0,
                 n_time=info.n_time,
                 hop_samples=utils.HOP_SAMPLES,
@@ -1575,6 +1691,7 @@ def main():
                 X_pair=Xp,
                 y_pair=yb,
                 trial_ids_pair=tp,
+                group_pair=groups_pair,
                 folds=folds_final,
                 n_ch=info.n_ch,
                 n_time=info.n_time,
@@ -1597,6 +1714,7 @@ def main():
                 {"best_left_hz": int(best_left_hz), "best_right_hz": int(best_right_hz)},
             )
 
+        elapsed = time.time() - start_time
         write_train_result_json(
             out_dir,
             train_ok=final.train_ok,
@@ -1612,6 +1730,7 @@ def main():
             final_holdout_bal_acc=final.final_holdout_bal_acc,
             final_train_acc=final.final_train_acc,
             rejected_pairs_from_class_skew=rejected_pairs_from_class_skew,
+            elapsed_time=elapsed,
             issues=issues,
             extra={
                 "n_windows_total": int(X.shape[0]) if X is not None else 0,
@@ -1637,6 +1756,7 @@ def main():
     hz2e = hz_to_enum_mapping()
     left_e=hz2e.get(best_left_hz, -1)
     right_e=hz2e.get(best_right_hz, -1)
+    elapsed = time.time() - start_time
 
     write_train_result_json(
         out_dir,
@@ -1652,6 +1772,7 @@ def main():
         right_e=right_e,
         issues=issues,
         rejected_pairs_from_class_skew=[-1],
+        elapsed_time=elapsed,
         extra={
             "fatal_stage": issues[-1].stage if issues else "UNKNOWN",
             "n_windows_total": int(X.shape[0]) if X is not None else 0,
