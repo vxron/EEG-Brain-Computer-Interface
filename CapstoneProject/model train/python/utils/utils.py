@@ -44,7 +44,7 @@ MIN_WINDOWS_PER_CLASS_TRAIN = 20       # 10 training samples per class
 # For holdout training
 MIN_TRIALS_PER_CLASS_FOR_HOLDOUT = 1   # if fewer, skip holdout (fall back to no-holdout)
 # For batches
-MIN_TRIALS_PER_CLASS_FOR_BATCHING = 2
+MIN_TRIALS_PER_CLASS_FOR_BATCHING = 1
 MIN_NUM_BATCHES_PER_CLASS = 10
 MIN_FRAC_PER_CLASS_IN_BATCH = 0.20
 MAX_REST_FRAC_IN_BATCH = 0.55

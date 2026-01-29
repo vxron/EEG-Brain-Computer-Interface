@@ -112,6 +112,7 @@ struct StateStore_s{
         std::string session;     // session_id
         std::string created_at;  // ISO time string
         std::string model_dir;   // model dir/path to load from
+        std::string model_arch;  // CNN vs SVM
         
         // run mode frequency pair to be sent to ui
         TestFreq_E freq_left_hz_e{TestFreq_None};
@@ -127,6 +128,7 @@ struct StateStore_s{
         .session = "",
         .created_at = "",
         .model_dir = "",
+        .model_arch = "",
         .freq_left_hz_e = TestFreq_None,
         .freq_right_hz_e = TestFreq_None,
         .freq_right_hz = 0,
@@ -144,6 +146,23 @@ struct StateStore_s{
         std::lock_guard<std::mutex> lock(saved_sessions_mutex);
         return saved_sessions;
     }
+
+    // flag to tell consumer it should re-init onnx model -> notify on session change
+    // - whenever currentSessionIdx changes (e.g. from sessions page, from training manager when training finishes)
+    std::atomic<bool> g_onnx_session_needs_reload{true}; // init true for first load
+    // TODO: make GENERAL to all things that should reload on new session (e.g. UI as well...)
+    // this can get set by stim controller when user selects a new or diff sess?
+
+    // ======================== Actuation thread Sync ======================
+    // cv to notify thread when consumer makes non-neutral inference (either left or right ssvep)
+    std::mutex mtx_actuation_request;
+    std::condition_variable actuation_request;
+    bool actuation_requested = false;
+    SSVEPState_E actuation_direction = SSVEP_Unknown; // data that comes with req
+
+    // atomic to notify consumer when actuator is actuating (consumer should sleep during this brief period)
+    std::atomic<bool> g_is_currently_actuating{false}; // consumer should freeze during actuation
+    std::atomic<bool> g_consumer_ack_actuation_stop{false}; // 
 
     // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success

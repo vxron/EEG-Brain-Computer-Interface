@@ -15,7 +15,6 @@ from collections import deque, defaultdict
 import utils.utils as utils
 
 # TODO: option on UI to tune (longer) or use defaults (faster)?
-# TODO: add 3rd neutral class -> 3 class classifiers!!!
 # TODO: plotting training ?? if time 
 
 # ===================== DEBUG HELPERS =====================
@@ -61,14 +60,14 @@ class CNNTrainConfig:
     # Optimization & Convergence Stability
     MAX_EPOCHS: int = 400            # number of epochs for final model training
     MAX_EPOCHS_CV: int = 300         # number of epochs while running all the pairwise models for comparison
-    MAX_EPOCHS_HTUNING: int = 200    # number of epochs while running all the candidate grids for hparam tuning
+    MAX_EPOCHS_HTUNING: int = 250    # number of epochs while running all the candidate grids for hparam tuning
     batch_size: int = 18             # how many (mostly indep, non-overlapping due to batching strategy) training windows the CNN sees at once before updating its weights (1 optimizer step) -> keep batches small for overlapping EEG windows
     learning_rate: float = 1e-3      # magnitude of gradient descent steps. smaller batches require smaller LR. (1e-3 is adam optimizer default)
     weight_decay: float = 1e-5       # regularization constant in Adam that penalizes large model weights to reduce overfitting
     seed: int = 0
 
     # Generalization Control
-    patience: int = 20               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
+    patience: int = 25               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
     min_delta: float = 2e-3          # numerical change in loss func necessary to consider real improvement 
 
     # Model Capacity & Sizing
@@ -85,19 +84,30 @@ class CNNTrainConfig:
     val_batch_mode: str = "FULL"     # how validation windows are batched for early-stopping stability ("FULL" = all at once, "FIXED" = constant-size batches)
     val_batch_size: int = 27         # used only if FIXED (kept larger than training batches for stable loss estimates)
 
-    norm_mode: str = "GroupNorm"     # normalization type ("GroupNorm" = batch-size independent, stable for small/variable batches; "BatchNorm" = slightly better with large, consistent batches but unstable for small ones)
+    norm_mode: str = "BatchNorm"     # normalization type ("GroupNorm" = batch-size independent, stable for small/variable batches; "BatchNorm" = slightly better with large, consistent batches but unstable for small ones)
 
 # Hyperparameter tuning space [if hparam tuning on, for final model training only] 
 HPARAM_SPACE = {
     "kernel_length": [63, 125, 187],  # 250 ms, 500 ms, or 750 ms temporal segments as layer 2 inputs
-    "pooling_factor": [2, 4, 5],      # layer 2 temporal downsampling 
+    "pooling_factor": [3, 4, 5],      # layer 2 temporal downsampling 
     "pooling_factor_final": [8, 10],  # final layer temporal downsampling
     "F1": [8, 16],                    # number of output temporal combinations from layer 1
     "learning_rate": [1e-3, 5e-4],
     "batch_size": [12, 15, 18],        # should be multiples of 3 for class balance per batch
     "dropout": [0.3, 0.5],
-    "norm_mode": ["GroupNorm", "BatchNorm"]
-    # total combos = 3 x 3 x 2 x 2 x 2 x 3 x 2 x 2 = 288
+    "norm_mode": ["GroupNorm", "BatchNorm"],
+    "patience": [20, 25],
+    # total combos = 3 x 3 x 2 x 2 x 2 x 3 x 2 x 2 x 2 x 2 = 1152
+}
+
+# more minimal hparam tuning with params that empirically had the greatest impact
+HPARAM_SPACE_MINIMAL = {
+    "kernel_length": [63, 125, 187],  # 250 ms, 500 ms, or 750 ms temporal segments as layer 2 inputs
+    "pooling_factor": [3, 4, 5],      # layer 2 temporal downsampling 
+    "pooling_factor_final": [8, 10],  # final layer temporal downsampling
+    "F1": [8, 16],                    # number of output temporal combinations from layer 1
+    "dropout": [0.3, 0.5],
+    # total combos = 3 x 3 x 2 x 2 x 2 x 2 = 144
 }
 
 def _derived_F2(cfg: CNNTrainConfig) -> int:
@@ -551,11 +561,12 @@ def make_stratified_trial_batches(
 
     return batches, batch_issues
 
-def debug_all_batches(loader, yb, logger, tag="BATCH"):
+def debug_all_batches(loader, *, logger):
     """
     Reports any imbalanced batches and returns issues.
     """
-    logger.log(f"[{tag}] Inspecting ALL batches...")
+    tag="BATCH"
+    _log(logger, f"[{tag}] Inspecting ALL batches...")
     
     batch_issues = []
     
@@ -593,7 +604,7 @@ def debug_all_batches(loader, yb, logger, tag="BATCH"):
                         "actual": c0,
                     }
                 ))
-                logger.log(f"[{tag}] Batch {batch_i}: c0_frac={frac_c0:.2f} < {utils.MIN_FRAC_PER_CLASS_IN_BATCH}")
+                _log(logger,f"[{tag}] Batch {batch_i}: c0_frac={frac_c0:.2f} < {utils.MIN_FRAC_PER_CLASS_IN_BATCH}")
             
             # CHECK: MIN_FRAC_PER_CLASS_IN_BATCH for c1
             if frac_c1 < utils.MIN_FRAC_PER_CLASS_IN_BATCH:
@@ -608,7 +619,7 @@ def debug_all_batches(loader, yb, logger, tag="BATCH"):
                         "actual": c1,
                     }
                 ))
-                logger.log(f"[{tag}] Batch {batch_i}: c1_frac={frac_c1:.2f} < {utils.MIN_FRAC_PER_CLASS_IN_BATCH}")
+                _log(logger,f"[{tag}] Batch {batch_i}: c1_frac={frac_c1:.2f} < {utils.MIN_FRAC_PER_CLASS_IN_BATCH}")
             
             # CHECK: MAX_REST_FRAC_IN_BATCH
             if frac_c2 > utils.MAX_REST_FRAC_IN_BATCH:
@@ -623,7 +634,7 @@ def debug_all_batches(loader, yb, logger, tag="BATCH"):
                         "actual": c2,
                     }
                 ))
-                logger.log(f"[{tag}] Batch {batch_i}: rest_frac={frac_c2:.2f} > {utils.MAX_REST_FRAC_IN_BATCH}")
+                _log(logger,f"[{tag}] Batch {batch_i}: rest_frac={frac_c2:.2f} > {utils.MAX_REST_FRAC_IN_BATCH}")
             
             # CHECK: MAX_CLASS_IMBALANCE_IN_BATCH
             if c0 + c1 > 0:
@@ -640,12 +651,12 @@ def debug_all_batches(loader, yb, logger, tag="BATCH"):
                             "actual": min(c0, c1),
                         }
                     ))
-                    logger.log(f"[{tag}] Batch {batch_i}: imbalance={imbalance:.2f} > {utils.MAX_CLASS_IMBALANCE_IN_BATCH}")
+                    _log(logger,f"[{tag}] Batch {batch_i}: imbalance={imbalance:.2f} > {utils.MAX_CLASS_IMBALANCE_IN_BATCH}")
     
     # Summary statistics
     total_batches = len(batch_stats)
     if total_batches == 0:
-        logger.log(f"[{tag}] No batches to inspect")
+        _log(logger,f"[{tag}] No batches to inspect")
         return batch_issues
     
     sizes = [b["size"] for b in batch_stats]
@@ -653,11 +664,11 @@ def debug_all_batches(loader, yb, logger, tag="BATCH"):
     c1_counts = [b["c1"] for b in batch_stats]
     c2_counts = [b["c2"] for b in batch_stats]
     
-    logger.log(f"[{tag}] Total batches: {total_batches}")
-    logger.log(f"[{tag}] Batch sizes: min={min(sizes)} max={max(sizes)} mean={np.mean(sizes):.1f}")
-    logger.log(f"[{tag}] Class 0: min={min(c0_counts)} max={max(c0_counts)} mean={np.mean(c0_counts):.1f}")
-    logger.log(f"[{tag}] Class 1: min={min(c1_counts)} max={max(c1_counts)} mean={np.mean(c1_counts):.1f}")
-    logger.log(f"[{tag}] Class 2: min={min(c2_counts)} max={max(c2_counts)} mean={np.mean(c2_counts):.1f}")
+    _log(logger,f"[{tag}] Total batches: {total_batches}")
+    _log(logger,f"[{tag}] Batch sizes: min={min(sizes)} max={max(sizes)} mean={np.mean(sizes):.1f}")
+    _log(logger,f"[{tag}] Class 0: min={min(c0_counts)} max={max(c0_counts)} mean={np.mean(c0_counts):.1f}")
+    _log(logger,f"[{tag}] Class 1: min={min(c1_counts)} max={max(c1_counts)} mean={np.mean(c1_counts):.1f}")
+    _log(logger,f"[{tag}] Class 2: min={min(c2_counts)} max={max(c2_counts)} mean={np.mean(c2_counts):.1f}")
     
     return batch_issues
 
@@ -665,7 +676,7 @@ def make_trial_holdout_split(
     trial_ids: np.ndarray,
     y: np.ndarray,
     *,
-    holdout_frac: float = 0.1,
+    holdout_frac: float = 0.15,
     seed: int = 0,
     logger: utils.DebugLogger | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -703,11 +714,36 @@ def make_trial_holdout_split(
                 logger.log(f"[HOLDOUT] Class {cls} has only {len(trial_groups_per_class[cls])} trial-groups, need {utils.MIN_TRIALS_PER_CLASS_FOR_HOLDOUT}")
             return np.arange(len(trial_ids), dtype=np.int64), np.array([], dtype=np.int64)
     
-    # Target windows for holdout per class
-    target_c0 = max(5, int(np.ceil(n_c0 * holdout_frac)))
-    target_c1 = max(5, int(np.ceil(n_c1 * holdout_frac)))
-    target_c2 = max(5, int(np.ceil(n_c2 * holdout_frac)))
-    
+    # ADAPTIVE TARGETS: Ensure minimum viable batch creation
+    MIN_WINDOWS_PER_CLASS = 18  # Need for batch_size=18 (6 per class × 3 batches)
+
+    # Compute required fraction for each class
+    required_fracs = []
+    for cls, n_cls in enumerate([n_c0, n_c1, n_c2]):
+        if n_cls > 0:
+            req_frac = MIN_WINDOWS_PER_CLASS / n_cls
+            required_fracs.append(req_frac)
+            if logger:
+                logger.log(f"[HOLDOUT] Class {cls}: N={n_cls}, need={MIN_WINDOWS_PER_CLASS}, req_frac={req_frac:.3f}")
+
+    # Use maximum required fraction (most constraining class)
+    if required_fracs:
+        adaptive_frac = max(required_fracs)
+        adaptive_frac = min(adaptive_frac, 0.5)  # Cap at 50%
+
+        if adaptive_frac > holdout_frac:
+            if logger:
+                logger.log(f"[HOLDOUT] Adjusting: {holdout_frac:.2f} → {adaptive_frac:.2f}")
+            holdout_frac = adaptive_frac
+
+    # Now compute targets with adaptive fraction
+    target_c0 = max(MIN_WINDOWS_PER_CLASS, int(np.ceil(n_c0 * holdout_frac)))
+    target_c1 = max(MIN_WINDOWS_PER_CLASS, int(np.ceil(n_c1 * holdout_frac)))
+    target_c2 = max(MIN_WINDOWS_PER_CLASS, int(np.ceil(n_c2 * holdout_frac)))
+
+    if logger:
+        logger.log(f"[HOLDOUT] Targets: c0={target_c0}/{n_c0}, c1={target_c1}/{n_c1}, c2={target_c2}/{n_c2}")
+
     rng = np.random.default_rng(seed)
     
     # Shuffle trial-groups per class
@@ -786,6 +822,362 @@ def make_trial_holdout_split(
     
     return train_idx, holdout_idx
 
+def make_trial_holdout_split(
+    trial_ids: np.ndarray,
+    y: np.ndarray,
+    *,
+    holdout_frac: float = 0.15,
+    seed: int = 0,
+    logger: utils.DebugLogger | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Stratified TRIAL-wise holdout split (3-class).
+    Intended behavior:
+      - Holdout is ~holdout_frac of TOTAL windows (not per-class), chosen by selecting WHOLE trials.
+      - Stratified by trial label (one label per trial).
+      - Uses round-robin across classes to avoid one class/trial dominating.
+      - Never splits a trial across train/holdout.
+      - Guarantees each class appears in holdout + train (if feasible), else falls back to no-holdout.
+    Returns:
+      (train_idx, holdout_idx)  (both are arrays of window indices)
+    """
+    trial_ids = np.asarray(trial_ids).astype(np.int64)
+    y = np.asarray(y).astype(np.int64)
+
+    n_total = int(len(trial_ids))
+    if n_total == 0:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
+
+    # ----------------------------
+    # 1) Build trial -> indices mapping (DO NOT key by (trial,label))
+    # ----------------------------
+    trial_to_indices: dict[int, list[int]] = defaultdict(list)
+    for i, tid in enumerate(trial_ids.tolist()):
+        trial_to_indices[int(tid)].append(int(i))
+
+    uniq_trials = sorted(trial_to_indices.keys())
+
+    # ----------------------------
+    # 2) Infer ONE label per trial; if not label-pure, we cannot safely do trial-wise stratification
+    # ----------------------------
+    trial_to_label: dict[int, int] = {}
+    non_pure_trials: list[int] = []
+
+    for tid in uniq_trials:
+        idxs = np.asarray(trial_to_indices[tid], dtype=np.int64)
+        labels = np.unique(y[idxs])
+        if labels.size != 1:
+            non_pure_trials.append(tid)
+            continue
+        trial_to_label[tid] = int(labels[0])
+
+    if non_pure_trials:
+        # This is a real bug upstream (trial id assignment / label purity invariant).
+        # Safer to fall back than silently create nonsense splits.
+        if logger:
+            logger.log(
+                f"[HOLDOUT] ERROR: Found {len(non_pure_trials)} non-label-pure trials "
+                f"(examples: {non_pure_trials[:5]}). Falling back to no-holdout."
+            )
+        return np.arange(n_total, dtype=np.int64), np.array([], dtype=np.int64)
+
+    # ----------------------------
+    # 3) Group trials by class
+    # ----------------------------
+    trials_per_class: dict[int, list[int]] = {0: [], 1: [], 2: []}
+    for tid, lab in trial_to_label.items():
+        if lab in trials_per_class:
+            trials_per_class[lab].append(tid)
+
+    # Need at least MIN_TRIALS_PER_CLASS_FOR_HOLDOUT trials in each class to have any chance
+    for cls in [0, 1, 2]:
+        if len(trials_per_class[cls]) < utils.MIN_TRIALS_PER_CLASS_FOR_HOLDOUT:
+            if logger:
+                logger.log(
+                    f"[HOLDOUT] Class {cls} has only {len(trials_per_class[cls])} trials, "
+                    f"need {utils.MIN_TRIALS_PER_CLASS_FOR_HOLDOUT}. Returning no-holdout."
+                )
+            return np.arange(n_total, dtype=np.int64), np.array([], dtype=np.int64)
+
+    # ----------------------------
+    # 4) Compute target holdout size as a FRACTION OF TOTAL windows
+    #    (because whole-trial selection will overshoot a bit, we treat this as a soft target)
+    # ----------------------------
+    holdout_frac = float(np.clip(holdout_frac, 0.0, 0.5))
+    target_holdout_total = int(np.ceil(n_total * holdout_frac))
+
+    if logger:
+        n_c0 = int((y == 0).sum())
+        n_c1 = int((y == 1).sum())
+        n_c2 = int((y == 2).sum())
+        logger.log(f"[HOLDOUT] Total windows={n_total} (c0={n_c0} c1={n_c1} c2={n_c2})")
+        logger.log(f"[HOLDOUT] Target holdout ~= {target_holdout_total} windows ({holdout_frac:.2f} of total)")
+
+    # ----------------------------
+    # 5) Shuffle trials within each class; round-robin pick whole trials until we hit target_total
+    #    Also: ensure at least 1 trial from each class is picked (if possible) so holdout has all classes.
+    # ----------------------------
+    rng = np.random.default_rng(int(seed))
+    for cls in [0, 1, 2]:
+        rng.shuffle(trials_per_class[cls])
+
+    positions = {0: 0, 1: 0, 2: 0}
+    holdout_trials: set[int] = set()
+    holdout_counts = {0: 0, 1: 0, 2: 0}
+    holdout_total = 0
+
+    # Phase A: guarantee presence (one trial per class)
+    for cls in [0, 1, 2]:
+        tid = trials_per_class[cls][0]
+        positions[cls] = 1
+        holdout_trials.add(tid)
+        sz = len(trial_to_indices[tid])
+        holdout_counts[cls] += sz
+        holdout_total += sz
+
+    # Phase B: round-robin fill until soft target reached
+    max_iters = 100000
+    it = 0
+    while holdout_total < target_holdout_total and it < max_iters:
+        it += 1
+        made_progress = False
+
+        for cls in [0, 1, 2]:
+            if holdout_total >= target_holdout_total:
+                break
+
+            if positions[cls] >= len(trials_per_class[cls]):
+                continue
+
+            tid = trials_per_class[cls][positions[cls]]
+            positions[cls] += 1
+            if tid in holdout_trials:
+                continue
+
+            holdout_trials.add(tid)
+            sz = len(trial_to_indices[tid])
+            holdout_counts[cls] += sz
+            holdout_total += sz
+            made_progress = True
+
+        if not made_progress:
+            break
+
+    # ----------------------------
+    # 6) Convert selected trials to indices
+    # ----------------------------
+    holdout_indices_list: list[int] = []
+    for tid in holdout_trials:
+        holdout_indices_list.extend(trial_to_indices[tid])
+
+    holdout_idx = np.array(sorted(holdout_indices_list), dtype=np.int64)
+    holdout_mask = np.zeros(n_total, dtype=bool)
+    holdout_mask[holdout_idx] = True
+    train_idx = np.arange(n_total, dtype=np.int64)[~holdout_mask]
+
+    # ----------------------------
+    # 7) Validate both splits contain all classes
+    # ----------------------------
+    def _counts(idxs: np.ndarray) -> tuple[int, int, int]:
+        return (
+            int((y[idxs] == 0).sum()),
+            int((y[idxs] == 1).sum()),
+            int((y[idxs] == 2).sum()),
+        )
+
+    tr_c0, tr_c1, tr_c2 = _counts(train_idx)
+    ho_c0, ho_c1, ho_c2 = _counts(holdout_idx)
+
+    if logger:
+        logger.log(
+            f"[HOLDOUT] Selected trials: {len(holdout_trials)} | "
+            f"hold windows={len(holdout_idx)} (c0={ho_c0} c1={ho_c1} c2={ho_c2}) | "
+            f"train windows={len(train_idx)} (c0={tr_c0} c1={tr_c1} c2={tr_c2})"
+        )
+
+    # If any class missing in either split, fallback to no-holdout
+    if (tr_c0 == 0 or tr_c1 == 0 or tr_c2 == 0) or (ho_c0 == 0 or ho_c1 == 0 or ho_c2 == 0):
+        if logger:
+            logger.log("[HOLDOUT] Missing class in train/holdout after trial selection. Returning no-holdout.")
+        return np.arange(n_total, dtype=np.int64), np.array([], dtype=np.int64)
+
+    return train_idx, holdout_idx
+
+def make_group_holdout_split(
+    group_ids: np.ndarray,
+    y: np.ndarray,
+    *,
+    holdout_frac: float = 0.15,
+    seed: int = 0,
+    logger=None,
+    min_groups_per_class: int = 1,   # require at least this many groups in holdout per class (if possible)
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Leakage-safe holdout split where the leakage unit is group_id.
+
+    - Splits by group_id (ALL windows in a group stay together).
+    - Targets ~holdout_frac of TOTAL windows (not per-class targets).
+    - Uses round-robin across classes to avoid one class dominating.
+    - Tries to avoid large overshoot by skipping a group if it would overshoot badly.
+
+    Returns: (train_idx, holdout_idx)
+    """
+
+    group_ids = np.asarray(group_ids).astype(np.int64)
+    y = np.asarray(y).astype(np.int64)
+    n = int(len(y))
+    if n == 0:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
+
+    # Map group_id -> window indices
+    gid_to_idx: dict[int, np.ndarray] = {}
+    for gid in np.unique(group_ids):
+        gid_to_idx[int(gid)] = np.where(group_ids == gid)[0].astype(np.int64)
+
+    # Determine each group's (assumed) label and size
+    # If a group is not label-pure, we abort to avoid silent leakage/bugs.
+    groups_by_class: dict[int, list[dict]] = {0: [], 1: [], 2: []}
+    for gid, idxs in gid_to_idx.items():
+        labels = y[idxs]
+        uniq = np.unique(labels)
+        cls = int(uniq[0])
+        groups_by_class[cls].append({"gid": int(gid), "idxs": idxs, "size": int(len(idxs))})
+
+    # If any class has zero groups, can't do stratified holdout safely
+    for cls in (0, 1, 2):
+        if len(groups_by_class[cls]) == 0:
+            if logger:
+                logger.log(f"[HOLDOUT] Class {cls} has 0 groups; falling back to no-holdout")
+            return np.arange(n, dtype=np.int64), np.array([], dtype=np.int64)
+
+    rng = np.random.default_rng(seed)
+    for cls in (0, 1, 2):
+        rng.shuffle(groups_by_class[cls])
+
+    total_target = int(np.ceil(n * float(holdout_frac)))
+    total_target = max(1, total_target)
+
+    if logger:
+        c0 = int((y == 0).sum()); c1 = int((y == 1).sum()); c2 = int((y == 2).sum())
+        logger.log(f"[HOLDOUT] Total windows={n} (c0={c0} c1={c1} c2={c2})")
+        logger.log(f"[HOLDOUT] Target holdout ~= {total_target} windows ({holdout_frac:.2f} of total)")
+
+    # Round-robin selection over classes, choosing groups (not trials)
+    pos = {0: 0, 1: 0, 2: 0}
+    holdout_gids: list[int] = []
+    holdout_indices: list[int] = []
+    holdout_count = {0: 0, 1: 0, 2: 0}
+    holdout_total = 0
+
+    # Helper: check if we can still add at least one group from each class
+    def has_remaining(cls: int) -> bool:
+        return pos[cls] < len(groups_by_class[cls])
+
+    # Phase 1: ensure each class appears in holdout (if possible)
+    for cls in (0, 1, 2):
+        if not has_remaining(cls):
+            if logger:
+                logger.log(f"[HOLDOUT] No remaining groups for class {cls}; falling back to no-holdout")
+            return np.arange(n, dtype=np.int64), np.array([], dtype=np.int64)
+
+        g = groups_by_class[cls][pos[cls]]
+        pos[cls] += 1
+        holdout_gids.append(g["gid"])
+        holdout_indices.extend(g["idxs"].tolist())
+        holdout_count[cls] += g["size"]
+        holdout_total += g["size"]
+
+    # Phase 2: Size-aware round-robin (LFD strategy)
+    # Sort groups by size descending within each class
+    for cls in (0, 1, 2):
+        groups_by_class[cls].sort(key=lambda g: -g["size"])
+
+    max_iters = 10000
+    iters = 0
+
+    while holdout_total < total_target and iters < max_iters:
+        iters += 1
+        made_progress = False
+
+        for cls in (0, 1, 2):
+            if holdout_total >= total_target:
+                break
+            if not has_remaining(cls):
+                continue
+
+            g = groups_by_class[cls][pos[cls]]
+            gsize = g["size"]
+
+            # IMPROVED: Only skip if we'd MASSIVELY overshoot AND we have alternatives
+            new_total = holdout_total + gsize
+            overshoot = new_total - total_target
+
+            # More lenient overshoot tolerance for small groups
+            if gsize <= 3:
+                # Always take small groups (helps class 2 REST)
+                pass
+            elif overshoot > max(10, total_target * 0.2):
+                # Only skip if huge overshoot AND we can try other classes
+                remaining_classes = sum(1 for c in (0,1,2) if has_remaining(c))
+                if remaining_classes > 1:
+                    pos[cls] += 1
+                    continue
+
+            # Take group
+            pos[cls] += 1
+            holdout_gids.append(g["gid"])
+            holdout_indices.extend(g["idxs"].tolist())
+            holdout_count[cls] += gsize
+            holdout_total = new_total
+            made_progress = True
+
+        if not made_progress:
+            # Force progress by taking smallest available
+            candidates = []
+            for cls in (0, 1, 2):
+                if has_remaining(cls):
+                    candidates.append((groups_by_class[cls][pos[cls]]["size"], cls))
+            if not candidates:
+                break
+            _, best_cls = min(candidates, key=lambda t: t[0])
+            g = groups_by_class[best_cls][pos[best_cls]]
+            pos[best_cls] += 1
+            holdout_gids.append(g["gid"])
+            holdout_indices.extend(g["idxs"].tolist())
+            holdout_count[best_cls] += g["size"]
+            holdout_total += g["size"]
+
+    holdout_idx = np.array(sorted(set(holdout_indices)), dtype=np.int64)
+    hold_mask = np.zeros(n, dtype=bool)
+    hold_mask[holdout_idx] = True
+    train_idx = np.arange(n, dtype=np.int64)[~hold_mask]
+
+    # Final sanity: all classes present in both splits
+    def class_counts(idxs: np.ndarray) -> tuple[int, int, int]:
+        return (int((y[idxs] == 0).sum()), int((y[idxs] == 1).sum()), int((y[idxs] == 2).sum()))
+
+    trc0, trc1, trc2 = class_counts(train_idx)
+    hoc0, hoc1, hoc2 = class_counts(holdout_idx)
+
+    if logger:
+        logger.log(f"[HOLDOUT] Selected groups: {len(set(holdout_gids))} | hold windows={len(holdout_idx)} "
+                   f"(c0={hoc0} c1={hoc1} c2={hoc2}) | train windows={len(train_idx)} "
+                   f"(c0={trc0} c1={trc1} c2={trc2})")
+
+    # If holdout lost a class (can happen with extreme imbalance + huge groups), fail safe
+    if hoc0 == 0 or hoc1 == 0 or hoc2 == 0:
+        if logger:
+            logger.log("[HOLDOUT] Holdout missing a class after group selection; falling back to no-holdout")
+        return np.arange(n, dtype=np.int64), np.array([], dtype=np.int64)
+
+    if trc0 == 0 or trc1 == 0 or trc2 == 0:
+        if logger:
+            logger.log("[HOLDOUT] Train missing a class after group selection; falling back to no-holdout")
+        return np.arange(n, dtype=np.int64), np.array([], dtype=np.int64)
+
+    return train_idx, holdout_idx
+
+
 # Apply z score normalization to avoid magnitude related skews
 def apply_z_score_normalization(X: np.ndarray, *, eps: float = 1e-6) -> np.ndarray:
     # X: (N, C, T)
@@ -833,7 +1225,7 @@ def run_epoch(model, loader, train: bool, *, device, optimizer, criterion):
 
 def run_training_to_convergence(model, train_loader, val_loader,
                                 *, device, optimizer, criterion,
-                                max_epochs, patience, min_delta, debug_heavy = False,
+                                max_epochs, patience, min_delta, debug_heavy = True,
                                 logger: utils.DebugLogger | None = None):
     """
     Trains until val loss stops improving.
@@ -910,12 +1302,13 @@ def train_single_final_model_with_holdout_and_export(
     X_pair: np.ndarray,
     y_pair: np.ndarray,
     trial_ids_pair: np.ndarray,
+    group_pair: np.ndarray,
     n_ch: int,
     n_time: int,
     cfg: CNNTrainConfig,
     out_onnx_path: Path,
     device: torch.device,
-    holdout_frac: float = 0.1,
+    holdout_frac: float = 0.15,
     zscore_norm: str,
     logger: utils.DebugLogger | None = None
 ) -> tuple[bool, bool, float, float, float, float, list[utils.TrainIssue]]:
@@ -929,8 +1322,8 @@ def train_single_final_model_with_holdout_and_export(
     train_ok = False
     export_ok = False
     # Build trial-wise holdout split
-    tr_idx, ho_idx = make_trial_holdout_split(
-        trial_ids_pair, y_pair, holdout_frac=float(holdout_frac), seed=int(cfg.seed), logger=logger,
+    tr_idx, ho_idx = make_group_holdout_split(
+        group_pair, y_pair, holdout_frac=float(holdout_frac), seed=int(cfg.seed), logger=logger,
     )
     _log(logger, f"[HOLDOUT] train windows={len(tr_idx)} c0={(y_pair[tr_idx]==0).sum()} c1={(y_pair[tr_idx]==1).sum()} c2={(y_pair[tr_idx]==2).sum()}")
     _log(logger, f"[HOLDOUT] hold  windows={len(ho_idx)} c0={(y_pair[ho_idx]==0).sum()} c1={(y_pair[ho_idx]==1).sum()} c2={(y_pair[ho_idx]==2).sum()}")
@@ -1022,6 +1415,7 @@ def train_final_cnn_and_export(
     X_pair: np.ndarray,
     y_pair: np.ndarray,
     trial_ids_pair: np.ndarray,
+    group_pair: np.ndarray,
     folds: list[tuple[np.ndarray, np.ndarray]],
     n_ch: int,
     n_time: int,
@@ -1069,6 +1463,7 @@ def train_final_cnn_and_export(
                 device=device,
                 max_epochs=int(cfg.MAX_EPOCHS_HTUNING),
                 logger=logger,
+                zscorearg=zscore_norm,
             )
 
             _log(logger,
@@ -1078,6 +1473,8 @@ def train_final_cnn_and_export(
                 f"k={cand.kernel_length} "
                 f"p1={cand.pooling_factor} p2={cand.pooling_factor_final} "
                 f"bs={cand.batch_size} lr={cand.learning_rate}"
+                f"norm_mode={cand.norm_mode} dropout={cand.dropout}"
+                f"patience={cand.patience} val_batch_mode={cand.val_batch_mode}"
             )
 
             if score > best_score:
@@ -1117,13 +1514,14 @@ def train_final_cnn_and_export(
         X_pair=X_pair,
         y_pair=y_pair,
         trial_ids_pair=trial_ids_pair,
+        group_pair=group_pair,
         n_ch=n_ch,
         n_time=n_time,
         cfg=cfg,
         out_onnx_path=Path(out_onnx_path),
         device=device,
         logger=logger,
-        holdout_frac=0.1,
+        holdout_frac=0.15,
         zscore_norm=zscore_norm,
     )
     issues.extend(training_issues_2)
@@ -1209,7 +1607,7 @@ def train_cnn_on_split(
         )
         issue_list.extend(batch_issues)
         train_loader = DataLoader(train_ds, batch_sampler=ListBatchSampler(batches))
-        batch_debug_issues = debug_all_batches(train_loader, y_train, logger)
+        batch_debug_issues = debug_all_batches(train_loader, logger=logger)
         issue_list.extend(batch_debug_issues)
     else:
         # fallback: window batching (less good for strongly overlapping ssvep windows...)
@@ -1336,6 +1734,7 @@ def score_hparam_cfg_cv_cnn(
     device: torch.device,
     max_epochs: int,
     logger: utils.DebugLogger | None = None,
+    zscorearg: str,
 ) -> float:
     """
     Returns mean CV balanced accuracy for this hparam cfg.
@@ -1353,6 +1752,7 @@ def score_hparam_cfg_cv_cnn(
             cfg=fold_cfg,
             max_epochs=int(max_epochs),
             device=device,
+            zscorearg=zscorearg,
             logger=logger,
         )
         bals.append(float(val_bal))

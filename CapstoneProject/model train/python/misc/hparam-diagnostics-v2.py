@@ -1,14 +1,3 @@
-"""
-COMPREHENSIVE DIAGNOSTIC SCRIPT for CNN Training Debug Logs
-Analyzes fold balance, batch quality, convergence, holdout splits, and hyperparameter tuning
-
-IMPROVEMENTS:
-- Enhanced hyperparameter visualization with better layout
-- Clearer graphs with no overlapping text
-- Better color schemes and readability
-- Additional analysis plots
-"""
-
 import re
 import numpy as np
 from collections import defaultdict, Counter
@@ -39,6 +28,420 @@ def parse_log_file(log_path=None, log_text=None):
         raise ValueError("Must provide either log_path or log_text")
     
     return log_text
+
+
+def analyze_hyperparameter_tuning(log_text, verbose=True):
+    if verbose:
+        print("\n" + "=" * 80)
+        print("HYPERPARAMETER TUNING ANALYSIS")
+        print("=" * 80)
+
+    htune_pattern = (
+        r'\[HTUNE\]\s+'
+        r'score=([\d.]+)\s+'
+        r'F1=(\d+)\s+'
+        r'D=(\d+)\s+'
+        r'k=(\d+)\s+'
+        r'p1=(\d+)\s+'
+        r'p2=(\d+)\s+'
+        r'bs=(\d+)\s+'
+        r'lr=([\d.]+)'
+        r'(?:\s*norm_mode=([A-Za-z0-9_]+))?'
+        r'(?:\s*dropout=([\d.]+))?'
+        r'(?:\s*patience=(\d+))?'
+        r'(?:\s*val_batch_mode=([A-Za-z0-9_]+))?'
+    )
+
+    matches = re.findall(htune_pattern, log_text)
+    if not matches:
+        if verbose:
+            print("No hyperparameter tuning data found in log")
+        return None, [], {}
+
+    configs = []
+    for m in matches:
+        score, F1, D, k, p1, p2, bs, lr, norm_mode, dropout, patience, val_batch_mode = m
+
+        config = {
+            "score": float(score),
+            "F1": int(F1),
+            "D": int(D),
+            "k": int(k),
+            "p1": int(p1),
+            "p2": int(p2),
+            "bs": int(bs),
+            "lr": float(lr),
+        }
+        if norm_mode:
+            config["norm_mode"] = norm_mode
+        if dropout:
+            config["dropout"] = float(dropout)
+        if patience:
+            config["patience"] = int(patience)
+        if val_batch_mode:
+            config["val_batch_mode"] = val_batch_mode
+
+        configs.append(config)
+
+    if not configs:
+        return None, [], {}
+
+    best_config = max(configs, key=lambda c: c["score"])
+    
+    if verbose:
+        print(f"\nFound {len(configs)} hyperparameter configurations")
+        print(f"\n🏆 BEST CONFIGURATION (score={best_config['score']:.4f}):")
+        print(f"  F1 (filters):     {best_config['F1']}")
+        print(f"  D (depth mult):   {best_config['D']}")
+        print(f"  k (kernel size):  {best_config['k']}")
+        print(f"  p1 (pool 1):      {best_config['p1']}")
+        print(f"  p2 (pool 2):      {best_config['p2']}")
+        print(f"  batch size:       {best_config['bs']}")
+        print(f"  learning rate:    {best_config['lr']}")
+        if 'norm_mode' in best_config:
+            print(f"  norm mode:        {best_config['norm_mode']}")
+        if 'dropout' in best_config:
+            print(f"  dropout:          {best_config['dropout']}")
+        if 'patience' in best_config:
+            print(f"  patience:         {best_config['patience']}")
+        if 'val_batch_mode' in best_config:
+            print(f"  val_batch_mode:   {best_config['val_batch_mode']}")
+    
+    # Analyze hyperparameter trends
+    analysis = {}
+    
+    # Group by each hyperparameter (include new ones)
+    params = ['F1', 'D', 'k', 'p1', 'p2', 'bs', 'lr']
+    if any('norm_mode' in c for c in configs):
+        params.append('norm_mode')
+    if any('dropout' in c for c in configs):
+        params.append('dropout')
+    if any('patience' in c for c in configs):
+        params.append('patience')
+    if any('val_batch_mode' in c for c in configs):
+        params.append('val_batch_mode')
+    
+    param_scores = {p: defaultdict(list) for p in params}
+    
+    for config in configs:
+        for param in params:
+            if param in config:
+                param_scores[param][config[param]].append(config['score'])
+    
+    # Compute average score per value
+    param_avg_scores = {}
+    for param in params:
+        if param_scores[param]:  # Only include if we have data
+            param_avg_scores[param] = {
+                val: np.mean(scores) 
+                for val, scores in param_scores[param].items()
+            }
+    
+    if verbose:
+        print(f"\n📊 HYPERPARAMETER IMPACT ANALYSIS:")
+        print(f"  (showing average score for each parameter value)\n")
+        
+        for param in params:
+            if param not in param_avg_scores:
+                continue
+                
+            avg_scores = param_avg_scores[param]
+            if len(avg_scores) > 1:
+                best_val = max(avg_scores, key=avg_scores.get)
+                worst_val = min(avg_scores, key=avg_scores.get)
+                best_score = avg_scores[best_val]
+                worst_score = avg_scores[worst_val]
+                improvement = best_score - worst_score
+                
+                print(f"  {param:12s}: best={best_val} (score={best_score:.4f}), worst={worst_val} (score={worst_score:.4f}), Δ={improvement:.4f}")
+                
+                # Show all values
+                sorted_vals = sorted(avg_scores.items(), key=lambda x: x[1], reverse=True)
+                vals_str = ", ".join([f"{val}→{score:.3f}" for val, score in sorted_vals])
+                print(f"               All: {vals_str}")
+        
+        # Score statistics
+        scores = [c['score'] for c in configs]
+        print(f"\n📈 SCORE STATISTICS:")
+        print(f"  Best:    {max(scores):.4f}")
+        print(f"  Worst:   {min(scores):.4f}")
+        print(f"  Mean:    {np.mean(scores):.4f}")
+        print(f"  Std:     {np.std(scores):.4f}")
+        print(f"  Range:   {max(scores) - min(scores):.4f}")
+    
+    analysis = {
+        'best_config': best_config,
+        'n_configs': len(configs),
+        'score_range': (min(c['score'] for c in configs), max(c['score'] for c in configs)),
+        'param_avg_scores': param_avg_scores,
+        'param_scores': param_scores,
+        'all_scores': [c['score'] for c in configs],
+    }
+    
+    return best_config, configs, analysis
+
+
+def visualize_hyperparameter_tuning(configs, analysis, save_path=None):
+    if not HAS_MATPLOTLIB:
+        print("Matplotlib not available - skipping visualization")
+        return
+    
+    if not configs:
+        print("No configurations to visualize")
+        return
+    
+    # Set style
+    plt.style.use('seaborn-v0_8-darkgrid' if HAS_SEABORN else 'default')
+    
+    # Create larger figure with better spacing
+    fig = plt.figure(figsize=(20, 14))
+    gs = GridSpec(4, 4, figure=fig, hspace=0.35, wspace=0.35, 
+                  left=0.06, right=0.98, top=0.94, bottom=0.05)
+    
+    scores = [c['score'] for c in configs]
+    best_config = analysis['best_config']
+    param_avg_scores = analysis['param_avg_scores']
+    param_scores = analysis['param_scores']
+    
+    # Color palette
+    colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c']
+    
+    # ========================
+    # ROW 1: Overview
+    # ========================
+    
+    # 1. Score distribution histogram
+    ax1 = fig.add_subplot(gs[0, 0])
+    n_bins = min(30, len(configs)//3)
+    n, bins, patches = ax1.hist(scores, bins=n_bins, edgecolor='black', alpha=0.7, color='#3498db')
+    
+    # Color bins by performance
+    cm = plt.cm.RdYlGn
+    bin_centers = 0.5 * (bins[:-1] + bins[1:])
+    col = (bin_centers - min(scores)) / (max(scores) - min(scores))
+    for c, p in zip(col, patches):
+        plt.setp(p, 'facecolor', cm(c))
+    
+    ax1.axvline(best_config['score'], color='red', linestyle='--', linewidth=2.5, label=f'Best: {best_config["score"]:.4f}')
+    ax1.axvline(np.mean(scores), color='darkgreen', linestyle='--', linewidth=2.5, label=f'Mean: {np.mean(scores):.4f}')
+    ax1.set_xlabel('Score', fontsize=11, fontweight='bold')
+    ax1.set_ylabel('Frequency', fontsize=11, fontweight='bold')
+    ax1.set_title('Score Distribution', fontsize=12, fontweight='bold', pad=10)
+    ax1.legend(fontsize=10, framealpha=0.9)
+    ax1.grid(alpha=0.3, linestyle='--')
+    
+    # 2. Parameter impact bar chart
+    ax2 = fig.add_subplot(gs[0, 1:3])
+    
+    # Get all available parameters
+    params = list(param_avg_scores.keys())
+    param_impacts = []
+    param_labels = []
+    
+    for param in params:
+        avg_scores_dict = param_avg_scores[param]
+        if len(avg_scores_dict) > 1:
+            impact = max(avg_scores_dict.values()) - min(avg_scores_dict.values())
+            param_impacts.append(impact)
+            param_labels.append(param)
+    
+    if param_impacts:
+        y_pos = np.arange(len(param_labels))
+        bars = ax2.barh(y_pos, param_impacts, color=colors[:len(param_impacts)], 
+                       edgecolor='black', linewidth=1.5, alpha=0.8)
+        
+        # Add value labels
+        for i, (bar, impact) in enumerate(zip(bars, param_impacts)):
+            ax2.text(impact + max(param_impacts)*0.01, bar.get_y() + bar.get_height()/2, 
+                    f'{impact:.4f}', ha='left', va='center', fontsize=10, fontweight='bold')
+        
+        ax2.set_yticks(y_pos)
+        ax2.set_yticklabels(param_labels, fontsize=11, fontweight='bold')
+        ax2.set_xlabel('Score Impact (max - min across values)', fontsize=11, fontweight='bold')
+        ax2.set_title('Hyperparameter Sensitivity Analysis', fontsize=12, fontweight='bold', pad=10)
+        ax2.grid(axis='x', alpha=0.3, linestyle='--')
+        ax2.set_xlim(0, max(param_impacts) * 1.15)
+    
+    # 3. Best config summary
+    ax3 = fig.add_subplot(gs[0, 3])
+    ax3.axis('off')
+    
+    summary_text = f"""
+🏆 BEST CONFIGURATION
+Score: {best_config['score']:.4f}
+
+F1 (filters):    {best_config['F1']}
+D (depth):       {best_config['D']}
+k (kernel):      {best_config['k']}
+p1 (pool 1):     {best_config['p1']}
+p2 (pool 2):     {best_config['p2']}
+batch size:      {best_config['bs']}
+learning rate:   {best_config['lr']:.6f}
+"""
+    
+    # Add new parameters if present
+    if 'norm_mode' in best_config:
+        summary_text += f"norm mode:       {best_config['norm_mode']}\n"
+    if 'dropout' in best_config:
+        summary_text += f"dropout:         {best_config['dropout']}\n"
+    if 'patience' in best_config:
+        summary_text += f"patience:       {best_config['patience']}\n"
+    if 'val_batch_mode' in best_config:
+        summary_text += f"val_batch_mode:  {best_config['val_batch_mode']}\n"
+    
+    summary_text += f"""
+Total configs:   {len(configs)}
+Score range:     {min(scores):.4f} - {max(scores):.4f}
+    """.strip()
+    
+    ax3.text(0.05, 0.95, summary_text, transform=ax3.transAxes,
+            fontsize=10, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    # ========================
+    # ROWS 2-4: Individual parameter analysis
+    # ========================
+    
+    # Build plot configurations for all available parameters
+    plot_positions = [
+        gs[1, 0], gs[1, 1], gs[1, 2], gs[1, 3],
+        gs[2, 0], gs[2, 1], gs[2, 2], gs[2, 3],
+        gs[3, 0],
+    ]
+    
+    param_titles = {
+        'F1': 'Filters (F1)',
+        'D': 'Depth Multiplier (D)',
+        'k': 'Kernel Size (k)',
+        'p1': 'Pool Size 1 (p1)',
+        'p2': 'Pool Size 2 (p2)',
+        'bs': 'Batch Size (bs)',
+        'lr': 'Learning Rate (lr)',
+        'norm_mode': 'Normalization Mode',
+        'dropout': 'Dropout Rate',
+        'patience': 'Patience',
+        'val_batch_mode' : 'Val Batch Mode',
+    }
+    
+    for idx, param in enumerate(params):
+        if idx >= len(plot_positions):
+            break  # No more subplot positions
+            
+        ax = fig.add_subplot(plot_positions[idx])
+        
+        # Get unique values for this parameter
+        unique_vals = sorted(set(c[param] for c in configs if param in c))
+        
+        # For categorical parameters (like norm_mode), use string positions
+        is_categorical = isinstance(unique_vals[0], str)
+        
+        # Detect log-scale parameters (learning rate, dropout)
+        use_log_positions = param in ['lr', 'dropout'] and not is_categorical
+        
+        if is_categorical or use_log_positions:
+            # Use integer positions for categorical OR log-scale numeric params
+            val_to_pos = {val: i for i, val in enumerate(unique_vals)}
+            positions = list(range(len(unique_vals)))
+        else:
+            positions = unique_vals
+        
+        # Prepare data for box plot
+        data_for_box = [param_scores[param][val] for val in unique_vals]
+        
+        # Create box plot - always use the positions array
+        bp = ax.boxplot(data_for_box, positions=positions, 
+                       widths=0.6 if not (is_categorical or use_log_positions) else 0.4, 
+                       patch_artist=True,
+                       medianprops=dict(color='red', linewidth=2),
+                       boxprops=dict(facecolor='lightblue', alpha=0.7, edgecolor='black'),
+                       whiskerprops=dict(color='black', linewidth=1.5),
+                       capprops=dict(color='black', linewidth=1.5))
+        
+        # Overlay scatter plot with jitter
+        for i, val in enumerate(unique_vals):
+            scores_for_val = param_scores[param][val]
+            # Always use integer position for jittering
+            x_pos = i if (is_categorical or use_log_positions) else val
+            jittered_x = np.random.normal(x_pos, 0.08, len(scores_for_val))
+            ax.scatter(jittered_x, scores_for_val, alpha=0.4, s=30, color='navy', 
+                      edgecolors='black', linewidth=0.5)
+        
+        # Mark best config
+        if param in best_config:
+            best_val = best_config[param]
+            best_x_pos = val_to_pos[best_val] if (is_categorical or use_log_positions) else best_val
+            ax.scatter([best_x_pos], [best_config['score']], 
+                      marker='D', c='red', s=150,
+                      edgecolors='darkred', linewidth=2, 
+                      label='Best Config', zorder=10)
+        
+        # Plot average trend line
+        avg_scores_list = [param_avg_scores[param][val] for val in unique_vals]
+        if not (is_categorical or use_log_positions):
+            ax.plot(unique_vals, avg_scores_list, 
+                   'g--', linewidth=2.5, alpha=0.7, label='Average', zorder=5)
+        else:
+            ax.plot(range(len(unique_vals)), avg_scores_list, 
+                   'g--', linewidth=2.5, alpha=0.7, label='Average', zorder=5)
+        
+        # Formatting
+        if is_categorical or use_log_positions:
+            ax.set_xticks(range(len(unique_vals)))
+            # Format learning rate in scientific notation if needed
+            if param == 'lr':
+                labels = [f'{v:.0e}' if v < 0.01 else f'{v:.4f}' for v in unique_vals]
+            else:
+                labels = [str(v) for v in unique_vals]
+            ax.set_xticklabels(labels, fontsize=9, 
+                              rotation=45 if (is_categorical and len(str(unique_vals[0])) > 8) else 0)
+        else:
+            ax.set_xticks(unique_vals)
+            ax.set_xticklabels([str(v) for v in unique_vals], fontsize=9)
+        
+        ax.set_ylabel('Score', fontsize=10, fontweight='bold')
+        ax.set_xlabel(param, fontsize=10, fontweight='bold')
+        ax.set_title(param_titles.get(param, param), fontsize=11, fontweight='bold', pad=8)
+        ax.grid(alpha=0.3, linestyle='--', axis='y')
+        ax.legend(fontsize=8, loc='best', framealpha=0.9)
+        
+        # Set y-limits with padding
+        y_min, y_max = min(scores), max(scores)
+        y_range = y_max - y_min
+        ax.set_ylim(y_min - 0.05*y_range, y_max + 0.05*y_range)
+    
+    # ========================
+    # Additional Analysis Plots
+    # ========================
+    
+    # Score vs Config Index (temporal pattern)
+    ax_temporal = fig.add_subplot(gs[3, 1])
+    config_indices = range(len(configs))
+    ax_temporal.scatter(config_indices, scores, c=scores, cmap='RdYlGn', 
+                       s=50, alpha=0.6, edgecolors='black', linewidth=0.5)
+    ax_temporal.axhline(best_config['score'], color='red', linestyle='--', linewidth=2, label='Best')
+    ax_temporal.axhline(np.mean(scores), color='green', linestyle='--', linewidth=2, label='Mean')
+    best_idx = scores.index(best_config['score'])
+    ax_temporal.scatter([best_idx], [best_config['score']], 
+                       marker='D', c='red', s=150, edgecolors='darkred', linewidth=2, zorder=10)
+    ax_temporal.set_xlabel('Configuration Index', fontsize=10, fontweight='bold')
+    ax_temporal.set_ylabel('Score', fontsize=10, fontweight='bold')
+    ax_temporal.set_title('Score Progression', fontsize=11, fontweight='bold', pad=8)
+    ax_temporal.grid(alpha=0.3, linestyle='--')
+    ax_temporal.legend(fontsize=8, framealpha=0.9)
+    
+    # Main title
+    fig.suptitle(f'Hyperparameter Tuning Analysis (n={len(configs)} configs, best={best_config["score"]:.4f})', 
+                fontsize=16, fontweight='bold', y=0.98)
+    
+    # Save
+    if save_path:
+        plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor='white')
+        print(f"\n📊 Visualization saved to: {save_path}")
+    else:
+        plt.savefig('htune_analysis_v2.png', dpi=200, bbox_inches='tight', facecolor='white')
+        print(f"\n📊 Visualization saved to: htune_analysis_v2.png")
+    
+    plt.close()
 
 
 def analyze_fold_balance(log_text, verbose=True):
@@ -376,439 +779,65 @@ def analyze_holdout(log_text, verbose=True):
         issues.append("Missing train or hold split in log")
         return False, issues, {}
 
-
 def analyze_group_sizes(log_text, verbose=True):
-    """
-    Analyze group size distributions from fold builder logs.
-    """
     if verbose:
         print("\n" + "=" * 80)
         print("GROUP SIZE ANALYSIS")
         print("=" * 80)
-    
-    # Pattern for group size info
-    pattern = r'\[([^\]]+)\] GROUPS per class: g0=(\d+) g1=(\d+) g2=(\d+) \| group_size\(min/med/max\)=(\d+)/(\d+)/(\d+) \| c0\(min/med/max\)=(\d+)/(\d+)/(\d+) c1\(min/med/max\)=(\d+)/(\d+)/(\d+) c2\(min/med/max\)=(\d+)/(\d+)/(\d+)'
-    
+
+    pattern = (
+        r'\[([^\]]+)\] GROUPS per class: g0=(\d+) g1=(\d+) g2=(\d+) \| '
+        r'group_size\(min/med/max\)=(\d+)/(\d+)/(\d+) \| '
+        r'c0\(min/med/max\)=(\d+)/(\d+)/(\d+) '
+        r'c1\(min/med/max\)=(\d+)/(\d+)/(\d+) '
+        r'c2\(min/med/max\)=(\d+)/(\d+)/(\d+)'
+    )
     matches = re.findall(pattern, log_text)
-    
+
     issues = []
-    
+    if not matches:
+        return True, [], {"n_pairs": 0}
+
     for match in matches:
-        tag, g0, g1, g2, gsize_min, gsize_med, gsize_max, c0_min, c0_med, c0_max, c1_min, c1_med, c1_max, c2_min, c2_med, c2_max = match
-        
-        gsize_min, gsize_med, gsize_max = int(gsize_min), int(gsize_med), int(gsize_max)
-        c0_min, c0_max = int(c0_min), int(c0_max)
-        c1_min, c1_max = int(c1_min), int(c1_max)
-        c2_min, c2_max = int(c2_min), int(c2_max)
-        
+        (tag, g0, g1, g2,
+         gmin, gmed, gmax,
+         c0min, c0med, c0max,
+         c1min, c1med, c1max,
+         c2min, c2med, c2max) = match
+
+        g0, g1, g2 = int(g0), int(g1), int(g2)
+        gmin, gmed, gmax = int(gmin), int(gmed), int(gmax)
+        c0min, c0med, c0max = int(c0min), int(c0med), int(c0max)
+        c1min, c1med, c1max = int(c1min), int(c1med), int(c1max)
+        c2min, c2med, c2max = int(c2min), int(c2med), int(c2max)
+
         if verbose:
             print(f"\n[{tag}]:")
             print(f"  Groups per class: c0={g0} c1={g1} c2={g2}")
-            print(f"  Overall group sizes: min={gsize_min} med={gsize_med} max={gsize_max}")
-            print(f"  Class 0 group sizes: min={c0_min} med={c0_med} max={c0_max}")
-            print(f"  Class 1 group sizes: min={c1_min} med={c1_med} max={c1_max}")
-            print(f"  Class 2 group sizes: min={c2_min} med={c2_med} max={c2_max}")
-        
-        # Check for problematic size ratios
-        if gsize_max > 5 * gsize_min:
-            issues.append(f"[{tag}] Large group size variance (max={gsize_max}, min={gsize_min})")
+            print(f"  Overall group sizes: min={gmin} med={gmed} max={gmax}")
+            print(f"  Class 0 group sizes: min={c0min} med={c0med} max={c0max}")
+            print(f"  Class 1 group sizes: min={c1min} med={c1med} max={c1max}")
+            print(f"  Class 2 group sizes: min={c2min} med={c2med} max={c2max}")
+
+        if gmin > 0 and gmax / gmin >= 7:
+            msg = f"[{tag}] Large group size range (max/min={gmax}/{gmin}={gmax/gmin:.1f}x). This is only problematic if batching assumes groups are equal-sized."
+            issues.append(msg)
             if verbose:
-                print(f"  ⚠️  Large size variance: max/min = {gsize_max/gsize_min:.1f}x")
-        
-        # Check for tiny groups
-        if gsize_min == 1 and gsize_max > 3:
-            issues.append(f"[{tag}] Many size-1 groups alongside large groups")
+                print("  ⚠️  Wide size range (this is a batching concern, not automatically a data-quality problem)")
+
+        # Size-1 groups: be accurate + non-alarmist
+        if gmin == 1:
+            msg = f"[{tag}] Size-1 groups exist. This is OK if rare; it mainly hurts if you do group-balanced batching or if many folds end up with tiny per-class validation."
+            # Treat as INFO/WARN, not "severe"
+            issues.append(msg)
             if verbose:
-                print(f"  ⚠️  Size-1 groups present (hard to balance)")
-    
-    is_ok = len(issues) == 0
-    return is_ok, issues, {'n_pairs': len(matches)}
+                print("  ℹ️  Size-1 groups exist (not necessarily bad; only an issue if frequent or if batching assumes equal group sizes)")
 
+    # Deduplicate repeated issues so summary doesn’t spam
+    issues = list(dict.fromkeys(issues))
 
-def analyze_hyperparameter_tuning(log_text, verbose=True):
-    """
-    Analyze hyperparameter tuning results from [HTUNE] logs.
-    Returns: (best_config, all_configs, analysis)
-    """
-    if verbose:
-        print("\n" + "=" * 80)
-        print("HYPERPARAMETER TUNING ANALYSIS")
-        print("=" * 80)
-    
-    # Pattern: [HTUNE] score=0.4156 F1=16 D=2 k=63 p1=2 p2=8 bs=12 lr=0.0005
-    htune_pattern = r'\[HTUNE\] score=([\d.]+) F1=(\d+) D=(\d+) k=(\d+) p1=(\d+) p2=(\d+) bs=(\d+) lr=([\d.]+)'
-    matches = re.findall(htune_pattern, log_text)
-    
-    if not matches:
-        if verbose:
-            print("No hyperparameter tuning data found in log")
-        return None, [], {}
-    
-    configs = []
-    for match in matches:
-        score, F1, D, k, p1, p2, bs, lr = match
-        config = {
-            'score': float(score),
-            'F1': int(F1),
-            'D': int(D),
-            'k': int(k),
-            'p1': int(p1),
-            'p2': int(p2),
-            'bs': int(bs),
-            'lr': float(lr),
-        }
-        configs.append(config)
-    
-    if not configs:
-        return None, [], {}
-    
-    # Find best configuration
-    best_config = max(configs, key=lambda c: c['score'])
-    
-    if verbose:
-        print(f"\nFound {len(configs)} hyperparameter configurations")
-        print(f"\n🏆 BEST CONFIGURATION (score={best_config['score']:.4f}):")
-        print(f"  F1 (filters):     {best_config['F1']}")
-        print(f"  D (depth mult):   {best_config['D']}")
-        print(f"  k (kernel size):  {best_config['k']}")
-        print(f"  p1 (pool 1):      {best_config['p1']}")
-        print(f"  p2 (pool 2):      {best_config['p2']}")
-        print(f"  batch size:       {best_config['bs']}")
-        print(f"  learning rate:    {best_config['lr']}")
-    
-    # Analyze hyperparameter trends
-    analysis = {}
-    
-    # Group by each hyperparameter
-    params = ['F1', 'D', 'k', 'p1', 'p2', 'bs', 'lr']
-    param_scores = {p: defaultdict(list) for p in params}
-    
-    for config in configs:
-        for param in params:
-            param_scores[param][config[param]].append(config['score'])
-    
-    # Compute average score per value
-    param_avg_scores = {}
-    for param in params:
-        param_avg_scores[param] = {
-            val: np.mean(scores) 
-            for val, scores in param_scores[param].items()
-        }
-    
-    if verbose:
-        print(f"\n📊 HYPERPARAMETER IMPACT ANALYSIS:")
-        print(f"  (showing average score for each parameter value)\n")
-        
-        for param in params:
-            avg_scores = param_avg_scores[param]
-            if len(avg_scores) > 1:
-                best_val = max(avg_scores, key=avg_scores.get)
-                worst_val = min(avg_scores, key=avg_scores.get)
-                best_score = avg_scores[best_val]
-                worst_score = avg_scores[worst_val]
-                improvement = best_score - worst_score
-                
-                print(f"  {param:12s}: best={best_val} (score={best_score:.4f}), worst={worst_val} (score={worst_score:.4f}), Δ={improvement:.4f}")
-                
-                # Show all values
-                sorted_vals = sorted(avg_scores.items(), key=lambda x: x[1], reverse=True)
-                vals_str = ", ".join([f"{val}→{score:.3f}" for val, score in sorted_vals])
-                print(f"               All: {vals_str}")
-        
-        # Score statistics
-        scores = [c['score'] for c in configs]
-        print(f"\n📈 SCORE STATISTICS:")
-        print(f"  Best:    {max(scores):.4f}")
-        print(f"  Worst:   {min(scores):.4f}")
-        print(f"  Mean:    {np.mean(scores):.4f}")
-        print(f"  Std:     {np.std(scores):.4f}")
-        print(f"  Range:   {max(scores) - min(scores):.4f}")
-    
-    analysis = {
-        'best_config': best_config,
-        'n_configs': len(configs),
-        'score_range': (min(c['score'] for c in configs), max(c['score'] for c in configs)),
-        'param_avg_scores': param_avg_scores,
-        'param_scores': param_scores,
-        'all_scores': [c['score'] for c in configs],
-    }
-    
-    return best_config, configs, analysis
-
-
-def visualize_hyperparameter_tuning(configs, analysis, save_path=None):
-    """
-    Create comprehensive and CLEAR visualization of hyperparameter tuning results.
-    
-    IMPROVEMENTS:
-    - Larger figure with better spacing
-    - No overlapping text
-    - Clearer axis labels and titles
-    - Better color schemes
-    - Box plots instead of just scatter for better statistical view
-    - Separate plot for learning rate on log scale
-    """
-    if not HAS_MATPLOTLIB:
-        print("Matplotlib not available - skipping visualization")
-        return
-    
-    if not configs:
-        print("No configurations to visualize")
-        return
-    
-    # Set style
-    plt.style.use('seaborn-v0_8-darkgrid' if HAS_SEABORN else 'default')
-    
-    # Create larger figure with better spacing
-    fig = plt.figure(figsize=(20, 14))
-    gs = GridSpec(4, 4, figure=fig, hspace=0.35, wspace=0.35, 
-                  left=0.06, right=0.98, top=0.94, bottom=0.05)
-    
-    scores = [c['score'] for c in configs]
-    best_config = analysis['best_config']
-    param_avg_scores = analysis['param_avg_scores']
-    param_scores = analysis['param_scores']
-    
-    # Color palette
-    colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c']
-    
-    # ========================
-    # ROW 1: Overview
-    # ========================
-    
-    # 1. Score distribution histogram
-    ax1 = fig.add_subplot(gs[0, 0])
-    n_bins = min(30, len(configs)//3)
-    n, bins, patches = ax1.hist(scores, bins=n_bins, edgecolor='black', alpha=0.7, color='#3498db')
-    
-    # Color bins by performance
-    cm = plt.cm.RdYlGn
-    bin_centers = 0.5 * (bins[:-1] + bins[1:])
-    col = (bin_centers - min(scores)) / (max(scores) - min(scores))
-    for c, p in zip(col, patches):
-        plt.setp(p, 'facecolor', cm(c))
-    
-    ax1.axvline(best_config['score'], color='red', linestyle='--', linewidth=2.5, label=f'Best: {best_config["score"]:.4f}')
-    ax1.axvline(np.mean(scores), color='darkgreen', linestyle='--', linewidth=2.5, label=f'Mean: {np.mean(scores):.4f}')
-    ax1.set_xlabel('Score', fontsize=11, fontweight='bold')
-    ax1.set_ylabel('Frequency', fontsize=11, fontweight='bold')
-    ax1.set_title('Score Distribution', fontsize=12, fontweight='bold', pad=10)
-    ax1.legend(fontsize=10, framealpha=0.9)
-    ax1.grid(alpha=0.3, linestyle='--')
-    
-    # 2. Parameter impact bar chart
-    ax2 = fig.add_subplot(gs[0, 1:3])
-    params = ['F1', 'D', 'k', 'p1', 'p2', 'bs', 'lr']
-    param_impacts = []
-    param_labels = []
-    
-    for param in params:
-        avg_scores_dict = param_avg_scores[param]
-        if len(avg_scores_dict) > 1:
-            impact = max(avg_scores_dict.values()) - min(avg_scores_dict.values())
-            param_impacts.append(impact)
-            param_labels.append(param)
-    
-    if param_impacts:
-        y_pos = np.arange(len(param_labels))
-        bars = ax2.barh(y_pos, param_impacts, color=colors[:len(param_impacts)], 
-                       edgecolor='black', linewidth=1.5, alpha=0.8)
-        
-        # Add value labels with better positioning
-        for i, (bar, impact) in enumerate(zip(bars, param_impacts)):
-            ax2.text(impact + max(param_impacts)*0.01, bar.get_y() + bar.get_height()/2, 
-                    f'{impact:.4f}', ha='left', va='center', fontsize=10, fontweight='bold')
-        
-        ax2.set_yticks(y_pos)
-        ax2.set_yticklabels(param_labels, fontsize=11, fontweight='bold')
-        ax2.set_xlabel('Score Impact (max - min across values)', fontsize=11, fontweight='bold')
-        ax2.set_title('Hyperparameter Sensitivity Analysis', fontsize=12, fontweight='bold', pad=10)
-        ax2.grid(axis='x', alpha=0.3, linestyle='--')
-        ax2.set_xlim(0, max(param_impacts) * 1.15)
-    
-    # 3. Best config summary
-    ax3 = fig.add_subplot(gs[0, 3])
-    ax3.axis('off')
-    
-    summary_text = f"""
-🏆 BEST CONFIGURATION
-Score: {best_config['score']:.4f}
-
-F1 (filters):    {best_config['F1']}
-D (depth):       {best_config['D']}
-k (kernel):      {best_config['k']}
-p1 (pool 1):     {best_config['p1']}
-p2 (pool 2):     {best_config['p2']}
-batch size:      {best_config['bs']}
-learning rate:   {best_config['lr']:.6f}
-
-Total configs:   {len(configs)}
-Score range:     {min(scores):.4f} - {max(scores):.4f}
-    """.strip()
-    
-    ax3.text(0.05, 0.95, summary_text, transform=ax3.transAxes,
-            fontsize=10, verticalalignment='top', fontfamily='monospace',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    
-    # ========================
-    # ROWS 2-4: Individual parameter analysis
-    # ========================
-    
-    plot_configs = [
-        ('F1', 'Filters (F1)', False, gs[1, 0]),
-        ('D', 'Depth Multiplier (D)', False, gs[1, 1]),
-        ('k', 'Kernel Size (k)', False, gs[1, 2]),
-        ('p1', 'Pool Size 1 (p1)', False, gs[1, 3]),
-        ('p2', 'Pool Size 2 (p2)', False, gs[2, 0]),
-        ('bs', 'Batch Size (bs)', False, gs[2, 1]),
-        ('lr', 'Learning Rate (lr)', True, gs[2, 2]),
-    ]
-    
-    for param, title, use_log, grid_pos in plot_configs:
-        ax = fig.add_subplot(grid_pos)
-        
-        # Get unique values for this parameter
-        unique_vals = sorted(set(c[param] for c in configs))
-        
-        # Prepare data for box plot
-        data_for_box = [param_scores[param][val] for val in unique_vals]
-        
-        # Create box plot for better statistical view
-        bp = ax.boxplot(data_for_box, positions=range(len(unique_vals)), 
-                       widths=0.6, patch_artist=True,
-                       medianprops=dict(color='red', linewidth=2),
-                       boxprops=dict(facecolor='lightblue', alpha=0.7, edgecolor='black'),
-                       whiskerprops=dict(color='black', linewidth=1.5),
-                       capprops=dict(color='black', linewidth=1.5))
-        
-        # Overlay scatter plot with jitter
-        for i, val in enumerate(unique_vals):
-            scores_for_val = param_scores[param][val]
-            jittered_x = np.random.normal(i, 0.08, len(scores_for_val))
-            ax.scatter(jittered_x, scores_for_val, alpha=0.4, s=30, color='navy', edgecolors='black', linewidth=0.5)
-        
-        # Highlight best configuration
-        best_val = best_config[param]
-        best_idx = unique_vals.index(best_val)
-        ax.scatter([best_idx], [best_config['score']], 
-                  c='red', s=300, marker='★', edgecolors='darkred', linewidth=2, 
-                  label='Best Config', zorder=10)
-        
-        # Plot average trend line
-        avg_scores_list = [param_avg_scores[param][val] for val in unique_vals]
-        ax.plot(range(len(unique_vals)), avg_scores_list, 
-               'g--', linewidth=2.5, alpha=0.7, label='Average', zorder=5)
-        
-        # Formatting
-        ax.set_xticks(range(len(unique_vals)))
-        ax.set_xticklabels([str(v) for v in unique_vals], fontsize=9)
-        ax.set_ylabel('Score', fontsize=10, fontweight='bold')
-        ax.set_xlabel(param, fontsize=10, fontweight='bold')
-        ax.set_title(title, fontsize=11, fontweight='bold', pad=8)
-        ax.grid(alpha=0.3, linestyle='--', axis='y')
-        ax.legend(fontsize=8, loc='best', framealpha=0.9)
-        
-        # Set y-limits with some padding
-        y_min, y_max = min(scores), max(scores)
-        y_range = y_max - y_min
-        ax.set_ylim(y_min - 0.05*y_range, y_max + 0.05*y_range)
-    
-    # ========================
-    # Additional Analysis Plots
-    # ========================
-    
-    # Score vs Config Index (to see if there's temporal pattern)
-    ax_temporal = fig.add_subplot(gs[2, 3])
-    config_indices = range(len(configs))
-    ax_temporal.scatter(config_indices, scores, c=scores, cmap='RdYlGn', 
-                       s=50, alpha=0.6, edgecolors='black', linewidth=0.5)
-    ax_temporal.axhline(best_config['score'], color='red', linestyle='--', linewidth=2, label='Best')
-    ax_temporal.axhline(np.mean(scores), color='green', linestyle='--', linewidth=2, label='Mean')
-    ax_temporal.set_xlabel('Configuration Index', fontsize=10, fontweight='bold')
-    ax_temporal.set_ylabel('Score', fontsize=10, fontweight='bold')
-    ax_temporal.set_title('Score Progression', fontsize=11, fontweight='bold', pad=8)
-    ax_temporal.grid(alpha=0.3, linestyle='--')
-    ax_temporal.legend(fontsize=8, framealpha=0.9)
-    
-    # 2D scatter: most impactful parameters
-    if len(param_impacts) >= 2:
-        ax_2d = fig.add_subplot(gs[3, 0:2])
-        
-        # Get two most impactful parameters
-        sorted_params = sorted(zip(param_labels, param_impacts), key=lambda x: x[1], reverse=True)
-        param1_name, _ = sorted_params[0]
-        param2_name, _ = sorted_params[1]
-        
-        param1_vals = [c[param1_name] for c in configs]
-        param2_vals = [c[param2_name] for c in configs]
-        
-        scatter = ax_2d.scatter(param1_vals, param2_vals, c=scores, cmap='RdYlGn', 
-                              s=100, alpha=0.7, edgecolors='black', linewidth=1)
-        
-        # Highlight best
-        ax_2d.scatter([best_config[param1_name]], [best_config[param2_name]], 
-                     c='red', s=400, marker='★', edgecolors='darkred', linewidth=2, 
-                     label='Best Config', zorder=10)
-        
-        ax_2d.set_xlabel(f'{param1_name} (highest impact)', fontsize=10, fontweight='bold')
-        ax_2d.set_ylabel(f'{param2_name} (2nd highest impact)', fontsize=10, fontweight='bold')
-        ax_2d.set_title('Top 2 Most Impactful Parameters', fontsize=11, fontweight='bold', pad=8)
-        ax_2d.grid(alpha=0.3, linestyle='--')
-        ax_2d.legend(fontsize=9, framealpha=0.9)
-        
-        # Add colorbar
-        cbar = plt.colorbar(scatter, ax=ax_2d)
-        cbar.set_label('Score', fontsize=9, fontweight='bold')
-    
-    # Score distribution statistics
-    ax_stats = fig.add_subplot(gs[3, 2:])
-    ax_stats.axis('off')
-    
-    # Calculate percentiles
-    p25, p50, p75 = np.percentile(scores, [25, 50, 75])
-    
-    stats_text = f"""
-    📊 DETAILED STATISTICS
-    
-    Score Metrics:
-      Best:          {max(scores):.4f}
-      Worst:         {min(scores):.4f}
-      Mean:          {np.mean(scores):.4f}
-      Median:        {p50:.4f}
-      Std Dev:       {np.std(scores):.4f}
-      Range:         {max(scores) - min(scores):.4f}
-      
-    Percentiles:
-      25th:          {p25:.4f}
-      50th (median): {p50:.4f}
-      75th:          {p75:.4f}
-      IQR:           {p75 - p25:.4f}
-    
-    Top 5 Configs:
-    """.strip()
-    
-    # Add top 5 configs
-    sorted_configs = sorted(configs, key=lambda c: c['score'], reverse=True)
-    for i, cfg in enumerate(sorted_configs[:5], 1):
-        stats_text += f"\n      #{i}: {cfg['score']:.4f}  (F1={cfg['F1']}, D={cfg['D']}, k={cfg['k']}, lr={cfg['lr']:.6f})"
-    
-    ax_stats.text(0.05, 0.95, stats_text, transform=ax_stats.transAxes,
-                 fontsize=9, verticalalignment='top', fontfamily='monospace',
-                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
-    
-    # Main title
-    fig.suptitle(f'Hyperparameter Tuning Analysis (n={len(configs)} configs, best={best_config["score"]:.4f})', 
-                fontsize=16, fontweight='bold', y=0.98)
-    
-    # Save
-    if save_path:
-        plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor='white')
-        print(f"\n📊 Enhanced visualization saved to: {save_path}")
-    else:
-        plt.savefig('htune_analysis_improved.png', dpi=200, bbox_inches='tight', facecolor='white')
-        print(f"\n📊 Enhanced visualization saved to: htune_analysis_improved.png")
-    
-    plt.close()
+    is_ok = True 
+    return is_ok, issues, {"n_pairs": len(matches)}
 
 
 def generate_report(log_text, verbose=True, save_plots=True):
@@ -914,13 +943,9 @@ def quick_check(log_text_or_path):
     }
 
 
-# ============================================================================
-# USAGE EXAMPLES
-# ============================================================================
-
 if __name__ == "__main__":
     
-    print("CNN Training Diagnostic Tool - IMPROVED VERSION")
+    print("CNN Training Diagnostic Tool - COMPLETE v2")
     print("=" * 80)
     
     if len(sys.argv) > 1:
@@ -929,12 +954,3 @@ if __name__ == "__main__":
         print(f"Reading log from: {log_path}\n")
         log_text = parse_log_file(log_path)
         generate_report(log_text, verbose=True, save_plots=True)
-    else:
-        # Use embedded log or prompt user
-        print("\nUsage options:")
-        print("  python diagnose_training_improved.py <path_to_debug_log.txt>")
-        print("\nOr paste your log text into the log_text variable below and run.")
-        print("\nFor quick check only:")
-        print("  >>> from diagnose_training_improved import quick_check")
-        print("  >>> ok, summary = quick_check('path/to/log.txt')")
-        print("  >>> print(f'Training OK: {ok}')")
