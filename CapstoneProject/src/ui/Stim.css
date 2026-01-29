@@ -12,8 +12,8 @@
   --border-subtle: #1f2937;
   --radius-lg: 16px;
   --shadow-soft: 0 18px 45px rgba(0, 0, 0, 0.6);
-  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    sans-serif;
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
 }
 
 *,
@@ -178,7 +178,9 @@ body {
   cursor: pointer;
   background: transparent;
   color: var(--text-main);
-  transition: background 0.15s ease, border-color 0.15s ease,
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
     transform 0.08s ease;
 }
 
@@ -248,7 +250,10 @@ body {
 
   cursor: pointer;
   opacity: 0.95;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
 }
 
 /* HOME */
@@ -278,7 +283,8 @@ body {
   flex: 1 1 220px;
   padding: 12px 14px;
   border-radius: 14px;
-  background: radial-gradient(
+  background:
+    radial-gradient(
       circle at top left,
       rgba(99, 102, 241, 0.08),
       transparent 60%
@@ -353,7 +359,9 @@ body {
   /*TRANSITION*/
   pointer-events: auto;
   transform: translateY(0);
-  transition: opacity 200ms ease-out, transform 200ms ease-out;
+  transition:
+    opacity 200ms ease-out,
+    transform 200ms ease-out;
 }
 
 /*fill available space !*/
@@ -944,7 +952,9 @@ body:not(.fullscreen-mode) {
   border: 1px solid var(--border-subtle);
   cursor: pointer;
   font-size: 0.8rem;
-  transition: background 0.15s ease, transform 0.05s ease;
+  transition:
+    background 0.15s ease,
+    transform 0.05s ease;
 }
 
 .sessions-list li:hover {
@@ -1158,7 +1168,9 @@ body:not(.fullscreen-mode) {
   color: var(--text-main);
   font-size: 0.88rem;
   cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .setting-select:focus {
@@ -1216,7 +1228,8 @@ body:not(.fullscreen-mode) {
 
 .freq-checkbox:has(input:checked) {
   border-color: rgba(99, 102, 241, 0.85);
-  background: radial-gradient(
+  background:
+    radial-gradient(
       circle at top left,
       rgba(99, 102, 241, 0.12),
       transparent 70%
@@ -1536,11 +1549,8 @@ body:not(.fullscreen-mode) {
   appearance: none;
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(
-      90deg,
-      rgba(99, 102, 241, 0.35),
-      rgba(139, 92, 246, 0.25)
-    ),
+  background:
+    linear-gradient(90deg, rgba(99, 102, 241, 0.35), rgba(139, 92, 246, 0.25)),
     rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(148, 163, 184, 0.14);
   outline: none;
@@ -1586,6 +1596,241 @@ body:not(.fullscreen-mode) {
   color: rgba(203, 213, 225, 0.75);
 }
 
+/* settings card -> HYPERPARAM CARD */
+.hparam-card {
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  background:
+    radial-gradient(
+      circle at top left,
+      rgba(99, 102, 241, 0.08),
+      transparent 60%
+    ),
+    rgba(2, 6, 23, 0.92);
+}
+
+.hparam-head {
+  margin-bottom: 10px;
+}
+
+.hparam-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hparam-sub {
+  margin-top: 6px;
+}
+
+.hparam-inline {
+  color: rgba(167, 139, 250, 0.95);
+  font-weight: 600;
+}
+
+.hparam-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid rgba(30, 41, 59, 0.95);
+  background: rgba(15, 23, 42, 0.85);
+  color: rgba(203, 213, 225, 0.85);
+  white-space: nowrap;
+}
+
+.hparam-badge.off {
+  border-color: rgba(148, 163, 184, 0.24);
+  color: rgba(203, 213, 225, 0.75);
+}
+
+.hparam-badge.quick {
+  border-color: rgba(250, 204, 21, 0.4);
+  color: rgba(253, 224, 71, 0.95);
+  background: rgba(250, 204, 21, 0.08);
+}
+
+.hparam-badge.full {
+  border-color: rgba(74, 222, 128, 0.35);
+  color: rgba(187, 247, 208, 0.92);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.hparam-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hparam-seg {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hparam-seg-btn {
+  border-radius: 14px;
+  border: 1px solid rgba(30, 41, 59, 0.95);
+  background: rgba(15, 23, 42, 0.62);
+  color: rgba(226, 232, 240, 0.9);
+  cursor: pointer;
+  padding: 10px 10px 9px;
+  text-align: left;
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease,
+    filter 0.12s ease;
+  min-width: 0;
+}
+
+.hparam-seg-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(99, 102, 241, 0.55);
+  background: rgba(15, 23, 42, 0.82);
+  filter: brightness(1.05);
+}
+
+.hparam-seg-btn .k {
+  display: block;
+  font-size: 0.86rem;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+}
+
+.hparam-seg-btn .s {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.74rem;
+  color: rgba(156, 163, 175, 0.9);
+}
+
+.hparam-seg-btn.is-active {
+  border-color: rgba(99, 102, 241, 0.9);
+  background:
+    radial-gradient(
+      circle at top left,
+      rgba(99, 102, 241, 0.14),
+      transparent 70%
+    ),
+    rgba(15, 23, 42, 0.86);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+}
+
+.hparam-tradeoff {
+  border-radius: 14px;
+  border: 1px solid rgba(30, 41, 59, 0.7);
+  background: rgba(15, 23, 42, 0.4);
+  padding: 10px 12px;
+}
+
+.tradeoff-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 1.1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.tradeoff-label {
+  min-width: 0; /* allow shrink */
+  overflow-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.2;
+}
+
+.tradeoff-label .t {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.tradeoff-label .m {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.72rem;
+  color: rgba(156, 163, 175, 0.9);
+}
+
+.tradeoff-label.right {
+  text-align: right;
+}
+
+.tradeoff-meter {
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(2, 6, 23, 0.45);
+}
+
+.tradeoff-fill {
+  height: 100%;
+  width: 18%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(99, 102, 241, 0.9),
+    rgba(139, 92, 246, 0.9)
+  );
+  transition:
+    width 160ms ease,
+    filter 160ms ease,
+    opacity 160ms ease;
+  opacity: 0.95;
+}
+
+.tradeoff-fill.off {
+  width: 14%;
+  opacity: 0.55;
+  filter: saturate(0.8);
+}
+
+.tradeoff-fill.quick {
+  width: 55%;
+}
+
+.tradeoff-fill.full {
+  width: 88%;
+  filter: brightness(1.05);
+}
+
+.hparam-hint {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: rgba(203, 213, 225, 0.75);
+  line-height: 1.35;
+}
+
+.hparam-note {
+  font-size: 0.78rem;
+  color: rgba(203, 213, 225, 0.75);
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  background: rgba(248, 113, 113, 0.06);
+}
+
+/* On small screens, keep it readable */
+@media (max-width: 600px) {
+  .tradeoff-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .tradeoff-label.right {
+    text-align: left;
+  }
+  .tradeoff-meter {
+    width: 100%;
+  }
+}
+
 /* NoSSVEP / Neutral Runtime Mimic */
 
 #view-neutral {
@@ -1594,7 +1839,8 @@ body:not(.fullscreen-mode) {
   gap: 10px;
   overflow: hidden;
 
-  background: radial-gradient(
+  background:
+    radial-gradient(
       circle at 20% 15%,
       rgba(99, 102, 241, 0.1),
       transparent 55%
@@ -1889,7 +2135,9 @@ body:not(.fullscreen-mode) {
     rgba(139, 92, 246, 0.35),
     rgba(56, 189, 248, 0.18)
   );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
@@ -1920,7 +2168,9 @@ body:not(.fullscreen-mode) {
   border-radius: 999px;
   border: 1px solid rgba(226, 232, 240, 0.18);
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45), 0 0 0 6px rgba(99, 102, 241, 0.1),
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.45),
+    0 0 0 6px rgba(99, 102, 241, 0.1),
     0 0 26px rgba(99, 102, 241, 0.25);
   font-weight: 750;
   letter-spacing: 0.02em;
@@ -1953,7 +2203,10 @@ body:not(.fullscreen-mode) {
   font-size: 0.82rem;
   font-weight: 650;
   cursor: pointer;
-  transition: transform 0.12s ease, filter 0.12s ease, border-color 0.12s ease;
+  transition:
+    transform 0.12s ease,
+    filter 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .pause-exit-btn:hover {
@@ -1986,8 +2239,12 @@ body:not(.fullscreen-mode) {
   border: 1px solid rgba(148, 163, 184, 0.22);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
   opacity: 0.96;
-  transition: transform 0.15s ease, box-shadow 0.15s ease,
-    border-color 0.15s ease, filter 0.15s ease, opacity 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease,
+    filter 0.15s ease,
+    opacity 0.15s ease;
 }
 
 #btn-pause:hover {
@@ -2005,7 +2262,8 @@ body:not(.fullscreen-mode) {
 
 #btn-pause:focus-visible {
   outline: none;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35),
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.35),
     0 0 0 3px rgba(99, 102, 241, 0.28);
   border-color: rgba(99, 102, 241, 0.9);
 }
@@ -2071,7 +2329,9 @@ body.is-busy {
     rgba(139, 92, 246, 0.35),
     rgba(56, 189, 248, 0.18)
   );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
@@ -2205,7 +2465,10 @@ body.is-busy {
   letter-spacing: 0.01em;
 
   cursor: pointer;
-  transition: transform 0.12s ease, filter 0.12s ease, border-color 0.12s ease;
+  transition:
+    transform 0.12s ease,
+    filter 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .busy-cancel-btn:hover {

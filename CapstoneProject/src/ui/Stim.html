@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -487,217 +487,296 @@
               </div>
 
               <!-- Right Column: Frequency Selection -->
-              <div class="settings-card">
-                <h3>Calibration Frequencies</h3>
+              <div class="settings-col">
+                <div class="settings-card">
+                  <h3>Calibration Frequencies</h3>
 
-                <p class="freq-instruction">
-                  Select <strong>up to 6 frequencies</strong> for calibration.
-                  Choose well-separated values for best accuracy.
-                </p>
+                  <p class="freq-instruction">
+                    Select <strong>up to 6 frequencies</strong> for calibration.
+                    Choose well-separated values for best accuracy.
+                  </p>
 
-                <div class="freq-grid">
-                  <!-- 8-12 Hz: Low/Alpha band -->
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="0"
-                      data-hz="8"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">8 Hz</span>
-                      <span class="freq-tag band-low">Low</span>
-                    </span>
-                  </label>
+                  <div class="freq-grid">
+                    <!-- 8-12 Hz: Low/Alpha band -->
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="0"
+                        data-hz="8"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">8 Hz</span>
+                        <span class="freq-tag band-low">Low</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="1"
-                      data-hz="9"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">9 Hz</span>
-                      <span class="freq-tag band-low">Low</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="1"
+                        data-hz="9"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">9 Hz</span>
+                        <span class="freq-tag band-low">Low</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="2"
-                      data-hz="10"
-                      checked
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">10 Hz</span>
-                      <span class="freq-tag recommended">Peak</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="2"
+                        data-hz="10"
+                        checked
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">10 Hz</span>
+                        <span class="freq-tag recommended">Peak</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="3"
-                      data-hz="11"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">11 Hz</span>
-                      <span class="freq-tag band-low">Low</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="3"
+                        data-hz="11"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">11 Hz</span>
+                        <span class="freq-tag band-low">Low</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="4"
-                      data-hz="12"
-                      checked
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">12 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="4"
+                        data-hz="12"
+                        checked
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">12 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <!-- 13-18 Hz: Medium band -->
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="5"
-                      data-hz="13"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">13 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <!-- 13-18 Hz: Medium band -->
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="5"
+                        data-hz="13"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">13 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="6"
-                      data-hz="14"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">14 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="6"
+                        data-hz="14"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">14 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="7"
-                      data-hz="15"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">15 Hz</span>
-                      <span class="freq-tag recommended">Peak</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="7"
+                        data-hz="15"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">15 Hz</span>
+                        <span class="freq-tag recommended">Peak</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="8"
-                      data-hz="16"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">16 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="8"
+                        data-hz="16"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">16 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="9"
-                      data-hz="17"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">17 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="9"
+                        data-hz="17"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">17 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="10"
-                      data-hz="18"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">18 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="10"
+                        data-hz="18"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">18 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <!-- 20-35 Hz: High band -->
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="11"
-                      data-hz="20"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">20 Hz</span>
-                      <span class="freq-tag band-high">High</span>
-                    </span>
-                  </label>
+                    <!-- 20-35 Hz: High band -->
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="11"
+                        data-hz="20"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">20 Hz</span>
+                        <span class="freq-tag band-high">High</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="12"
-                      data-hz="25"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">25 Hz</span>
-                      <span class="freq-tag band-high">High</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="12"
+                        data-hz="25"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">25 Hz</span>
+                        <span class="freq-tag band-high">High</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="13"
-                      data-hz="30"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">30 Hz</span>
-                      <span class="freq-tag band-high">High</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="13"
+                        data-hz="30"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">30 Hz</span>
+                        <span class="freq-tag band-high">High</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="14"
-                      data-hz="35"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">35 Hz</span>
-                      <span class="freq-tag band-high">High</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="14"
+                        data-hz="35"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">35 Hz</span>
+                        <span class="freq-tag band-high">High</span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div id="freq-warning" class="freq-warning">2 selected</div>
                 </div>
+                <!-- Card: Hyperparameter Tuning -->
+                <div class="settings-card hparam-card" id="hparam-card">
+                  <div class="hparam-head">
+                    <div class="hparam-title-row">
+                      <h3>Hyperparameter Tuning</h3>
+                      <span id="hparam-badge" class="hparam-badge off"
+                        >Off</span
+                      >
+                    </div>
 
-                <div id="freq-warning" class="freq-warning">2 selected</div>
+                    <p class="muted hparam-sub">
+                      Optional model optimization pass. Searches a grid of
+                      different training settings to improve generalization
+                      (e.g.,
+                      <span class="hparam-inline">dropout</span>,
+                      <span class="hparam-inline">kernel length</span>,
+                      <span class="hparam-inline">pooling</span>).
+                    </p>
+                  </div>
+
+                  <div class="hparam-controls">
+                    <div
+                      class="hparam-seg"
+                      role="group"
+                      aria-label="Hyperparameter tuning mode"
+                    >
+                      <button
+                        type="button"
+                        class="hparam-seg-btn is-active"
+                        data-hp="0"
+                      >
+                        <span class="k">Off</span>
+                        <span class="s">Fastest</span>
+                      </button>
+
+                      <button type="button" class="hparam-seg-btn" data-hp="2">
+                        <span class="k">Quick</span>
+                        <span class="s">~5–10 min</span>
+                      </button>
+
+                      <button type="button" class="hparam-seg-btn" data-hp="1">
+                        <span class="k">Full</span>
+                        <span class="s">Can take hours</span>
+                      </button>
+                    </div>
+
+                    <div class="hparam-tradeoff">
+                      <div class="tradeoff-row">
+                        <div class="tradeoff-label">
+                          <span class="t">Speed</span>
+                          <span class="m">Lower runtime</span>
+                        </div>
+
+                        <div class="tradeoff-meter" aria-hidden="true">
+                          <div
+                            id="hparam-meter"
+                            class="tradeoff-fill off"
+                          ></div>
+                        </div>
+
+                        <div class="tradeoff-label right">
+                          <span class="t">Performance</span>
+                          <span class="m">Potential accuracy gain</span>
+                        </div>
+                      </div>
+
+                      <div id="hparam-hint" class="hparam-hint">
+                        Recommended when you have time and want the best model
+                        result.
+                      </div>
+                    </div>
+
+                    <div id="hparam-cnn-only" class="hparam-note hidden">
+                      This option currently applies to <b>CNN</b> training only.
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 

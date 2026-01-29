@@ -1446,12 +1446,18 @@ def train_final_cnn_and_export(
 
     # 2) Run grid search for hyperparameter tuning if ON
     # we will update this config object to get best 
-    if(hparam_tuning == "ON"):
+    if(hparam_tuning != "OFF"):
         best_cfg = cfg
         best_score = -1.0
+        if(hparam_tuning == "FULL"):
+            search_space = HPARAM_SPACE
+        elif(hparam_tuning == "QUICK"):
+            search_space = HPARAM_SPACE_MINIMAL
+        else:
+            utils.abort("[TRAIN]", "hparam arg not recognized")
         
         # grid search -> iter releases new candidate each time it gets called
-        for cand in iter_hparam_candidates(cfg, HPARAM_SPACE):
+        for cand in iter_hparam_candidates(cfg, search_space):
             score = score_hparam_cfg_cv_cnn(
                 cfg=cand,
                 X_pair=X_pair,

@@ -188,6 +188,7 @@ struct StateStore_s{
         std::atomic<SettingTrainArch_E> train_arch_setting{TrainArch_CNN};
         std::atomic<SettingStimMode_E> stim_mode{StimMode_Flicker};
         std::atomic<SettingWaveform_E> waveform{Waveform_Square};
+        std::atomic<SettingHparam_E> hparam_setting{HPARAM_OFF};
         // frequency pool: up to 6 (fixed size array)
         // these are the defaults:
         std::array<TestFreq_E, 6> selected_freqs_e{
