@@ -38,6 +38,10 @@ struct StateStore_s{
     std::string pending_subject_name;
     EpilepsyRisk_E pending_epilepsy;
 
+    // backend msg strings for popups (where applicable)
+    std::mutex popup_mtx; 
+    std::string popup_msg = "";
+
     // ==================== Training Protocol Info (Used during CALIB ONLY) ========================================
     std::atomic<int> g_block_id{0}; // block index in protocol
     std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None};
@@ -106,13 +110,13 @@ struct StateStore_s{
     // ======================== LIST OF SAVED SESSIONS ================================
     // this is what we use IN RUNMODE (NOT CURRENTSESSIONINFO^, we use that for calib, args to pass Python script)
     struct SavedSession_s {
-        std::string id;          // unique ID (e.g. "veronica_2025-11-25T14-20")
-        std::string label;       // human label for UI list ("Nov 25, 14:20 (Veronica)")
-        std::string subject;     // subject_id
-        std::string session;     // session_id
-        std::string created_at;  // ISO time string
-        std::string model_dir;   // model dir/path to load from
-        std::string model_arch;  // CNN vs SVM
+        std::string id;                  // unique ID (e.g. "veronica_2025-11-25T14-20")
+        std::string label;               // human label for UI list ("Nov 25, 14:20 (Veronica)")
+        std::string subject;             // subject_id
+        std::string session;             // session_id
+        std::string model_dir;           // model dir/path to load from
+        std::string model_arch;          // CNN vs SVM
+        std::vector<DataInsufficiency_s> data_insuff; // if there were missing windows/trials/batches etc
         
         // run mode frequency pair to be sent to ui
         TestFreq_E freq_left_hz_e{TestFreq_None};
@@ -126,9 +130,9 @@ struct StateStore_s{
         .label = "Default",
         .subject = "",
         .session = "",
-        .created_at = "",
         .model_dir = "",
         .model_arch = "",
+        .data_insuff = {},
         .freq_left_hz_e = TestFreq_None,
         .freq_right_hz_e = TestFreq_None,
         .freq_right_hz = 0,

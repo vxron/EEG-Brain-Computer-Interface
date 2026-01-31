@@ -20,7 +20,7 @@ Expected args:
     --model <path>     directory where ONNX + meta.json should be written
     --arch <CNN|SVM>
     --calibsetting <all_sessions|most_recent_only>
-    --tunehparams <on|off>
+    --tunehparams <full|quick|off>
     --zscorenormalization <on|off>
 """
 
@@ -1698,6 +1698,8 @@ def main():
                 out_onnx_path=(out_dir / "ssvep_model.onnx"),
                 hparam_tuning=hparam_arg,
                 zscore_norm=zscore_arg,
+                hz_a=best_left_hz,
+                hz_b=best_right_hz,
                 logger=debug_log,
             )
             issues.extend(cnn_issues)

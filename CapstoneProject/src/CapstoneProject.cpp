@@ -26,6 +26,8 @@
 #include "classifier/ONNXClassifier.hpp"
 #include "actuation/ServoDriver.h"
 #include "utils/JsonUtils.hpp"
+#include "utils/json.hpp"
+#include <unordered_set>
 
 #ifdef USE_EEG_FILTERS
 #include "utils/Filters.hpp"
@@ -785,24 +787,7 @@ try{
                 // hz_a -> 0, hz_b -> 1, hz_rest -> 2
                 // Convention: left = freq a, right = freq b
                 // logit 0 = LEFT, logit 1 = RIGHT, logit 2 = NONE
-                switch(window_class){
-                    case -1:
-                        curr_win_prediction = SSVEP_Unknown;
-                        break;
-                    case 0:
-                        curr_win_prediction = SSVEP_Left;
-                        break;
-                    case 1:
-                        curr_win_prediction = SSVEP_Right;
-                        break;
-                    case 2:
-                        curr_win_prediction = SSVEP_None;
-                        break;
-                    default:
-                        curr_win_prediction = SSVEP_Unknown;
-                        break; // should never reach here
-                }
-
+                curr_win_prediction = PythonClassToSSVEPState(window_class);
                 if(curr_win_prediction==SSVEP_Unknown){
                     num_windows_unknown++;
                 }
@@ -902,8 +887,61 @@ void http_thread_fn(HttpServer_C& http){
 --> Script must output to <model_dir>/train_result.json
 */
 void training_manager_thread_fn(StateStore_s& stateStoreRef){
+    auto write_fail_to_statestore = [&stateStoreRef](std::string fail_reason){
+        stateStoreRef.g_ui_event.store(UIStateEvent_TrainingFailed);
+        std::unique_lock<std::mutex> popup_lock(stateStoreRef.popup_mtx);
+        stateStoreRef.popup_msg = fail_reason;
+    };
+    // build manual 'hash keys' to make sure we don't dupe
+    auto make_key = [&](const DataInsufficiency_s& d) {
+        return d.stage + "|" + d.message + "|" +
+               "|" + d.metric + "|" +
+               std::to_string(d.required) + "|" + std::to_string(d.actual) + "|" +
+               (d.frequency_hz ? std::to_string(d.frequency_hz) : "null");
+    };
+    // node here should be the 'issue' object
+    // self-passing lambda for zero-overhead recursive lambda
+    auto collect_data_insufficiency = [make_key](auto self, const nlohmann::json& node, // current subtree of JSON
+        std::vector<DataInsufficiency_s>& out, // shared output vec (accumulates results)
+        std::unordered_set<std::string>& seen // enforce no repeats in set published to statestore
+        ) -> void {
+        if(node.is_object()){
+            // if this object contains data_insufficiency, pase it
+            auto it = node.find("data_insufficiency");
+            if(it!= node.end() && it->is_object()){
+                const nlohmann::json& di = *it; // returns where we have data_insuff
+                DataInsufficiency_s datainsuff;
+                datainsuff.stage = node.value("stage","");
+                datainsuff.message = node.value("message","");
+                datainsuff.metric = node.value("metric","");
+                datainsuff.required = node.value("required",0);
+                datainsuff.actual = node.value("actual",0);
+                datainsuff.frequency_hz = node.value("frequency_hz",0);
+
+                // make sure we don't have two of same issue
+                std::string key = make_key(datainsuff);
+                if(seen.insert(key).second){ // second arg of seen.insert returns true if inserted, false if alr existed
+                    out.push_back(std::move(datainsuff)); // if inserted, transfer ownership to out
+                }
+            }
+            // recurse into all fields
+            for(const auto& [k,v]: node.items()){ // for k,v in the items..
+                self(self, v, out, seen); // SELF-PASSING RECURSION: v becomes new node (value or contents assoc w/ key) -> without having to pre-define the fxn name explicitly (invalid bcuz it's auto rtn type...)
+            }
+            return;
+        }
+        if(node.is_array()){
+            for(const auto& v : node){ 
+                self(self, v, out, seen);
+            }
+            return;
+        }
+    };
+
     logger::tlabel = "training manager";
     namespace fs = std::filesystem;
+    std::vector<std::string> issue_reasons;
+
     fs::path projectRoot = sesspaths::find_project_root();
     if (fs::exists(projectRoot / "CapstoneProject") && fs::is_directory(projectRoot / "CapstoneProject")) {
         projectRoot /= "CapstoneProject";
@@ -967,9 +1005,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
 
         // (2) Validate inputs (don’t launch if missing)
         if (data_dir.empty() || model_dir.empty() || subject_id.empty() || session_id.empty() || arch_str == "Unknown" || cdata_str == "Unknown" || hparam_str == "Unknown") {
-            LOG_ALWAYS("Training request missing session info; skipping.");
-            // todo: this is a failure (should show failure popup & bring to home)
-            stateStoreRef.g_ui_event.store(UIStateEvent_TrainingFailed);
+            write_fail_to_statestore("Backend Issue: Training request from consumer missing session info (had to skip).");
             continue;
         }
 
@@ -978,17 +1014,13 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
             std::error_code ec;
             fs::create_directories(fs::path(model_dir), ec);
             if (ec) {
-                LOG_ALWAYS("ERROR: could not create model_dir=" << model_dir
-                          << " (" << ec.message() << ")");
-                stateStoreRef.g_ui_event.store(UIStateEvent_TrainingFailed);
+                write_fail_to_statestore("Backend Issue: could not create model_dir= " + model_dir);
                 continue;
             }
         }
         
         // (3) Launch training script (should block here)
         std::stringstream ss;
-        
-        // TODO: MUST MATCH PYTHON TRAINING SCRIPT PATH AND ARGS
         ss << "python "
                << "\"" << scriptPath.string() << "\""
                << " --data \""               << data_dir   << "\""
@@ -1001,37 +1033,66 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
                << " --zscorenormalization \""<< "ON"       << "\"";
 
         const std::string cmd = ss.str();
-        /* std::system executes the cmd string using host shell
-        -> it BLOCKS "this" background thread until the Python script finishes
-        -> rc is the exit code of the cmd
-        */
         LOG_ALWAYS("Launching training: " << cmd);
         int rc = std::system(cmd.c_str());
 
-        // TODO: parse json result to write best freqs to state store
-        /*
-        const std::string& body = req.body; // req needs to be path
-        std::string best_freq_left_hz = "";
-        std::string best_freq_right_hz = "";
-        TestFreq_E freq_left_hz_e = TestFreq_None;
-        TestFreq_E freq_right_hz_e = TestFreq_None;
-        bool issuesFound = false;
-        std::string issues_str = "";
-        JSON::extract_json_int(body, "best_freq_left_hz", best_freq_left_hz);
-        JSON::extract_json_int(body, "best_freq_right_hz", best_freq_right_hz);
-        JSON::extract_json_int(body, "best_freq_left_e", freq_left_hz_e);
-        JSON::extract_json_int(body, "best_freq_right_e", freq_right_hz_e);
-        JSON::extract_json_string(body, "issues", issues_str);
-        */
+        // (4) parse json result to update ui, update statestore
+        if (rc == 0) {  
+            std::string body = "";
+            fs::path path_to_train_res = fs::path(model_dir) / "train_result.json";
 
-        //(4) Publich result to state store
-        if (rc == 0) { // TODO: ALSO CHECK ISSUES HERE
+            JSON::read_file_to_string(path_to_train_res, body);
+
+            int best_freq_left_hz;
+            int best_freq_right_hz;
+            int freq_left_hz_e = TestFreq_None;
+            int freq_right_hz_e = TestFreq_None;
+            bool train_ok = false;
+            bool onnx_ok = false;
+            bool cv_ok = false;
+            bool final_holdout_ok = false;
+            double final_holdout_acc = 0.0;
+            double final_train_acc = 0.0;
+
+            JSON::extract_json_int(body,    "best_freq_left_hz",   best_freq_left_hz);
+            JSON::extract_json_int(body,    "best_freq_right_hz",  best_freq_right_hz);
+            JSON::extract_json_int(body,    "best_freq_left_e",    freq_left_hz_e);
+            JSON::extract_json_int(body,    "best_freq_right_e",   freq_right_hz_e);
+            JSON::extract_json_bool(body,   "train_ok",            train_ok);
+            JSON::extract_json_bool(body,   "cv_ok",               cv_ok);
+            JSON::extract_json_bool(body,   "onnx_ok",             onnx_ok);
+            JSON::extract_json_bool(body,   "final_holdout_ok",    final_holdout_ok);
+            JSON::extract_json_double(body, "final_holdout_acc",   final_holdout_acc);
+            JSON::extract_json_double(body, "final_train_acc",     final_train_acc);
+            
+            if(train_ok == false){
+                write_fail_to_statestore("Python training module failed.");
+                continue;
+            }
+            if(onnx_ok == false){
+                write_fail_to_statestore("Python training module failed at ONNX export stage.");
+                continue;
+            }
+            if(cv_ok == false){
+                write_fail_to_statestore("Python training module failed at pairwise cross-validation stage.");
+                continue;
+            }
+            if(final_holdout_ok == false){
+                write_fail_to_statestore("Python training module faild at holdout (final model split) stage.");
+                continue;
+            }
+
+            nlohmann::json j = nlohmann::json::parse(path_to_train_res);
+            std::vector<DataInsufficiency_s> insuff;
+            std::unordered_set<std::string> seen;
+            collect_data_insufficiency(collect_data_insufficiency, j, insuff, seen);
+            // TODO: switch msg in ui based on freq and metric (e.g. not enough windows per trial -> do more unique trials)
+            
             // signal to stim controller that model is ready
             {
                 std::lock_guard<std::mutex> lock3(stateStoreRef.mtx_model_ready);
                 stateStoreRef.model_just_ready = true;
             }
-
             stateStoreRef.currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
 
             // Add to saved sessions list so UI can pick it later
@@ -1039,15 +1100,13 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
             s.subject   = subject_id;
             s.session   = session_id;
             s.id        = subject_id + "_" + session_id;
-            s.label     = session_id; // TODO: make better
+            s.label     = session_id;
             s.model_dir = model_dir;
-            
-            // TODO: PARSE JSON AND SET THE FREQS PROPERLY
-            // temporary for now:
-            s.freq_left_hz = 10;
-            s.freq_right_hz = 12;
-            s.freq_left_hz_e = TestFreq_10_Hz;
-            s.freq_right_hz_e = TestFreq_12_Hz;
+            s.data_insuff = insuff;
+            s.freq_left_hz = best_freq_left_hz;
+            s.freq_right_hz = best_freq_right_hz;
+            s.freq_left_hz_e = static_cast<TestFreq_E>(freq_left_hz_e);
+            s.freq_right_hz_e = static_cast<TestFreq_E>(freq_right_hz_e);
 
             int lastIdx = 0;
             {
@@ -1063,9 +1122,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
 
         } else {
             stateStoreRef.currentSessionInfo.g_isModelReady.store(false, std::memory_order_release);
-            LOG_ALWAYS("Training job failed (rc=" << rc << ")");
-            // TODO: FAULT HANDLING... TELL STIM CONTROLLER WERE FAULTED AND RETURN TO HOME WITH POPUP
-            stateStoreRef.g_ui_event.store(UIStateEvent_TrainingFailed);
+            write_fail_to_statestore("Unknown error occured during Python training");
         }
     }
 }

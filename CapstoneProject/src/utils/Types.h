@@ -287,6 +287,15 @@ inline std::string HParamEnumToString(SettingHparam_E e){
     }
 }
 
+inline SSVEPState_E PythonClassToSSVEPState(int classNum){
+    switch (classNum) {
+        case -1:  return SSVEP_Unknown;
+        case 0:   return SSVEP_Left;
+		case 1:   return SSVEP_Right;
+		case 2:   return SSVEP_None;
+        default:  return SSVEP_Unknown;
+    }
+}
 
 /* END HELPERS */
 
@@ -383,6 +392,16 @@ struct SessionPaths {
     std::string session_id;     // "2025-12-22_14-31-08"
     fs::path data_session_dir;  // .../data/<subject>/<session>/
     fs::path model_session_dir; // .../models/<subject>/<session>/
+};
+
+/* TRAINING RESULT FOR UI */
+struct DataInsufficiency_s {
+	std::string metric; // windows, trials, etc
+	int required = 0;
+	int actual = 0;
+	int frequency_hz; // from issue["data_insufficiency"]["frequency_hz"] (may be null)
+	std::string stage; // issue["stage"]
+	std::string message; // issue["message"]
 };
 
 /* END STRUCTS */
