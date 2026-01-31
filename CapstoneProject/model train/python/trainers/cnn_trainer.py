@@ -321,6 +321,8 @@ def make_stratified_trial_batches(
     y: np.ndarray,
     *,
     max_windows_per_batch: int,
+    hz_a: int,
+    hz_b: int,
     seed: int = 0,
     logger: utils.DebugLogger | None = None,
 ) -> tuple[list[list[int]], list[utils.TrainIssue]]:
@@ -395,7 +397,7 @@ def make_stratified_trial_batches(
                     "min_windows_needed_per_class": min_windows_needed_per_class,
                 },
                 data_insufficiency={
-                    "frequency_hz": -1 if cls == 2 else None,
+                    "frequency_hz": -1 if cls == 2 else (hz_a if cls == 0 else hz_b),
                     "metric": "windows",
                     "required": min_windows_needed_per_class,
                     "actual": count,
@@ -416,7 +418,7 @@ def make_stratified_trial_batches(
                     "max_windows_per_batch": int(max_windows_per_batch),
                 },
                 data_insufficiency={
-                        "frequency_hz": -1 if c == 2 else None, # infer freq from elsewhere since this func doesn't have access to it
+                        "frequency_hz": -1 if cls == 2 else (hz_a if cls == 0 else hz_b),
                         "metric": "trials",
                         "required": utils.MIN_TRIALS_PER_CLASS_FOR_BATCHING,
                         "actual": len(trials_by_class[c]),
@@ -1309,6 +1311,8 @@ def train_single_final_model_with_holdout_and_export(
     out_onnx_path: Path,
     device: torch.device,
     holdout_frac: float = 0.15,
+    hz_a: int,
+    hz_b: int,
     zscore_norm: str,
     logger: utils.DebugLogger | None = None
 ) -> tuple[bool, bool, float, float, float, float, list[utils.TrainIssue]]:
@@ -1349,6 +1353,8 @@ def train_single_final_model_with_holdout_and_export(
                 y=y_pair,
                 max_windows_per_batch=int(cfg.batch_size),
                 seed=int(cfg.seed),
+                hz_a=hz_a,
+                hz_b=hz_b,
                 logger=logger,
             )
             final_issues.extend(batch_issues)
@@ -1389,6 +1395,7 @@ def train_single_final_model_with_holdout_and_export(
             cfg=cfg,
             max_epochs=int(cfg.MAX_EPOCHS),
             device=device,
+            hz_a=hz_a, hz_b=hz_b,
             zscorearg=zscore_norm,
             return_model=True,
         )
@@ -1422,6 +1429,8 @@ def train_final_cnn_and_export(
     out_onnx_path: Path,
     hparam_tuning: str,
     zscore_norm: str,
+    hz_a: int,
+    hz_b: int,
     logger: utils.DebugLogger | None = None,
 ) -> tuple[utils.FinalTrainResults, list[utils.TrainIssue]]:
     """
@@ -1468,6 +1477,7 @@ def train_final_cnn_and_export(
                 n_time=n_time,
                 device=device,
                 max_epochs=int(cfg.MAX_EPOCHS_HTUNING),
+                hz_a=hz_a, hz_b=hz_b,
                 logger=logger,
                 zscorearg=zscore_norm,
             )
@@ -1506,6 +1516,7 @@ def train_final_cnn_and_export(
                 cfg=fold_cfg,
                 max_epochs=cfg.MAX_EPOCHS,      # final training can use full schedule
                 device=device,
+                hz_a=hz_a, hz_b=hz_b,
                 zscorearg=zscore_norm,
                 logger=logger,
             )
@@ -1528,6 +1539,8 @@ def train_final_cnn_and_export(
         device=device,
         logger=logger,
         holdout_frac=0.15,
+        hz_a=hz_a,
+        hz_b=hz_b,
         zscore_norm=zscore_norm,
     )
     issues.extend(training_issues_2)
@@ -1568,6 +1581,8 @@ def train_cnn_on_split(
     max_epochs: int,
     device: torch.device,
     zscorearg: str,
+    hz_a: int,
+    hz_b: int,
     return_model: bool = False, # need model when we do onnx export at the end (once only)
     logger: utils.DebugLogger | None = None,
 ) -> tuple[float, float, float, float, float, list[utils.TrainIssue]] | tuple[float, float, float, float, float, list[utils.TrainIssue], EEGNet]:
@@ -1609,6 +1624,8 @@ def train_cnn_on_split(
             y=y_train,
             max_windows_per_batch=int(cfg.batch_size),
             seed=int(cfg.seed),
+            hz_a=hz_a,
+            hz_b=hz_b,
             logger=logger,
         )
         issue_list.extend(batch_issues)
@@ -1739,6 +1756,8 @@ def score_hparam_cfg_cv_cnn(
     n_time: int,
     device: torch.device,
     max_epochs: int,
+    hz_a: int,
+    hz_b: int,
     logger: utils.DebugLogger | None = None,
     zscorearg: str,
 ) -> float:
@@ -1758,6 +1777,7 @@ def score_hparam_cfg_cv_cnn(
             cfg=fold_cfg,
             max_epochs=int(max_epochs),
             device=device,
+            hz_a=hz_a, hz_b=hz_b,
             zscorearg=zscorearg,
             logger=logger,
         )
@@ -1806,6 +1826,8 @@ def score_pair_cv_cnn(
             cfg=fold_cfg,
             max_epochs=int(cfg.MAX_EPOCHS_CV),
             device=device,
+            hz_a=freq_a_hz,
+            hz_b=freq_b_hz,
             zscorearg=zscorearg,
             logger=logger,
         )
