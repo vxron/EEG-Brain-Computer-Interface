@@ -410,6 +410,12 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             break;
         }
 
+        case UIState_Pending_Training: {
+            // increment currIdx if successful training
+            //int currIdx = stateStoreRef_->currentSessionIdx.load(std::memory_order_acquire);
+            //stateStoreRef_->currentSessionIdx.store(++currIdx, std::memory_order_release);
+        }
+
         case UIState_Active_Run:
         // idk yet whether or not we want to be clearing here !
             //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);

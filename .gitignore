@@ -12,6 +12,7 @@ out/
 /models/
 plots/
 __pycache__/
+/train_debug_plots/
 
 # Visual Studio / VS Code junk
 /.vs/
