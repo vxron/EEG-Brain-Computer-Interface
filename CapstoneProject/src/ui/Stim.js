@@ -108,6 +108,45 @@ const btnCalibBack = document.getElementById("btn-calib-back");
 const elTrainingOverlay = document.getElementById("training-overlay");
 const btnCancelTraining = document.getElementById("btn-cancel-training");
 
+// Home page training results DOM elements
+const elHomeTrainSummary = document.getElementById("home-train-summary");
+const btnDismissTrainSummary = document.getElementById(
+  "btn-dismiss-train-summary",
+);
+const btnReopenTrainSummary = document.getElementById(
+  "btn-reopen-train-summary",
+);
+// Status pill
+const elTrainStatusPill = document.getElementById("train-status-pill");
+const elTrainStatusLabel = document.getElementById("train-status-label");
+const elTrainSummarySub = document.getElementById("train-summary-sub");
+// KPIs
+const elTrainKpiUser = document.getElementById("train-kpi-user");
+const elTrainKpiSession = document.getElementById("train-kpi-session");
+const elTrainKpiArch = document.getElementById("train-kpi-arch");
+const elTrainKpiHoldout = document.getElementById("train-kpi-holdout");
+const elTrainKpiTrain = document.getElementById("train-kpi-train");
+const elTrainKpiHoldoutOk = document.getElementById("train-kpi-holdout-ok");
+const elTrainKpiHoldoutWarn = document.getElementById("train-kpi-holdout-warn");
+// Best frequency pair
+const elTrainBestLeftHz = document.getElementById("train-best-left-hz");
+const elTrainBestRightHz = document.getElementById("train-best-right-hz");
+const elTrainBestLeftE = document.getElementById("train-best-left-e");
+const elTrainBestRightE = document.getElementById("train-best-right-e");
+// Consistency checks
+const elCTrainOk = document.getElementById("c-check-train-ok");
+const elCCvOk = document.getElementById("c-check-cv-ok");
+const elCOnnxOk = document.getElementById("c-check-onnx-ok");
+const elCHoldoutOk = document.getElementById("c-check-holdout-ok");
+const elCTrainMsg = document.getElementById("c-train-msg");
+const elCCvMsg = document.getElementById("c-cv-msg");
+const elCOnnxMsg = document.getElementById("c-onnx-msg");
+const elCHoldoutMsg = document.getElementById("c-holdout-msg");
+// Data insufficiency table
+const elTrainSuffEmpty = document.getElementById("train-suff-empty");
+const elTrainSuffTableWrap = document.getElementById("train-suff-table-wrap");
+const elTrainSuffTbody = document.getElementById("train-suff-tbody");
+
 // Settings Page DOM elements
 const viewSettings = document.getElementById("view-settings");
 const btnOpenSettings = document.getElementById("btn-open-settings");
@@ -162,6 +201,17 @@ let neutralPairChosen = false;
 const elPauseOverlay = document.getElementById("pause-overlay");
 const btnResume = document.getElementById("btn-resume");
 const btnPauseExit = document.getElementById("btn-pause-exit");
+
+let currIdx = 0;
+let prevIdx = 0;
+let prevTrainFailMsg = "";
+let homeConsumedIdxChange = false;
+let homeConsumedTrainChange = false;
+let trainDismissed = false;
+try {
+  // remember dismiss across reloads
+  trainDismissed = localStorage.getItem("trainDismissed") === "1";
+} catch {}
 
 // ===================== 2) LOGGING HELPER =============================
 function logLine(msg) {
@@ -593,6 +643,256 @@ function attachHparamHandlers() {
   }
 }
 
+/* contract with backend: expect state.train_fail_msg to contain:
+- empty string("") for successful training
+- error msg str for failed training
+*/
+// (11) rendering training result
+
+// (11a - subfunc) to render training result card upon FAILURE
+function renderTrainingFailure(state, failMsg) {
+  // Show the training summary card in failure state
+  if (elHomeTrainSummary) elHomeTrainSummary.classList.remove("hidden");
+  if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+
+  // Set status pill to fail
+  if (elTrainStatusPill) {
+    elTrainStatusPill.classList.remove("success", "warn");
+    elTrainStatusPill.classList.add("fail");
+  }
+  setTextEl(elTrainStatusLabel, "Failed");
+  setTextEl(elTrainSummarySub, failMsg || "Training job encountered an error.");
+
+  // Fill basic KPIs that we have
+  setTextEl(elTrainKpiUser, state.active_subject_id);
+  if (elTrainKpiArch) {
+    const archE = state.settings ? state.settings.train_arch_setting : null;
+    const archLbl = archE === 0 ? "CNN" : archE === 1 ? "SVM" : "—";
+    elTrainKpiArch.textContent = archLbl;
+  }
+
+  // Clear metrics that don't apply
+  setTextEl(elTrainKpiHoldout, "—");
+  setTextEl(elTrainKpiTrain, "—");
+  if (elTrainKpiHoldoutOk) elTrainKpiHoldoutOk.classList.add("hidden");
+  if (elTrainKpiHoldoutWarn) elTrainKpiHoldoutWarn.classList.add("hidden");
+
+  // Clear best frequency pair
+  setTextEl(elTrainBestLeftHz, "—");
+  setTextEl(elTrainBestRightHz, "—");
+  setTextEl(elTrainBestLeftE, "—");
+  setTextEl(elTrainBestRightE, "—");
+
+  // Set all consistency checks to fail
+  if (elCTrainOk) {
+    elCTrainOk.classList.remove("ok", "warn");
+    elCTrainOk.classList.add("fail");
+  }
+  if (elCCvOk) {
+    elCCvOk.classList.remove("ok", "warn");
+    elCCvOk.classList.add("fail");
+  }
+  if (elCOnnxOk) {
+    elCOnnxOk.classList.remove("ok", "warn");
+    elCOnnxOk.classList.add("fail");
+  }
+  if (elCHoldoutOk) {
+    elCHoldoutOk.classList.remove("ok", "warn");
+    elCHoldoutOk.classList.add("fail");
+  }
+  setTextEl(elCTrainMsg, "Failed");
+  setTextEl(elCCvMsg, "—");
+  setTextEl(elCOnnxMsg, "—");
+  setTextEl(elCHoldoutMsg, "—");
+
+  const issues = state.train_fail_issues || [];
+
+  if (issues.length > 0) {
+    // Show the table wrapper
+    if (elTrainSuffEmpty) elTrainSuffEmpty.classList.add("hidden");
+    if (elTrainSuffTableWrap) elTrainSuffTableWrap.classList.remove("hidden");
+    clearTbody(elTrainSuffTbody);
+
+    for (const issue of issues) {
+      const tr = document.createElement("tr");
+      tr.classList.add("row-bad"); // Red highlight
+
+      const td = (v) => {
+        const c = document.createElement("td");
+        c.textContent =
+          v === undefined || v === null || v === "" ? "—" : String(v);
+        return c;
+      };
+
+      tr.appendChild(td(issue.stage));
+      tr.appendChild(td("")); // Metric column (not applicable)
+      tr.appendChild(td("")); // Actual column (not applicable)
+      tr.appendChild(td("")); // Required column (not applicable)
+
+      // Frequency column: show candidate freqs if available
+      if (issue.details?.cand_freqs?.length > 0) {
+        const freqStr = issue.details.cand_freqs.join(", ") + " Hz";
+        tr.appendChild(td(freqStr));
+      } else {
+        tr.appendChild(td("—"));
+      }
+
+      // Message column: main diagnostic
+      const msgCell = td(issue.message);
+      msgCell.classList.add("msg"); // Use existing msg styling
+      tr.appendChild(msgCell);
+
+      elTrainSuffTbody.appendChild(tr);
+    }
+  } else {
+    // No detailed issues, show generic empty state
+    if (elTrainSuffEmpty) {
+      elTrainSuffEmpty.classList.remove("hidden");
+      const titleEl = elTrainSuffEmpty.querySelector(".train-empty-title");
+      const subEl = elTrainSuffEmpty.querySelector(".train-empty-sub");
+      if (titleEl) titleEl.textContent = "Training Failed";
+      if (subEl)
+        subEl.textContent =
+          "No diagnostic data available. Please try recalibrating.";
+    }
+    if (elTrainSuffTableWrap) elTrainSuffTableWrap.classList.add("hidden");
+    clearTbody(elTrainSuffTbody);
+  }
+}
+
+function renderTrainingResult(state) {
+  if (!state) return;
+  if (trainDismissed) return;
+
+  const failMsg = state.train_fail_msg || "";
+  const hasFailed = failMsg.trim() != ""; // removes whitespace for safety
+
+  // prioritize fail status if there is one in train_fail_msg (rising edge)
+  if (hasFailed) {
+    renderTrainingFailure(state, failMsg);
+    return;
+  }
+
+  // else -> SUCCESS CARD
+  // format from backend:
+  // state.data_insuff = [{ metric, required, actual, frequency_hz, stage, message }, ...]
+  const rows = state.data_insuff;
+  const hasRows = Array.isArray(rows) && rows.length > 0;
+  // Show the training summary card if we have either training numbers or issues.
+  const hasTrainingNumbers =
+    typeof state.final_holdout_acc === "number" ||
+    typeof state.final_train_acc === "number" ||
+    typeof state.freq_left_hz === "number" ||
+    typeof state.freq_right_hz === "number";
+
+  if (!hasRows && !hasTrainingNumbers) {
+    // Nothing to show at all
+    if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
+    // hide reopen too
+    if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+    return;
+  }
+
+  // Fill KPIs
+  setTextEl(elTrainKpiUser, state.active_subject_id);
+  if (elTrainKpiArch) {
+    const archE = state.settings ? state.settings.train_arch_setting : null;
+    // backend: TrainArch_CNN=0, TrainArch_SVM=1
+    const archLbl = archE === 0 ? "CNN" : archE === 1 ? "SVM" : "—";
+    elTrainKpiArch.textContent = archLbl;
+  }
+  setTextEl(elTrainKpiHoldout, fmtPct(state.final_holdout_acc));
+  setTextEl(elTrainKpiTrain, fmtPct(state.final_train_acc));
+
+  // Holdout badge
+  const h = state.final_holdout_acc;
+  let holdoutPct = null;
+  if (typeof h === "number" && isFinite(h)) holdoutPct = h <= 1.2 ? h * 100 : h;
+
+  const ok = holdoutPct !== null && holdoutPct >= 70.0;
+  if (ok) {
+    if (elTrainKpiHoldoutOk) elTrainKpiHoldoutOk.classList.remove("hidden");
+    if (elTrainKpiHoldoutWarn) elTrainKpiHoldoutWarn.classList.add("hidden");
+  } else {
+    if (elTrainKpiHoldoutWarn) elTrainKpiHoldoutWarn.classList.remove("hidden");
+    if (elTrainKpiHoldoutOk) elTrainKpiHoldoutOk.classList.add("hidden");
+  }
+
+  // Best frequency pair
+  setTextEl(elTrainBestLeftHz, state.freq_left_hz);
+  setTextEl(elTrainBestRightHz, state.freq_right_hz);
+  setTextEl(elTrainBestLeftE, state.freq_left_hz_e);
+  setTextEl(elTrainBestRightE, state.freq_right_hz_e);
+
+  // Status pill + subtitle
+  // If insuff rows exist -> warn; else success
+  if (elTrainStatusPill) {
+    elTrainStatusPill.classList.remove("success", "warn", "fail");
+    elTrainStatusPill.classList.add(hasRows ? "warn" : "success");
+  }
+  setTextEl(elTrainStatusLabel, hasRows ? "Warnings" : "Success");
+  setTextEl(
+    elTrainSummarySub,
+    hasRows
+      ? "Some sufficiency checks failed. Collect more calibration data."
+      : "Model artifacts exported and ready for Run Mode.",
+  );
+
+  // Table render
+  if (!hasRows) {
+    if (elTrainSuffEmpty) elTrainSuffEmpty.classList.remove("hidden");
+    if (elTrainSuffTableWrap) elTrainSuffTableWrap.classList.add("hidden");
+    clearTbody(elTrainSuffTbody);
+    return;
+  }
+
+  if (elTrainSuffEmpty) elTrainSuffEmpty.classList.add("hidden");
+  if (elTrainSuffTableWrap) elTrainSuffTableWrap.classList.remove("hidden");
+  clearTbody(elTrainSuffTbody);
+
+  for (const di of rows) {
+    const tr = document.createElement("tr");
+
+    const td = (v) => {
+      const c = document.createElement("td");
+      c.textContent =
+        v === undefined || v === null || v === "" ? "—" : String(v);
+      return c;
+    };
+
+    tr.appendChild(td(di.stage));
+    tr.appendChild(td(di.metric));
+    tr.appendChild(td(di.actual));
+    tr.appendChild(td(di.required));
+
+    // backend always emits numeric frequency_hz
+    tr.appendChild(td(`${di.frequency_hz} Hz`));
+
+    tr.appendChild(td(di.message));
+
+    elTrainSuffTbody.appendChild(tr);
+  }
+}
+
+// toggle home "welcome" containers visibility
+function setHomeWelcomeVisible(visible) {
+  const welcomeElements = [
+    document.querySelector("#view-home > h2"),
+    document.querySelector("#view-home > .view-lead"),
+    document.querySelector("#view-home > .home-actions"),
+    document.querySelector("#view-home > .home-tip"),
+  ];
+  welcomeElements.forEach((el) => {
+    if (el) {
+      if (visible) {
+        el.classList.remove("hidden");
+      } else {
+        el.classList.add("hidden");
+      }
+    }
+  });
+}
+
 // ==================== 4) CONNECTION STATUS HELPER =====================
 // UI should show red/green based on C++ server connection status
 function setConnectionStatus(ok) {
@@ -707,6 +1007,34 @@ function fmtFreqEnumLabel(enumType, intVal) {
   return label;
 }
 
+// lil helper to make decimals -> percents
+// Accepts 0..1 OR 0..100. Returns string like "84.2%"
+function fmtPct(x) {
+  if (typeof x !== "number" || !isFinite(x)) return "—%";
+  const pct = x <= 1.2 ? x * 100.0 : x;
+  return `${pct.toFixed(1)}%`;
+}
+
+function fmt1(x) {
+  if (x == null || Number.isNaN(x)) return "—";
+  return Number(x).toFixed(1);
+}
+
+function setText(id, txt) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = txt;
+}
+
+function setTextEl(el, v) {
+  if (!el) return;
+  el.textContent = v === undefined || v === null || v === "" ? "—" : String(v);
+}
+
+function clearTbody(tbody) {
+  if (!tbody) return;
+  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+}
+
 // HELPER FOR CHOOSING freq pair randomly in NEUTRAL (NO_SSVEP)
 // Allowed TestFreq enums for randomly selecting neutral targets
 // (exclude 0=None and 99=NoSSVEP because those are not flicker freqs)
@@ -818,6 +1146,8 @@ function updateUiFromState(data) {
 
   // View routing based on stim_window value (MUST MATCH UISTATE_E)
   const stimState = data.stim_window;
+  const currIdx = data.curr_idx;
+  const currTrainFailMsg = data.train_fail_msg;
 
   // capture no_ssvep_test state transitions so we only randomize freq pair ONCE per entry
   const enteringNeutral = stimState === 10 && prevStimState !== 10;
@@ -828,8 +1158,16 @@ function updateUiFromState(data) {
     neutralPairChosen = false;
   }
 
-  // general detection of rising edges for any state
+  // detection of rising edges for different params
   const stateChanged = prevStimState !== stimState;
+  const sessionIdxChanged = currIdx != prevIdx;
+  const trainStatusChanged = currTrainFailMsg != prevTrainFailMsg;
+  if (sessionIdxChanged) {
+    homeConsumedIdxChange = false;
+  }
+  if (trainStatusChanged) {
+    homeConsumedTrainChange = false;
+  }
 
   const pauseVisible =
     stimState === 0 || // Active_Run
@@ -844,6 +1182,27 @@ function updateUiFromState(data) {
     stopHardwareMode();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     settingsInitiallyUpdated = false; // reset flag
+    if (
+      (sessionIdxChanged && !homeConsumedIdxChange) ||
+      (trainStatusChanged && !homeConsumedTrainChange)
+    ) {
+      // new result arrived or new session arrived -> open
+      renderTrainingResult(data);
+      if (elHomeTrainSummary) elHomeTrainSummary.classList.remove("hidden");
+      if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+      setHomeWelcomeVisible(false); // hide home content
+      homeConsumedIdxChange = true;
+      homeConsumedTrainChange = true;
+      trainDismissed = false;
+      try {
+        localStorage.setItem("trainDismissed", "0");
+      } catch {}
+    } else if (trainDismissed == true) {
+      setHomeWelcomeVisible(false); // recover home content
+      if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
+      if (btnReopenTrainSummary)
+        btnReopenTrainSummary.classList.remove("hidden");
+    }
     showView("home");
   } else if (stimState === 2 /* Instructions */) {
     stopAllStimuli();
@@ -1015,6 +1374,8 @@ function updateUiFromState(data) {
   }
   // update state
   prevStimState = stimState;
+  prevIdx = currIdx;
+  prevTrainFailMsg = currTrainFailMsg;
 }
 
 // ============= 6) START POLLING FOR GET/STATE ===============
@@ -1595,16 +1956,6 @@ function updateHwHealthHeader(rates) {
   if (elHealthRollN) elHealthRollN.textContent = n == null ? "—" : String(n);
 }
 
-function fmt1(x) {
-  if (x == null || Number.isNaN(x)) return "—";
-  return Number(x).toFixed(1);
-}
-
-function setText(id, txt) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = txt;
-}
-
 function updatePerChannelStats(statsJson) {
   const roll = statsJson?.rolling;
   const n = statsJson?.n_channels || 0;
@@ -1909,6 +2260,30 @@ async function init() {
     btnCancelTraining.addEventListener("click", () => {
       // Cancel python job + return home
       sendSessionEvent("exit");
+    });
+  }
+
+  if (btnDismissTrainSummary) {
+    btnDismissTrainSummary.addEventListener("click", () => {
+      if (btnReopenTrainSummary)
+        btnReopenTrainSummary.classList.remove("hidden");
+      if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
+      trainDismissed = true;
+      setHomeWelcomeVisible(true);
+      try {
+        localStorage.setItem("trainDismissed", "1");
+      } catch {}
+    });
+  }
+  if (btnReopenTrainSummary) {
+    btnReopenTrainSummary.addEventListener("click", () => {
+      if (elHomeTrainSummary) elHomeTrainSummary.classList.remove("hidden");
+      if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+      trainDismissed = false;
+      setHomeWelcomeVisible(false);
+      try {
+        localStorage.setItem("trainDismissed", "0");
+      } catch {}
     });
   }
 

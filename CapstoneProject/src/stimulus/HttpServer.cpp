@@ -84,7 +84,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_hz = stateStoreRef_.g_freq_hz.load(std::memory_order_acquire);
     
     // Run-mode pair
-    std::lock_guard<std::mutex> lock(stateStoreRef_.saved_sessions_mutex);
+    std::unique_lock<std::mutex> lock(stateStoreRef_.saved_sessions_mutex);
     int currIdx = stateStoreRef_.currentSessionIdx.load(std::memory_order_acquire);
     int n = static_cast<int>(stateStoreRef_.saved_sessions.size());
     // guard against out of range errors
@@ -94,10 +94,27 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_right_hz  = stateStoreRef_.saved_sessions[currIdx].freq_right_hz;
     int freq_left_hz_e = static_cast<int>(stateStoreRef_.saved_sessions[currIdx].freq_left_hz_e);
     int freq_right_hz_e = static_cast<int>(stateStoreRef_.saved_sessions[currIdx].freq_right_hz_e);
+    // "just trained" info from active session
+    double final_holdout_acc = stateStoreRef_.saved_sessions[currIdx].final_holdout_acc;
+    double final_train_acc = stateStoreRef_.saved_sessions[currIdx].final_train_acc;
+    // data insuff
+    std::vector<DataInsufficiency_s> data_insuff = stateStoreRef_.saved_sessions[currIdx].data_insuff;
+    std::string active_subject_id = "";
+    if (stateStoreRef_.saved_sessions[currIdx].subject != "") {
+        // use saved session cfg if available (post-calib)
+        active_subject_id = stateStoreRef_.saved_sessions[currIdx].subject;
+    } else {
+        // else fallback to currentsessioninfo (used during calib before training complete)
+        active_subject_id = stateStoreRef_.currentSessionInfo.get_active_subject_id();
+    }
+    lock.unlock();
 
-    // Active session info
-    bool is_model_ready = stateStoreRef_.currentSessionInfo.g_isModelReady.load(std::memory_order_acquire); // for training job monitoring
-    std::string active_subject_id = stateStoreRef_.currentSessionInfo.get_active_subject_id();
+    std::unique_lock<std::mutex> lock_pop(stateStoreRef_.train_fail_mtx);
+    std::string train_fail_msg = stateStoreRef_.train_fail_msg;
+    std::vector<TrainingIssue_s> train_issues = stateStoreRef_.train_fail_issues;
+    lock_pop.unlock();
+
+    bool is_model_ready = stateStoreRef_.currentSessionInfo.g_isModelReady.load(std::memory_order_acquire);
     int popup = stateStoreRef_.g_ui_popup.load(std::memory_order_acquire); // any popup event
 
     // Pending session info
@@ -125,12 +142,37 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
         << "\"seq\":"                    << seq                                 << ","
         << "\"stim_window\":"            << stim_window                         << ","
         << "\"block_id\":"               << block_id                            << ","
+        << "\"curr_idx\":"               << currIdx                             << ","
         << "\"freq_hz\":"                << freq_hz                             << ","
         << "\"freq_hz_e\":"              << freq_hz_e                           << ","
         << "\"freq_left_hz\":"           << freq_left_hz                        << ","
         << "\"freq_right_hz\":"          << freq_right_hz                       << ","
         << "\"freq_left_hz_e\":"         << freq_left_hz_e                      << ","
         << "\"freq_right_hz_e\":"        << freq_right_hz_e                     << ","
+        << "\"final_holdout_acc\":"      << final_holdout_acc                   << ","
+        << "\"final_train_acc\":"        << final_train_acc                     << ","
+        << "\"train_fail_msg\":\""       << JSON::json_escape(train_fail_msg)   << "\","
+        << "\"train_fail_issues\":[";
+        for (size_t i = 0; i < train_issues.size(); ++i) {
+            const auto& iss = train_issues[i];
+            oss << "{"
+                << "\"stage\":\""   << JSON::json_escape(iss.stage)   << "\","
+                << "\"message\":\"" << JSON::json_escape(iss.message) << "\","
+                << "\"details\":{"
+                    << "\"cand_freqs\":[";
+                    for (size_t j = 0; j < iss.details_cand_freqs.size(); ++j) {
+                        oss << iss.details_cand_freqs[j];
+                        if (j + 1 < iss.details_cand_freqs.size()) oss << ",";
+                    }
+            oss     << "],"
+                    << "\"n_pairs\":"     << iss.details_n_pairs     << ","
+                    << "\"skip_count\":"  << iss.details_skip_count
+                << "}"
+                << "}";
+                
+            if (i + 1 < train_issues.size()) oss << ",";
+        }
+    oss << "]," 
         << "\"is_model_ready\":"         << (is_model_ready ? "true" : "false") << ","
         << "\"popup\":"                  << popup                               << ","
         << "\"pending_subject_name\":\"" << pending_subject_name                << "\","
@@ -152,13 +194,29 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
                     oss << e;
                     if (i < sel_n - 1) oss << ",";
                 }
-            oss << "]"
-        << "}"
-    << "}";
-    
+        oss << "]"
+            << "}"   // end settings
+            << ",";  // continue root object
+        oss << "\"data_insuff\":[";
+        for (size_t i = 0; i < data_insuff.size(); ++i) {
+            const auto& di = data_insuff[i];
+            oss << "{"
+                << "\"metric\":\""       << JSON::json_escape(di.metric)      << "\","
+                << "\"required\":"       << di.required                       << ","
+                << "\"actual\":"         << di.actual                         << ","
+                << "\"frequency_hz\":"   << di.frequency_hz                   << ","
+                << "\"stage\":\""        << JSON::json_escape(di.stage)       << "\","
+                << "\"message\":\""      << JSON::json_escape(di.message)     << "\""
+                << "}";
+
+            if (i + 1 < data_insuff.size()) oss << ",";
+        }
+        oss << "]";
+    oss << "}";
+
     lock3.unlock();
     std::string json_snapshot = oss.str();
-    
+
     // 3) send json back to client through res
     write_json(res, json_snapshot);
 }

@@ -38,9 +38,10 @@ struct StateStore_s{
     std::string pending_subject_name;
     EpilepsyRisk_E pending_epilepsy;
 
-    // backend msg strings for popups (where applicable)
-    std::mutex popup_mtx; 
-    std::string popup_msg = "";
+    // backend msg strings (where applicable)
+    std::mutex train_fail_mtx; 
+    std::string train_fail_msg = ""; // used as final train fail msg
+    std::vector<TrainingIssue_s> train_fail_issues{};
 
     // ==================== Training Protocol Info (Used during CALIB ONLY) ========================================
     std::atomic<int> g_block_id{0}; // block index in protocol
@@ -109,6 +110,7 @@ struct StateStore_s{
 
     // ======================== LIST OF SAVED SESSIONS ================================
     // this is what we use IN RUNMODE (NOT CURRENTSESSIONINFO^, we use that for calib, args to pass Python script)
+    // TODO: add bool or flag that says whether savedsession is good or bad, automatically delete bad after displaying results to user
     struct SavedSession_s {
         std::string id;                  // unique ID (e.g. "veronica_2025-11-25T14-20")
         std::string label;               // human label for UI list ("Nov 25, 14:20 (Veronica)")
@@ -117,6 +119,9 @@ struct StateStore_s{
         std::string model_dir;           // model dir/path to load from
         std::string model_arch;          // CNN vs SVM
         std::vector<DataInsufficiency_s> data_insuff; // if there were missing windows/trials/batches etc
+
+        double final_holdout_acc;
+        double final_train_acc;
         
         // run mode frequency pair to be sent to ui
         TestFreq_E freq_left_hz_e{TestFreq_None};
@@ -133,6 +138,8 @@ struct StateStore_s{
         .model_dir = "",
         .model_arch = "",
         .data_insuff = {},
+        .final_holdout_acc = 0.0,
+        .final_train_acc = 0.0,
         .freq_left_hz_e = TestFreq_None,
         .freq_right_hz_e = TestFreq_None,
         .freq_right_hz = 0,

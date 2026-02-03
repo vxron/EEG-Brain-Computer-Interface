@@ -70,6 +70,207 @@
               Choose how you want to use the EEG page-turner today.
             </p>
 
+            <!-- ================= TRAINING SUMMARY (HOME) ================= -->
+            <section
+              id="home-train-summary"
+              class="train-summary hidden"
+              aria-label="Latest training summary"
+            >
+              <!-- Header row -->
+              <header class="train-summary-head">
+                <div class="train-summary-title">
+                  <div class="train-title-row">
+                    <h3>Latest Training Result</h3>
+                    <!-- status pill: success | warn | fail -->
+                    <span
+                      id="train-status-pill"
+                      class="train-status-pill success"
+                      aria-label="Training status"
+                    >
+                      <span class="dot"></span>
+                      <span id="train-status-label">Success</span>
+                    </span>
+                  </div>
+
+                  <p id="train-summary-sub" class="train-summary-sub">
+                    Model artifacts exported and ready for Run Mode.
+                  </p>
+                </div>
+
+                <div class="train-summary-actions">
+                  <button
+                    id="btn-dismiss-train-summary"
+                    class="btn train-btn-dismiss"
+                    type="button"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </header>
+
+              <!-- Top: KPI strip -->
+              <div class="train-kpis">
+                <div class="kpi">
+                  <div class="kpi-k">User</div>
+                  <div id="train-kpi-user" class="kpi-v">—</div>
+                </div>
+
+                <div class="kpi">
+                  <div class="kpi-k">Session</div>
+                  <div id="train-kpi-session" class="kpi-v">—</div>
+                </div>
+
+                <div class="kpi">
+                  <div class="kpi-k">Architecture</div>
+                  <div id="train-kpi-arch" class="kpi-v">—</div>
+                </div>
+
+                <div class="kpi">
+                  <div class="kpi-k">Holdout Accuracy</div>
+                  <div id="train-kpi-holdout" class="kpi-v">—%</div>
+                  <div class="kpi-sub">
+                    <span id="train-kpi-holdout-ok" class="kpi-badge ok hidden"
+                      >OK</span
+                    >
+                    <span
+                      id="train-kpi-holdout-warn"
+                      class="kpi-badge warn hidden"
+                      >Low</span
+                    >
+                  </div>
+                </div>
+
+                <div class="kpi">
+                  <div class="kpi-k">Train Accuracy</div>
+                  <div id="train-kpi-train" class="kpi-v">—%</div>
+                  <div class="kpi-sub muted">Sanity check only</div>
+                </div>
+              </div>
+
+              <!-- Mid: highlight best frequencies -->
+              <div class="train-best">
+                <div class="train-best-left">
+                  <div class="train-section-title">Best Frequency Pair</div>
+                  <div
+                    class="train-best-pair"
+                    role="group"
+                    aria-label="Best frequencies"
+                  >
+                    <div class="best-chip best-left">
+                      <div class="best-k">Left</div>
+                      <div class="best-v">
+                        <span id="train-best-left-hz" class="hz">—</span>
+                        <span class="unit">Hz</span>
+                      </div>
+                      <div id="train-best-left-e" class="best-sub">—</div>
+                    </div>
+
+                    <div class="best-divider" aria-hidden="true">→</div>
+
+                    <div class="best-chip best-right">
+                      <div class="best-k">Right</div>
+                      <div class="best-v">
+                        <span id="train-best-right-hz" class="hz">—</span>
+                        <span class="unit">Hz</span>
+                      </div>
+                      <div id="train-best-right-e" class="best-sub">—</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Data consistency block -->
+                <div class="train-best-right">
+                  <div class="train-section-title">Data Consistency</div>
+
+                  <div
+                    class="consistency-grid"
+                    role="group"
+                    aria-label="Consistency checks"
+                  >
+                    <div class="consistency-item">
+                      <span id="c-check-train-ok" class="c-pill ok">
+                        <span class="dot"></span> Train
+                      </span>
+                      <div id="c-train-msg" class="c-msg">Completed</div>
+                    </div>
+
+                    <div class="consistency-item">
+                      <span id="c-check-cv-ok" class="c-pill ok">
+                        <span class="dot"></span> CV
+                      </span>
+                      <div id="c-cv-msg" class="c-msg">Passed</div>
+                    </div>
+
+                    <div class="consistency-item">
+                      <span id="c-check-onnx-ok" class="c-pill ok">
+                        <span class="dot"></span> ONNX
+                      </span>
+                      <div id="c-onnx-msg" class="c-msg">Exported</div>
+                    </div>
+
+                    <div class="consistency-item">
+                      <span id="c-check-holdout-ok" class="c-pill ok">
+                        <span class="dot"></span> Holdout
+                      </span>
+                      <div id="c-holdout-msg" class="c-msg">Passed</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Bottom: data sufficiency table -->
+              <div class="train-suff">
+                <div class="train-suff-head">
+                  <div class="train-section-title">
+                    Data Sufficiency & Diagnostics
+                  </div>
+                  <div class="train-suff-hint muted">
+                    Issues are reported per metric/stage. Resolve low counts by
+                    collecting more calibration data.
+                  </div>
+                </div>
+
+                <div id="train-suff-empty" class="train-empty">
+                  <div class="train-empty-title">No issues reported</div>
+                  <div class="train-empty-sub muted">
+                    All sufficiency checks passed for the selected frequency
+                    pool.
+                  </div>
+                </div>
+
+                <!-- table -->
+                <div id="train-suff-table-wrap" class="train-table-wrap hidden">
+                  <table
+                    class="train-table"
+                    aria-label="Data insufficiency table"
+                  >
+                    <thead>
+                      <tr>
+                        <th>Stage</th>
+                        <th>Metric</th>
+                        <th>Actual</th>
+                        <th>Required</th>
+                        <th>Freq</th>
+                        <th>Message</th>
+                      </tr>
+                    </thead>
+                    <tbody id="train-suff-tbody">
+                      <!-- JS injects rows -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <!-- Small “reopen” button shown when user dismisses -->
+            <button
+              id="btn-reopen-train-summary"
+              class="btn ghost train-reopen hidden"
+              type="button"
+            >
+              View last training result
+            </button>
+
             <div class="home-actions">
               <div class="home-card">
                 <h2>1: Calibration</h2>

@@ -404,4 +404,13 @@ struct DataInsufficiency_s {
 	std::string message; // issue["message"]
 };
 
+struct TrainingIssue_s {
+    std::string stage;          // e.g., "PAIR_SEARCH", "DATA_LOAD", etc.
+    std::string message;        // Human-readable error message
+    // Details (optional, may be empty)
+    std::vector<int> details_cand_freqs;  // Candidate frequencies tried
+    int details_n_pairs = 0;              // Number of pairs attempted
+    int details_skip_count = 0;           // Number skipped
+};
+
 /* END STRUCTS */
