@@ -1010,6 +1010,10 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         // unlock mtx with std::unique_lock's 'unlock' function
         lock.unlock(); // unlock for heavy work
 
+        // fwd declare vars used by both code paths (regardless of SKIP_TRAINING)
+        std::string subject_id;
+        std::string session_id;
+#if !SKIP_TRAINING
         // what happens when it wakes up:
         // (1) Snapshot session info (paths/ids)
         std::string data_dir, model_dir, subject_id, session_id;
@@ -1063,10 +1067,18 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         const std::string cmd = ss.str();
         LOG_ALWAYS("Launching training: " << cmd);
         int rc = std::system(cmd.c_str());
+#else
+        constexpr const char* kPretrainedPath = SKIP_TRAINING_MODEL_PATH;
+        fs::path model_dir = projectRoot.parent_path() / "models" / kPretrainedPath;
+#endif
 
         // (4) parse json result to update ui, update statestore
         std::string body = "";
+#if !SKIP_TRAINING
         fs::path path_to_train_res = fs::path(model_dir) / "train_result.json";
+#else
+        fs::path path_to_train_res = model_dir / "train_result.json";
+#endif
         int best_freq_left_hz;
         int best_freq_right_hz;
         int freq_left_hz_e = TestFreq_None;
@@ -1117,16 +1129,19 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
             write_fail_to_statestore("Python training module faild at holdout (final model split) stage.", issues);
             continue;
         }
+#if !SKIP_TRAINING
         if (rc!=0) {
             write_fail_to_statestore("Unknown error occured during Python training", issues);
             continue;
         }
+#endif
 
         // signal to stim controller that model is ready if we made it past all these checks
         {
             std::lock_guard<std::mutex> lock3(stateStoreRef.mtx_model_ready);
             stateStoreRef.model_just_ready = true;
         }
+#if !SKIP_TRAINING
         // Add to saved sessions list so UI can pick it later
         StateStore_s::SavedSession_s s;
         s.subject   = subject_id;
@@ -1141,6 +1156,21 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         s.freq_right_hz_e = static_cast<TestFreq_E>(freq_right_hz_e);
         s.final_holdout_acc = final_holdout_acc;
         s.final_train_acc = final_train_acc;
+#else
+        StateStore_s::SavedSession_s s;
+        s.subject   = "DEBUG_SESSION";
+        s.session   = "DEBUG_SESSION";
+        s.id        = "DEBUG_SESSION";
+        s.label     = "DEBUG_SESSION";
+        s.model_dir = model_dir.string();
+        s.data_insuff = insuff;
+        s.freq_left_hz = best_freq_left_hz;
+        s.freq_right_hz = best_freq_right_hz;
+        s.freq_left_hz_e = static_cast<TestFreq_E>(freq_left_hz_e);
+        s.freq_right_hz_e = static_cast<TestFreq_E>(freq_right_hz_e);
+        s.final_holdout_acc = final_holdout_acc;
+        s.final_train_acc = final_train_acc;
+#endif
         int lastIdx = 0;
         {
             // add saved session: blocks until mutex is available for acquiring
