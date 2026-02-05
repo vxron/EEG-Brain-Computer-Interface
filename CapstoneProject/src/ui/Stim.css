@@ -265,15 +265,15 @@ body {
   );
   display: flex;
   flex-direction: column;
-  justify-content: center; /* vertical centering */
-  gap: 10px; /* spacing between header, steps, tip */
-  overflow-y: hidden; /* prevent weird scrollbars */
+  justify-content: center;
+  gap: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 @media (max-width: 1100px) {
   #view-home {
     justify-content: flex-start; /* top align if too narrow */
-    overflow-y: auto; /* allow scroll ONLY when necessary */
     padding-top: 20px;
   }
 }
@@ -352,29 +352,10 @@ body {
   padding: 14px 14px 12px;
   margin: 10px auto 12px;
   max-width: 1050px;
+  max-height: 75vh;
   position: relative;
-  overflow: hidden;
-}
-
-.train-summary::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: 18px;
-  padding: 1px;
-  background: linear-gradient(
-    135deg,
-    rgba(99, 102, 241, 0.55),
-    rgba(139, 92, 246, 0.35),
-    rgba(56, 189, 248, 0.16)
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
-  opacity: 0.65;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .train-summary-head {
@@ -394,16 +375,16 @@ body {
 
 .train-summary h3 {
   margin: 0;
-  font-size: 0.98rem;
-  font-weight: 800;
+  font-size: 0.88rem;
+  font-weight: 700;
   letter-spacing: 0.01em;
 }
 
 .train-summary-sub {
-  margin: 6px 0 0;
-  font-size: 0.82rem;
+  margin: 4px 0 0;
+  font-size: 0.76rem;
   color: rgba(203, 213, 225, 0.78);
-  line-height: 1.35;
+  line-height: 1.3;
 }
 
 .train-summary-actions {
@@ -413,13 +394,12 @@ body {
   flex: 0 0 auto;
 }
 
-/* dismiss button */
 .train-btn-dismiss {
   flex: 0 0 auto !important;
-  padding: 7px 12px;
+  padding: 6px 11px;
   border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 650;
+  font-size: 0.72rem;
+  font-weight: 600;
   letter-spacing: 0.01em;
   border: 1px solid rgba(148, 163, 184, 0.22);
   background: rgba(15, 23, 42, 0.7);
@@ -429,16 +409,15 @@ body {
   border-color: rgba(99, 102, 241, 0.75);
 }
 
-/* status pill variants */
 .train-status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
+  gap: 6px;
+  padding: 4px 9px;
   border-radius: 999px;
-  font-size: 0.76rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   border: 1px solid rgba(148, 163, 184, 0.22);
   background: rgba(15, 23, 42, 0.72);
@@ -447,11 +426,11 @@ body {
 }
 
 .train-status-pill .dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.8);
-  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.12);
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.12);
 }
 
 .train-status-pill.success {
@@ -461,7 +440,7 @@ body {
 }
 .train-status-pill.success .dot {
   background: var(--success);
-  box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.12);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.12);
 }
 
 .train-status-pill.warn {
@@ -471,7 +450,7 @@ body {
 }
 .train-status-pill.warn .dot {
   background: rgba(250, 204, 21, 0.95);
-  box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.12);
+  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.12);
 }
 
 .train-status-pill.fail {
@@ -481,13 +460,12 @@ body {
 }
 .train-status-pill.fail .dot {
   background: var(--danger);
-  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.12);
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.12);
 }
 
-/* KPI strip */
 .train-kpis {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-top: 8px;
   margin-bottom: 10px;
@@ -500,34 +478,38 @@ body {
 }
 
 .kpi {
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid rgba(30, 41, 59, 0.85);
   background: rgba(2, 6, 23, 0.6);
-  padding: 10px 10px 9px;
+  padding: 9px 9px 8px;
   overflow: hidden;
+  min-width: 0;
 }
 
 .kpi-k {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   color: rgba(203, 213, 225, 0.65);
-  letter-spacing: 0.02em;
-  margin-bottom: 4px;
+  letter-spacing: 0.01em;
+  margin-bottom: 3px;
 }
 
 .kpi-v {
-  font-size: 0.95rem;
-  font-weight: 800;
+  font-size: 0.88rem;
+  font-weight: 700;
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
   color: rgba(226, 232, 240, 0.96);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kpi-sub {
-  margin-top: 6px;
-  font-size: 0.72rem;
+  margin-top: 5px;
+  font-size: 0.68rem;
   color: rgba(203, 213, 225, 0.7);
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -536,11 +518,11 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 999px;
-  font-size: 0.68rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   border: 1px solid rgba(148, 163, 184, 0.22);
   background: rgba(15, 23, 42, 0.75);
@@ -558,7 +540,6 @@ body {
   background: rgba(250, 204, 21, 0.08);
 }
 
-/* Best freq + consistency two-column */
 .train-best {
   display: grid;
   grid-template-columns: 1.15fr 1fr;
@@ -574,12 +555,12 @@ body {
 }
 
 .train-section-title {
-  font-size: 0.78rem;
-  font-weight: 850;
-  letter-spacing: 0.1em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(203, 213, 225, 0.7);
-  margin-bottom: 8px;
+  margin-bottom: 7px;
 }
 
 .train-best-pair {
@@ -590,11 +571,11 @@ body {
 }
 
 .best-chip {
-  border-radius: 16px;
-  padding: 12px 12px 10px;
+  border-radius: 14px;
+  padding: 10px 11px 9px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(15, 23, 42, 0.55);
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.28);
   position: relative;
   overflow: hidden;
 }
@@ -621,10 +602,10 @@ body {
 }
 
 .best-k {
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: rgba(203, 213, 225, 0.7);
-  letter-spacing: 0.02em;
-  margin-bottom: 6px;
+  letter-spacing: 0.01em;
+  margin-bottom: 5px;
 }
 
 .best-v {
@@ -635,20 +616,20 @@ body {
 }
 
 .best-v .hz {
-  font-size: 1.35rem;
-  font-weight: 900;
+  font-size: 1.2rem;
+  font-weight: 800;
   letter-spacing: 0.01em;
 }
 
 .best-v .unit {
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   color: rgba(203, 213, 225, 0.7);
-  font-weight: 700;
+  font-weight: 650;
 }
 
 .best-sub {
-  margin-top: 6px;
-  font-size: 0.78rem;
+  margin-top: 5px;
+  font-size: 0.74rem;
   color: rgba(203, 213, 225, 0.75);
   white-space: nowrap;
   overflow: hidden;
@@ -662,7 +643,6 @@ body {
   padding: 0 2px;
 }
 
-/* Consistency pills */
 .consistency-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -673,28 +653,31 @@ body {
   .consistency-grid {
     grid-template-columns: 1fr;
   }
+  .train-kpis {
+    grid-template-columns: 1fr;
+  }
 }
 
 .consistency-item {
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid rgba(30, 41, 59, 0.85);
   background: rgba(2, 6, 23, 0.55);
-  padding: 10px 10px 9px;
+  padding: 9px 9px 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
 }
 
 .c-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
+  gap: 6px;
+  padding: 4px 9px;
   border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   width: fit-content;
   border: 1px solid rgba(148, 163, 184, 0.22);
@@ -703,11 +686,11 @@ body {
 }
 
 .c-pill .dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.8);
-  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.1);
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.1);
 }
 
 .c-pill.ok {
@@ -717,7 +700,7 @@ body {
 }
 .c-pill.ok .dot {
   background: var(--success);
-  box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.12);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.12);
 }
 
 .c-pill.warn {
@@ -727,7 +710,7 @@ body {
 }
 .c-pill.warn .dot {
   background: rgba(250, 204, 21, 0.95);
-  box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.12);
+  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.12);
 }
 
 .c-pill.fail {
@@ -737,11 +720,11 @@ body {
 }
 .c-pill.fail .dot {
   background: var(--danger);
-  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.12);
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.12);
 }
 
 .c-msg {
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   color: rgba(203, 213, 225, 0.78);
   line-height: 1.25;
   min-width: 0;
@@ -750,12 +733,11 @@ body {
   white-space: nowrap;
 }
 
-/* Sufficiency section */
 .train-suff {
-  border-radius: 16px;
+  border-radius: 14px;
   border: 1px solid rgba(30, 41, 59, 0.85);
   background: rgba(2, 6, 23, 0.45);
-  padding: 12px 12px 10px;
+  padding: 11px 11px 9px;
 }
 
 .train-suff-head {
@@ -768,35 +750,33 @@ body {
 }
 
 .train-suff-hint {
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   color: rgba(203, 213, 225, 0.65);
-  line-height: 1.35;
+  line-height: 1.3;
 }
 
-/* Empty state */
 .train-empty {
-  border-radius: 14px;
-  padding: 12px 12px 10px;
+  border-radius: 12px;
+  padding: 11px 11px 9px;
   border: 1px dashed rgba(148, 163, 184, 0.22);
   background: rgba(15, 23, 42, 0.35);
 }
 
 .train-empty-title {
-  font-size: 0.88rem;
-  font-weight: 800;
+  font-size: 0.84rem;
+  font-weight: 700;
   letter-spacing: 0.01em;
 }
 
 .train-empty-sub {
-  margin-top: 4px;
-  font-size: 0.8rem;
+  margin-top: 3px;
+  font-size: 0.76rem;
   color: rgba(203, 213, 225, 0.68);
 }
 
-/* Table */
 .train-table-wrap {
   overflow: auto;
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   background: rgba(2, 6, 23, 0.42);
 }
@@ -805,7 +785,7 @@ body {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  min-width: 760px; /* allows horizontal scroll cleanly */
+  min-width: 760px;
 }
 
 .train-table thead th {
@@ -814,18 +794,18 @@ body {
   background: rgba(2, 6, 23, 0.92);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   color: rgba(203, 213, 225, 0.72);
   text-align: left;
-  padding: 10px 10px;
+  padding: 9px 9px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.14);
 }
 
 .train-table tbody td {
-  padding: 10px 10px;
-  font-size: 0.82rem;
+  padding: 9px 9px;
+  font-size: 0.78rem;
   color: rgba(226, 232, 240, 0.88);
   border-bottom: 1px solid rgba(148, 163, 184, 0.08);
   vertical-align: top;
@@ -849,11 +829,11 @@ body {
 .cell-pill {
   display: inline-flex;
   align-items: center;
-  padding: 3px 8px;
+  padding: 2px 7px;
   border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 850;
-  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   border: 1px solid rgba(99, 102, 241, 0.22);
   background: rgba(99, 102, 241, 0.08);
@@ -868,46 +848,21 @@ body {
   background: rgba(248, 113, 113, 0.04);
 }
 
-/* Reopen button on Home */
 .train-reopen {
-  margin: 6px auto 10px;
+  margin: 5px auto 9px;
   display: block;
   width: fit-content;
   flex: 0 0 auto !important;
-  padding: 7px 12px;
+  padding: 6px 11px;
   border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 650;
+  font-size: 0.72rem;
+  font-weight: 600;
   letter-spacing: 0.01em;
 }
 
 #view-home .train-summary,
 #view-home .train-reopen {
   align-self: center;
-}
-
-/* Status pill FAIL state */
-.train-status-pill.fail {
-  border-color: rgba(248, 113, 113, 0.5);
-  color: rgba(254, 202, 202, 0.95);
-  background: rgba(248, 113, 113, 0.08);
-}
-
-.train-status-pill.fail .dot {
-  background: var(--danger);
-  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.12);
-}
-
-/* Consistency check pill FAIL state */
-.c-pill.fail {
-  border-color: rgba(248, 113, 113, 0.45);
-  color: rgba(254, 202, 202, 0.95);
-  background: rgba(248, 113, 113, 0.08);
-}
-
-.c-pill.fail .dot {
-  background: var(--danger);
-  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.12);
 }
 
 @keyframes pulse-fail {
