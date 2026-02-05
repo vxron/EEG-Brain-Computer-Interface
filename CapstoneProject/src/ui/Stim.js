@@ -701,9 +701,9 @@ function renderTrainingFailure(state, failMsg) {
     elCHoldoutOk.classList.add("fail");
   }
   setTextEl(elCTrainMsg, "Failed");
-  setTextEl(elCCvMsg, "—");
-  setTextEl(elCOnnxMsg, "—");
-  setTextEl(elCHoldoutMsg, "—");
+  setTextEl(elCCvMsg, "Failed");
+  setTextEl(elCOnnxMsg, "Failed");
+  setTextEl(elCHoldoutMsg, "Failed");
 
   const issues = state.train_fail_issues || [];
 
@@ -1198,7 +1198,7 @@ function updateUiFromState(data) {
         localStorage.setItem("trainDismissed", "0");
       } catch {}
     } else if (trainDismissed == true) {
-      setHomeWelcomeVisible(false); // recover home content
+      setHomeWelcomeVisible(true); // recover home content
       if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
       if (btnReopenTrainSummary)
         btnReopenTrainSummary.classList.remove("hidden");
