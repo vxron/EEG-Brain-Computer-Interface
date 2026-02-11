@@ -1016,7 +1016,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
 #if !SKIP_TRAINING
         // what happens when it wakes up:
         // (1) Snapshot session info (paths/ids)
-        std::string data_dir, model_dir, subject_id, session_id;
+        std::string data_dir, model_dir;
         {
             std::lock_guard<std::mutex> sLk(stateStoreRef.currentSessionInfo.mtx_);
             data_dir   = stateStoreRef.currentSessionInfo.g_active_data_path;
@@ -1149,6 +1149,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         s.id        = subject_id + "_" + session_id;
         s.label     = session_id;
         s.model_dir = model_dir;
+        s.model_arch = arch_str;
         s.data_insuff = insuff;
         s.freq_left_hz = best_freq_left_hz;
         s.freq_right_hz = best_freq_right_hz;
@@ -1163,6 +1164,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         s.id        = "DEBUG_SESSION";
         s.label     = "DEBUG_SESSION";
         s.model_dir = model_dir.string();
+        s.model_arch = "";
         s.data_insuff = insuff;
         s.freq_left_hz = best_freq_left_hz;
         s.freq_right_hz = best_freq_right_hz;
@@ -1182,6 +1184,83 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         stateStoreRef.currentSessionIdx.store(lastIdx, std::memory_order_release);
         stateStoreRef.currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
         LOG_ALWAYS("Training SUCCESS.");
+
+        // TODO: CREATE/WRITE TO JSON.META SO WE REMEMBER SESSIONS BTWN BROWSER ON/OFF
+        // ALSO CREATE/WRITE-APPEND to global static json that keeps track of all saved sess btwn browser on/off
+        // must be written atomically bcuz other threads can access/interrupt ->mutex in statestore or atomics?
+        // this json will exist in top lvel of model_dir
+        // 2 mechanisms of protection:
+        // 1) global_session_list_json_mtx to prevent concurrent reads/writes
+        // 2) name tmp initially and only rename to proper once full file has been written (in case of crashes, power offs, etc)
+
+#if !SKIP_TRAINING
+        nlohmann::json j_sess;
+        j_sess["sess_idx"] = lastIdx;
+        j_sess["subject"] = subject_id;
+        j_sess["session_id"] = subject_id + "_" + session_id;
+        j_sess["model_arch"] = arch_str;
+        j_sess["model_holdout_acc"] = final_holdout_acc;
+        j_sess["freq_left_hz"] = best_freq_left_hz;
+        j_sess["freq_right_hz"] = best_freq_right_hz;
+        j_sess["data_insufficiency"] = (insuff.empty()) ? false : true; 
+        std::string meta_path_str = model_dir + "/meta.json";
+        std::filesystem::path meta_path = std::filesystem::path(meta_path_str);
+        // grab individual sessions mtx while writing meta.json (easier to access than trainresult.json)
+        {
+            // there should be an onnx assoc w/ this now in same model dir
+            std::lock_guard<std::mutex> lock_sess_again(stateStoreRef.saved_sessions_mutex);
+            // write out j_sess to model_dir/"meta.json"
+            try {
+                JSON::write_json_atomic(meta_path, j_sess);
+                LOG_ALWAYS("Wrote meta.json to " << meta_path.string());
+            }
+            catch (const std::exception& e){
+                LOG_ALWAYS("Failed writing meta.json: " << e.what());
+                continue;
+            }
+        }
+
+        // STRUCTURE FOR ALL SESS JSON: 
+        /* {"meta_paths": []}
+        */
+        nlohmann::json j_all_sess;
+        // make all sess path
+        std::filesystem::path all_sess_dir = model_dir;
+        for(int i = 0; i < 2; i++){
+            // should be 2 parents up to be in models/
+            auto p = all_sess_dir.parent_path();
+            if(p == all_sess_dir || p.empty()) break; // highest parent
+            all_sess_dir = p;
+        }
+        std::filesystem::path j_all_sess_path = all_sess_dir / "all_sessions.json";
+
+        // metas will be stored as relative paths to meta.json from models/
+        fs::path meta_path_abs = fs::path(model_dir) / "meta.json";
+        std::error_code ec;
+        fs::path meta_path_rel = fs::relative(meta_path_abs, all_sess_dir, ec);
+        if(ec){
+            meta_path_rel = meta_path_abs; // store as abs as fallback
+        }
+        // grab global mtx while writing full list json
+        // save as 
+        {
+            std::lock_guard<std::mutex> disk_lock(stateStoreRef.global_session_list_json_mtx);
+            // overwrite file if exists w/ current + new sess, else create new one
+            nlohmann::json j = JSON::read_json_if_exists(j_all_sess_path);
+            if(!j.is_object()) j = nlohmann::json::object();
+            if (!j.contains("meta_paths") || !j["meta_paths"].is_array()){
+                j["meta_paths"] = nlohmann::json::array(); // desired structure must be satisfied
+            }
+            j["meta_paths"].push_back(meta_path_rel);
+
+            try {
+                JSON::write_json_atomic(j_all_sess_path, j);
+            } catch (const std::exception& e){
+                LOG_ALWAYS("Failed writing session index: " << e.what());
+            }
+        }
+        
+#endif
     }
 }
 

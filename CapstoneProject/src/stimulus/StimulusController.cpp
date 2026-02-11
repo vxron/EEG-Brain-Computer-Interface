@@ -312,6 +312,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
         }
 
         case UIState_Saved_Sessions: {
+            // TODO : LOAD ALL THE METAS FROM DISK (CAN DO FROM FRONTEND THO)
             stateStoreRef_->g_ui_state.store(UIState_Saved_Sessions, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
@@ -414,6 +415,14 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             // increment currIdx if successful training
             //int currIdx = stateStoreRef_->currentSessionIdx.load(std::memory_order_acquire);
             //stateStoreRef_->currentSessionIdx.store(++currIdx, std::memory_order_release);
+        }
+
+        case UIState_None: {
+            // on init etc
+            // reload saved sessions from disk by reading savedsessionlist.json
+            // then for each one in savedsessionlist, check if theres a .onnx + .meta (there should be)
+            // TODO
+            // scan session roots, reuild stateStoreRef_->saved_sessions
         }
 
         case UIState_Active_Run:
