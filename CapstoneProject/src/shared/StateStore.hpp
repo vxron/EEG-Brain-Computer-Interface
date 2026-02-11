@@ -164,6 +164,9 @@ struct StateStore_s{
     // TODO: make GENERAL to all things that should reload on new session (e.g. UI as well...)
     // this can get set by stim controller when user selects a new or diff sess?
 
+    // mtx protecting global json meta containing session list on disk for loading at startup
+    std::mutex global_session_list_json_mtx; 
+
     // ======================== Actuation thread Sync ======================
     // cv to notify thread when consumer makes non-neutral inference (either left or right ssvep)
     std::mutex mtx_actuation_request;
