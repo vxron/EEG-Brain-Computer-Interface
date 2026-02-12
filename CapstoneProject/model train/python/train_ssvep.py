@@ -489,6 +489,57 @@ def add_trial_ids_per_window(df: pd.DataFrame) -> pd.DataFrame:
     df["trial_id"] = df["trial_id"].astype(np.int64)
     return df
 
+def load_windowing_from_meta(data_session_dir: Path) -> dict[str, int]:
+    """
+    Returns hop_scans, trim_scans_each_side, win_len_scans_raw, win_len_scans_effective.
+
+    Notes:
+      - meta stores *_samples in the C++ sense: floats across ALL channels (scans * n_ch)
+      - In Python, T (info.n_time) is scans per channel.
+    """
+    meta_path = data_session_dir / "settings_meta.json"
+    if not meta_path.exists():
+        utils.abort("META", "Missing settings_meta.json", {"path": str(meta_path)})
+
+    meta = json.loads(meta_path.read_text())
+
+    n_ch = int(meta["channels"]["n_channels"])
+    if n_ch <= 0:
+        utils.abort("META", "Invalid n_channels", {"n_ch": n_ch})
+
+    w = meta["windowing"]
+    win_len_samples = int(w["win_len_samples"])
+    win_hop_samples = int(w["win_hop_samples"])
+    trim_samples_each_side = int(w["trim_samples_each_side"])
+
+    # Convert "samples" (floats across channels) -> "scans" (samples per channel)
+    if win_len_samples % n_ch != 0:
+        utils.abort("META", "win_len_samples not divisible by n_channels",
+                    {"win_len_samples": win_len_samples, "n_ch": n_ch})
+    if win_hop_samples % n_ch != 0:
+        utils.abort("META", "win_hop_samples not divisible by n_channels",
+                    {"win_hop_samples": win_hop_samples, "n_ch": n_ch})
+    if trim_samples_each_side % n_ch != 0:
+        utils.abort("META", "trim_samples_each_side not divisible by n_channels",
+                    {"trim_samples_each_side": trim_samples_each_side, "n_ch": n_ch})
+
+    win_len_scans_raw = win_len_samples // n_ch
+    hop_scans = win_hop_samples // n_ch
+    trim_scans_each_side = trim_samples_each_side // n_ch
+
+    win_len_scans_effective = win_len_scans_raw - 2 * trim_scans_each_side
+    if win_len_scans_effective <= 0:
+        utils.abort("META", "Trim removes entire window",
+                    {"win_len_scans_raw": win_len_scans_raw, "trim_scans_each_side": trim_scans_each_side})
+
+    return {
+        "n_ch": n_ch,
+        "hop_scans": hop_scans,
+        "trim_scans_each_side": trim_scans_each_side,
+        "win_len_scans_raw": win_len_scans_raw,
+        "win_len_scans_effective": win_len_scans_effective,
+    }
+
 def log_window_idx_gaps(
     df: pd.DataFrame,
     *,
@@ -692,7 +743,7 @@ def compute_optimal_k_folds(
     n_windows_c2: int,
     min_groups_per_fold: int = 2,
     min_windows_per_fold: int = 12,
-    preferred_k: int = 5,
+    preferred_k: int = 4,
     logger = None,
 ) -> tuple[int, str]:
     """
@@ -1047,7 +1098,7 @@ def make_cv_folds_by_blocked_windows(
             n_windows_c2=n_windows_c2,
             min_groups_per_fold=2,
             min_windows_per_fold=12,
-            preferred_k=5,  # Default preference
+            preferred_k=4,  # Default preference
             logger=debug_logger,
         )
     else:
@@ -1365,6 +1416,7 @@ def select_best_pair(
     info: utils.DatasetInfo,
     gen_cfg: utils.GeneralTrainingConfigs,
     window_ids: np.ndarray,
+    hop_samples: int,
     debug_logger: utils.DebugLogger | None = None,
     args,
 ) -> tuple[int, int, dict[str, Any]]:
@@ -1424,7 +1476,7 @@ def select_best_pair(
             k=None,
             seed=0,
             n_time=info.n_time,    # window length in samples
-            hop_samples=utils.HOP_SAMPLES,
+            hop_samples=hop_samples,
             debug_logger=debug_logger,
             hz_a=hz_a,
             hz_b=hz_b,
@@ -1622,6 +1674,14 @@ def main():
     
     gen_cfg = utils.GeneralTrainingConfigs()
 
+    # Load windowing meta (authoritative hop/trim info from C++)
+    meta_w = load_windowing_from_meta(data_session_dir)
+    hop_scans = int(meta_w["hop_scans"])
+    expected_T = int(meta_w["win_len_scans_effective"])  # per-channel time length after trim
+    print(f"[PY] meta windowing: hop_scans={hop_scans}, expected_T={expected_T}, "
+          f"trim_scans_each_side={meta_w['trim_scans_each_side']}, "
+          f"win_len_scans_raw={meta_w['win_len_scans_raw']}")
+
     try:
         # 2) Resolve sources based on calibsetting
         sources = list_window_csvs(data_session_dir, args.calibsetting)
@@ -1631,6 +1691,14 @@ def main():
         X, y_hz, trial_ids, window_ids, info, load_issues = load_windows_csv(sources)
         issues.extend(load_issues)
         print("[PY] Loaded X:", X.shape, "y_hz:", y_hz.shape, "classes_hz:", info.classes_hz)
+        # Sanity: CSV-derived T should match meta-derived effective window length
+        if int(info.n_time) != int(expected_T):
+            utils.abort(
+                "LOAD",
+                "CSV window length (T) doesn't match settings_meta.json effective length",
+                {"csv_T": int(info.n_time), "expected_T": int(expected_T), "meta": meta_w},
+            )
+
         validate_loaded_dataset(
             X=X,
             y_hz=y_hz,
@@ -1639,7 +1707,7 @@ def main():
         )
 
         # 4) Select best pair using CV scoring with same arch
-        best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, trial_ids=trial_ids, window_ids=window_ids, info=info, gen_cfg=gen_cfg, debug_logger=debug_log, args=args)
+        best_left_hz, best_right_hz, debug = select_best_pair(X=X, y_hz=y_hz, trial_ids=trial_ids, window_ids=window_ids, info=info, gen_cfg=gen_cfg, hop_samples=hop_scans, debug_logger=debug_log, args=args)
         rejected_pairs_from_class_skew = debug["rejected_pairs_from_class_skew"]
         print(f"[PY] BEST PAIR: {best_left_hz}Hz vs {best_right_hz}Hz")
 
@@ -1677,7 +1745,7 @@ def main():
                 k=None,
                 seed=0,
                 n_time=info.n_time,
-                hop_samples=utils.HOP_SAMPLES,
+                hop_samples=hop_scans,
                 debug_logger=debug_log,
                 hz_a=best_left_hz,
                 hz_b=best_right_hz,
