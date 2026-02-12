@@ -256,12 +256,13 @@ void HttpServer_C::handle_get_sessions(const httplib::Request& req, httplib::Res
     j["active_session_id"] = "";
     j["sessions"] = nlohmann::json::array(); // must init as array since multiple elements will be appended
 
-    auto get_bool_from_train_result_json = [](const char *key, std::string body){
-        bool dest; // temp
+    auto get_bool_from_train_result_json = [](const char *key, std::string& body) -> std::optional<bool> {
+        bool dest = false; // temp
         if(!JSON::extract_json_bool(body, key, dest)){
             JSON::json_extract_fail("train_result.json", key);
+            return std::nullopt;
         }
-        return dest;
+        return int(dest);
     };
 
     // take mutex & hold until json is ready (so we don't end up in a situation where frontend thinks it can read saved sessions but doesn't have meta yet)
@@ -274,7 +275,7 @@ void HttpServer_C::handle_get_sessions(const httplib::Request& req, httplib::Res
         }
 
         int currIdx = stateStoreRef_.currentSessionIdx.load(std::memory_order_acquire);
-        if(currIdx < 1){
+        if(currIdx < 1 || currIdx >= (int)stateStoreRef_.saved_sessions.size()){
             write_json(res, j);
             LOG_ALWAYS("Warn: currIdx out of bounds (backend error)");
             return;
@@ -294,8 +295,9 @@ void HttpServer_C::handle_get_sessions(const httplib::Request& req, httplib::Res
             std::filesystem::path model_dir = std::filesystem::path(vec_saved_sess[i].model_dir);
             const auto onnx_path = model_dir / "ssvep_model.onnx";
             const auto meta_path = model_dir / "meta.json";
-            const bool onnx_found = std::filesystem::exists(onnx_path);
-            const bool meta_found = std::filesystem::exists(meta_path);
+            std::error_code ec;
+            const bool onnx_found = std::filesystem::exists(onnx_path, ec);
+            const bool meta_found = std::filesystem::exists(meta_path, ec);
             /*
             // check if train succeeded from train_result.json
             std::string train_res_body;
