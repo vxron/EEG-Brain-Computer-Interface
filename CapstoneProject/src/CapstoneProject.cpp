@@ -301,7 +301,7 @@ try{
         const std::size_t winHop = window.winHop;
 
         // Trim
-        const std::size_t trim_scans_each_side = 40;
+        const std::size_t trim_scans_each_side = TRIM_SCANS_EACH_SIDE;
         const std::size_t trim_samples_each_side = trim_scans_each_side * static_cast<std::size_t>(n_ch_local);
 
         // Backend flags
@@ -468,7 +468,11 @@ try{
                                UIState_E uiState,
                                std::size_t window_idx,
                                bool use_trimmed) {
-        if (!ensure_csv_open_window()) return;
+        if (!ensure_csv_open_window()) {
+            LOG_ALWAYS("WINLOG: csv_win not open inside log_window_snapshot (window_idx="
+                << window_idx << "), skipping write");
+            return;
+        }
 
         int n_ch_local = stateStoreRef.g_n_eeg_channels.load(std::memory_order_acquire);
         if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
@@ -515,6 +519,12 @@ try{
             csv_win << "," << tf_e << "," << tf_hz << "\n";
             ++rows_written_win;
         }
+
+        if (!csv_win) {
+            LOG_ALWAYS("WINLOG: stream error after writing window_idx=" << window_idx
+                << " (n_scans=" << n_scans << ")");
+        }
+
 
         if ((rows_written_win % 5000) == 0) csv_win.flush();
     };
@@ -725,8 +735,19 @@ try{
             // trim window ends for training data (GUARD)
             window.trimmed_window.clear();
             window.sliding_window.get_trimmed_snapshot(window.trimmed_window,
-                40 * n_ch_local, 40 * n_ch_local);
+                TRIM_SCANS_EACH_SIDE * n_ch_local,
+                TRIM_SCANS_EACH_SIDE * n_ch_local);
             window.isTrimmed = true;
+            const std::size_t expected_trimmed = window.winLen - (2 * TRIM_SCANS_EACH_SIDE * (std::size_t)n_ch_local);
+            if (window.trimmed_window.size() != expected_trimmed) {
+                LOG_ALWAYS("TRIMDBG: trimmed size mismatch: got=" << window.trimmed_window.size()
+                    << " expected=" << expected_trimmed
+                    << " winLen=" << window.winLen
+                    << " n_ch=" << n_ch_local
+                    << " tick_per_session=" << tick_count_per_session
+                    << " ui_state=" << (int)currState
+                );
+            }
 
             // we should be attaching a label to our windows for calibration data
             window.testFreq = currLabel;

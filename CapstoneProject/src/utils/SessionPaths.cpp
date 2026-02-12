@@ -315,16 +315,17 @@ bool sesspaths::load_saved_sessions_from_disk(StateStore_s* stateStoreRef){
         }
 
         loaded.push_back(std::move(tmp)); // tmp is done for this iter; transfer ownership
+        
+    }
 
-        // write to saved sessions w mtx protection
-        {
-            std::lock_guard<std::mutex> saved_sess_protect(stateStoreRef->saved_sessions_mutex);
-            stateStoreRef->saved_sessions = std::move(loaded); // again ownership transfer
-            if(stateStoreRef->saved_sessions.size() > 1) {
-                stateStoreRef->currentSessionIdx.store((int)stateStoreRef->saved_sessions.size() - 1, std::memory_order_release); // last idx (most recent)
-            } else {
-                stateStoreRef->currentSessionIdx.store(0, std::memory_order_release);
-            }
+    // write to saved sessions w mtx protection
+    {
+        std::lock_guard<std::mutex> saved_sess_protect(stateStoreRef->saved_sessions_mutex);
+        stateStoreRef->saved_sessions = std::move(loaded); // again ownership transfer
+        if(stateStoreRef->saved_sessions.size() > 1) {
+            stateStoreRef->currentSessionIdx.store((int)stateStoreRef->saved_sessions.size() - 1, std::memory_order_release); // last idx (most recent)
+        } else {
+            stateStoreRef->currentSessionIdx.store(0, std::memory_order_release);
         }
     }
 

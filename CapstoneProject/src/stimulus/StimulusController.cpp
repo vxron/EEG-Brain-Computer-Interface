@@ -385,12 +385,13 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
                 // calib over... need to save csv in consumer thread (finalize training data)
                 {
-                    LOG_ALWAYS("reached inside final event");
+                    LOG_ALWAYS("SC: SETTING FINALIZE REQUESTED — state=" << (int)state_ 
+                    << " event=" << (int)ev);  
                     // scope for locking & changing bool flag (mtx unlocked again at end of scope)
                     std::lock_guard<std::mutex> lock(stateStoreRef_->mtx_finalize_request);
                     stateStoreRef_->finalize_requested = true;
                 }
-                stateStoreRef_->cv_finalize_request.notify_one();                
+                stateStoreRef_->cv_finalize_request.notify_one();          
             }
             if(ev == UIStateEvent_UserPushesExit) {
                 // calib incomplete... delete session (if still __IN_PROGRESS)
