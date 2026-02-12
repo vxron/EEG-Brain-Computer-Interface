@@ -560,6 +560,20 @@ def load_windows_csv(sources: list[CsvSource]) -> tuple[np.ndarray, np.ndarray, 
         # tag source to prevent window_idx collisions across sessions
         df["_src"] = src.src_id
 
+        # drop incomplete/partial rows (in case of backend crash/truncation)
+        cols = list(df.columns)
+        sample_i = cols.index("sample_idx")
+        tf_e_i = cols.index("testfreq_e")
+        ch_cols = cols[sample_i + 1 : tf_e_i] #eeg1...eegN
+        must_have = ["window_idx", "sample_idx", "testfreq_e", "testfreq_hz"] + ch_cols
+        before = len(df)
+        df = df.dropna(subset=must_have)
+        dropped = before - len(df)
+        if dropped > 0:
+            load_issues.append(utils.issue("LOAD",
+                "Dropped incomplete CSV rows (likely partial/truncated writes)",
+                {"session": src.src_id, "path": str(src.path), "dropped_rows": int(dropped)}))
+        
         # LOGGING (purely debug)
         log_window_idx_gaps(df, logger=None, tag=f"GAPCHECK {src.src_id}")
         # per-file read success + per-frequency window counts 

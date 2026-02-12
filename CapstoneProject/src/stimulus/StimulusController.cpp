@@ -2,6 +2,7 @@
 #include <thread>
 #include "../utils/Logger.hpp"
 #include "../utils/SessionPaths.hpp"
+#include "utils/json.hpp"
 
 struct state_transition{
     UIState_E from;
@@ -166,6 +167,16 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
             // reset any timers that got weird/paused/etc
             if(currentWindowTimer_.is_paused() || currentWindowTimer_.is_started()) { currentWindowTimer_.stop_timer(); }
 
+            if(prevState == UIState_None){
+                // STARTUP CONDITIONS
+                if (!stateStoreRef_->g_sessions_loaded_from_disk.exchange(true)){
+                    // load all sessions
+                    const bool ok = sesspaths::load_saved_sessions_from_disk(stateStoreRef_);
+                    if (!ok){
+                        LOG_ALWAYS("No saved sessions loaded");
+                    }
+                }
+            }
             break;
         }
         
@@ -415,14 +426,6 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             // increment currIdx if successful training
             //int currIdx = stateStoreRef_->currentSessionIdx.load(std::memory_order_acquire);
             //stateStoreRef_->currentSessionIdx.store(++currIdx, std::memory_order_release);
-        }
-
-        case UIState_None: {
-            // on init etc
-            // reload saved sessions from disk by reading savedsessionlist.json
-            // then for each one in savedsessionlist, check if theres a .onnx + .meta (there should be)
-            // TODO
-            // scan session roots, reuild stateStoreRef_->saved_sessions
         }
 
         case UIState_Active_Run:
