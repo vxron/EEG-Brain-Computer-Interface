@@ -26,6 +26,11 @@
 #include <system_error>
 #include "Types.h"
 #include "Logger.hpp"
+#include "../shared/StateStore.hpp"
+#include "json.hpp"
+#include "JsonUtils.hpp"
+#include <unordered_set>
+#include <mutex>
 
 #define SESS_LOG(msg) LOG_ALWAYS("sesspaths: " << msg)
 namespace sesspaths {
@@ -126,6 +131,12 @@ static inline std::string strip_in_progress_suffix(std::string session_id) {
     return session_id;
 }
 
+static inline std::string make_label_from_id(const std::string& id, const std::string& subject){
+    if (!id.empty()) return id;
+    if (!subject.empty()) return subject;
+    return "Unknown Session";
+}
+
 // declarations
 fs::path find_project_root(int max_depth = 12);
 std::string allocate_person_fallback(const fs::path& data_root_dir);
@@ -133,5 +144,6 @@ void prune_old_sessions_for_subject(const fs::path& subject_dir, std::size_t kee
 SessionPaths create_session(const std::string& preferred_subject_name);
 void delete_session_dirs_if_in_progress(const SessionPaths& sp);
 bool finalize_session_dirs(SessionPaths& sp); 
+bool load_saved_sessions_from_disk(StateStore_s* stateStoreRef);
 
 } // namespace sesspaths

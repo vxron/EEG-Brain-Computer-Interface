@@ -38,6 +38,11 @@ struct StateStore_s{
     std::string pending_subject_name;
     EpilepsyRisk_E pending_epilepsy;
 
+    // backend msg strings (where applicable)
+    std::mutex train_fail_mtx; 
+    std::string train_fail_msg = ""; // used as final train fail msg
+    std::vector<TrainingIssue_s> train_fail_issues{};
+
     // ==================== Training Protocol Info (Used during CALIB ONLY) ========================================
     std::atomic<int> g_block_id{0}; // block index in protocol
     std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None};
@@ -105,14 +110,19 @@ struct StateStore_s{
 
     // ======================== LIST OF SAVED SESSIONS ================================
     // this is what we use IN RUNMODE (NOT CURRENTSESSIONINFO^, we use that for calib, args to pass Python script)
+    // TODO: add bool or flag that says whether savedsession is good or bad, automatically delete bad after displaying results to user
     struct SavedSession_s {
-        std::string id;          // unique ID (e.g. "veronica_2025-11-25T14-20")
-        std::string label;       // human label for UI list ("Nov 25, 14:20 (Veronica)")
-        std::string subject;     // subject_id
-        std::string session;     // session_id
-        std::string created_at;  // ISO time string
-        std::string model_dir;   // model dir/path to load from
-        std::string model_arch;  // CNN vs SVM
+        std::string id;                  // unique ID (e.g. "veronica_2025-11-25T14-20")
+        std::string label;               // human label for UI list ("Nov 25, 14:20 (Veronica)")
+        std::string subject;             // subject_id
+        std::string session;             // session_id
+        std::string model_dir;           // model dir/path to load from
+        std::string model_arch;          // CNN vs SVM
+        std::vector<DataInsufficiency_s> data_insuff; // if there were missing windows/trials/batches etc
+        bool has_data_insuff = false;
+
+        double final_holdout_acc;
+        double final_train_acc;
         
         // run mode frequency pair to be sent to ui
         TestFreq_E freq_left_hz_e{TestFreq_None};
@@ -126,9 +136,12 @@ struct StateStore_s{
         .label = "Default",
         .subject = "",
         .session = "",
-        .created_at = "",
         .model_dir = "",
         .model_arch = "",
+        .data_insuff = {},
+        .has_data_insuff = false,
+        .final_holdout_acc = 0.0,
+        .final_train_acc = 0.0,
         .freq_left_hz_e = TestFreq_None,
         .freq_right_hz_e = TestFreq_None,
         .freq_right_hz = 0,
@@ -153,6 +166,12 @@ struct StateStore_s{
     // TODO: make GENERAL to all things that should reload on new session (e.g. UI as well...)
     // this can get set by stim controller when user selects a new or diff sess?
 
+    // mtx protecting global json meta containing session list on disk for loading at startup
+    std::mutex global_session_list_json_mtx; 
+
+    // flag for when sessions have been loaded from disk at startup
+    std::atomic<bool> g_sessions_loaded_from_disk{false};
+
     // ======================== Actuation thread Sync ======================
     // cv to notify thread when consumer makes non-neutral inference (either left or right ssvep)
     std::mutex mtx_actuation_request;
@@ -167,6 +186,7 @@ struct StateStore_s{
     // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success
     // conditional variable! 
+    // TODO: FINALIZE SHOULDNT HAPPEN ON UI TRANSITION BCUZ THERE COULD STILL BE THINGS TO PULL FROM RB, OR FLUSH FROM CSV
     std::mutex mtx_finalize_request;
     std::condition_variable cv_finalize_request;
     bool finalize_requested = false;
@@ -188,6 +208,7 @@ struct StateStore_s{
         std::atomic<SettingTrainArch_E> train_arch_setting{TrainArch_CNN};
         std::atomic<SettingStimMode_E> stim_mode{StimMode_Flicker};
         std::atomic<SettingWaveform_E> waveform{Waveform_Square};
+        std::atomic<SettingHparam_E> hparam_setting{HPARAM_OFF};
         // frequency pool: up to 6 (fixed size array)
         // these are the defaults:
         std::array<TestFreq_E, 6> selected_freqs_e{

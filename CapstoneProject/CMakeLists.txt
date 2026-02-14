@@ -137,3 +137,18 @@ if(USE_EEG_FILTERS)
   )
 endif()
 
+# ======================= SKIP TRAINING (pretrained path) ===========================
+if(NOT "${SKIP_TRAINING}" STREQUAL "")
+  message(STATUS "Building with SKIP_TRAINING='${SKIP_TRAINING}'")
+
+  # flag for code paths
+  target_compile_definitions(CapstoneProject PRIVATE SKIP_TRAINING=1)
+
+  # expose the path as a *string literal* macro in all of C++ 
+  target_compile_definitions(CapstoneProject PRIVATE
+    SKIP_TRAINING_MODEL_PATH="${SKIP_TRAINING}"
+  )
+else()
+  target_compile_definitions(CapstoneProject PRIVATE SKIP_TRAINING=0)
+endif()
+
