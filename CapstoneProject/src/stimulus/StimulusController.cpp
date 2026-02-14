@@ -49,7 +49,13 @@ static const state_transition state_transition_table[] = {
     {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Home},
     {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_Calib_Options},
     {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesSettings,             UIState_Settings},
     {UIState_Run_Options,      UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
+    {UIState_Run_Options,      UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Run_Options,      UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Run_Options,      UIStateEvent_UserPushesSettings,             UIState_Settings},
 
     // Non full screen pages where buttons remain visible (therefore transitions can happen)
     {UIState_Calib_Options,    UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
@@ -175,9 +181,17 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
                     if (!ok){
                         LOG_ALWAYS("No saved sessions loaded");
                     }
+                    else {
+                        stateStoreRef_->currentSessionInfo.g_isModelReady.store(true, std::memory_order_release); // we have a model ready
+                    }
                 }
             }
             break;
+
+            if(prevState == UIState_Saved_Sessions){
+                // just switched sessions -> intrinsic guards mean the model must be ready.
+                stateStoreRef_->currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
+            }
         }
         
         case UIState_Active_Calib: {
