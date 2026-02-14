@@ -61,7 +61,7 @@ class DatasetInfo:
 
 @dataclass(frozen=True)
 class GeneralTrainingConfigs:
-    number_cross_val_folds: int = 5  # cross val is used for assessing pairwise combinations & selecting bset frequency-pair
+    number_cross_val_folds: int = 4  # cross val is used for assessing pairwise combinations & selecting bset frequency-pair
     test_split_fraction: float = 0.10   # [should be rlly small test fold, maybe 10%] regular test/train is used for final model training (deployment)
 
 # Custom metrics that select_best_pair expects trainers to output for their pairwise models

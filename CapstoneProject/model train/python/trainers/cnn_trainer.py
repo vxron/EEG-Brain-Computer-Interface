@@ -69,7 +69,7 @@ class CNNTrainConfig:
 
     # Generalization Control
     patience: int = 25               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
-    min_delta: float = 2e-3          # numerical change in loss func necessary to consider real improvement 
+    min_delta: float = 1e-3          # numerical change in loss func necessary to consider real improvement 
 
     # Model Capacity & Sizing
     F1: int = 8                      # [temporal frequency detectors] number of output channels from the first layer (inputs to 2nd layer), aka: number of different temporal kernels ('weight matrices') generated
@@ -103,12 +103,13 @@ HPARAM_SPACE = {
 
 # more minimal hparam tuning with params that empirically had the greatest impact
 HPARAM_SPACE_MINIMAL = {
-    "kernel_length": [63, 125, 187],  # 250 ms, 500 ms, or 750 ms temporal segments as layer 2 inputs
-    "pooling_factor": [3, 4, 5],      # layer 2 temporal downsampling 
+    "kernel_length": [125, 187],  # 250 ms, 500 ms, or 750 ms temporal segments as layer 2 inputs
+    "pooling_factor": [4, 5],      # layer 2 temporal downsampling 
     "pooling_factor_final": [8, 10],  # final layer temporal downsampling
     "F1": [8, 16],                    # number of output temporal combinations from layer 1
     "dropout": [0.3, 0.5],
-    # total combos = 3 x 3 x 2 x 2 x 2 = 72
+    "batch_size": [15, 18],  
+    # total combos = 2 x 2 x 2 x 2 x 2 x 2 = 64
 }
 
 def _derived_F2(cfg: CNNTrainConfig) -> int:
@@ -613,7 +614,7 @@ def make_pooled_batches(
     
     windows_per_class = int(max_windows_per_batch // 3)
     
-    # Small batch minimum (from current code)
+    # Small batch minimum
     small_batch_size = int((2 * max_windows_per_batch) // 3)
     windows_per_class_small = small_batch_size // 3
     if windows_per_class_small == 0:
@@ -623,9 +624,7 @@ def make_pooled_batches(
     N1 = int((y == 1).sum())
     N2 = int((y == 2).sum())
     
-    # ========================================
-    # Create shuffled pools per class
-    # ========================================
+    # 1) Create shuffled pools per class
     pools = {0: [], 1: [], 2: []}
     
     for cls in [0, 1, 2]:
@@ -649,7 +648,7 @@ def make_pooled_batches(
         for tid in trial_list:
             pools[cls].extend(trial_groups[tid])
     
-    # Validation: min trials check
+    # 2) Validation: min trials check
     unique_trials_per_class = {
         0: len(set(trial_ids[y == 0])),
         1: len(set(trial_ids[y == 1])),
@@ -694,9 +693,7 @@ def make_pooled_batches(
                 }
             ))
     
-    # ========================================
-    # Fill batches
-    # ========================================
+    # 3) Fill batches
     batches = []
     pos = {0: 0, 1: 0, 2: 0}
     small_count = 0
@@ -720,12 +717,12 @@ def make_pooled_batches(
             continue  # Try next batch
         
         # Can't form full batch. Try SMALL batch.
-        # Match current behavior: accept if >= windows_per_class_small for all classes
+        # accept if >= windows_per_class_small for all classes
         if (small_count < utils.MAX_SMALL_BATCHES and
             all(avail[c] >= windows_per_class_small for c in [0, 1, 2])):
             
-            # Match current code: truncate to minimum available
-            # (this is why you see variable sizes like 15, 16, etc.)
+            # truncate to minimum available
+            # we accept variable sizes like 15, 16, etc...
             k = min(avail[0], avail[1], avail[2])
             
             batch = []
@@ -744,9 +741,7 @@ def make_pooled_batches(
                       f"need full={windows_per_class} or small>={windows_per_class_small}")
         break
     
-    # ========================================
-    # Validation
-    # ========================================
+    # 4) final Validation/debug
     if len(batches) == 0:
         utils.abort(
             "CNN_BATCH",

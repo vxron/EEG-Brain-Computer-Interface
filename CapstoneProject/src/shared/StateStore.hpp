@@ -119,6 +119,7 @@ struct StateStore_s{
         std::string model_dir;           // model dir/path to load from
         std::string model_arch;          // CNN vs SVM
         std::vector<DataInsufficiency_s> data_insuff; // if there were missing windows/trials/batches etc
+        bool has_data_insuff = false;
 
         double final_holdout_acc;
         double final_train_acc;
@@ -138,6 +139,7 @@ struct StateStore_s{
         .model_dir = "",
         .model_arch = "",
         .data_insuff = {},
+        .has_data_insuff = false,
         .final_holdout_acc = 0.0,
         .final_train_acc = 0.0,
         .freq_left_hz_e = TestFreq_None,
@@ -164,6 +166,12 @@ struct StateStore_s{
     // TODO: make GENERAL to all things that should reload on new session (e.g. UI as well...)
     // this can get set by stim controller when user selects a new or diff sess?
 
+    // mtx protecting global json meta containing session list on disk for loading at startup
+    std::mutex global_session_list_json_mtx; 
+
+    // flag for when sessions have been loaded from disk at startup
+    std::atomic<bool> g_sessions_loaded_from_disk{false};
+
     // ======================== Actuation thread Sync ======================
     // cv to notify thread when consumer makes non-neutral inference (either left or right ssvep)
     std::mutex mtx_actuation_request;
@@ -178,6 +186,7 @@ struct StateStore_s{
     // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success
     // conditional variable! 
+    // TODO: FINALIZE SHOULDNT HAPPEN ON UI TRANSITION BCUZ THERE COULD STILL BE THINGS TO PULL FROM RB, OR FLUSH FROM CSV
     std::mutex mtx_finalize_request;
     std::condition_variable cv_finalize_request;
     bool finalize_requested = false;
