@@ -46,8 +46,8 @@ static const state_transition state_transition_table[] = {
     // return states from state_paused must be specially handled in the detect_event function since they are dynamic
  
     {UIState_Run_Options,      UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
-    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Active_Run},
-    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_NoSSVEP_Test},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Home},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_Calib_Options},
     {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
     {UIState_Run_Options,      UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
 
