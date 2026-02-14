@@ -16,6 +16,7 @@ import utils.utils as utils
 
 # TODO: option on UI to tune (longer) or use defaults (faster)?
 # TODO: plotting training ?? if time 
+# TODO: Display hparam plot on ui
 
 # ===================== DEBUG HELPERS =====================
 def _log(logger, *parts) -> None:
@@ -68,7 +69,7 @@ class CNNTrainConfig:
 
     # Generalization Control
     patience: int = 25               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
-    min_delta: float = 2e-3          # numerical change in loss func necessary to consider real improvement 
+    min_delta: float = 1e-3          # numerical change in loss func necessary to consider real improvement 
 
     # Model Capacity & Sizing
     F1: int = 8                      # [temporal frequency detectors] number of output channels from the first layer (inputs to 2nd layer), aka: number of different temporal kernels ('weight matrices') generated
@@ -102,12 +103,13 @@ HPARAM_SPACE = {
 
 # more minimal hparam tuning with params that empirically had the greatest impact
 HPARAM_SPACE_MINIMAL = {
-    "kernel_length": [63, 125, 187],  # 250 ms, 500 ms, or 750 ms temporal segments as layer 2 inputs
-    "pooling_factor": [3, 4, 5],      # layer 2 temporal downsampling 
+    "kernel_length": [125, 187],  # 250 ms, 500 ms, or 750 ms temporal segments as layer 2 inputs
+    "pooling_factor": [4, 5],      # layer 2 temporal downsampling 
     "pooling_factor_final": [8, 10],  # final layer temporal downsampling
     "F1": [8, 16],                    # number of output temporal combinations from layer 1
     "dropout": [0.3, 0.5],
-    # total combos = 3 x 3 x 2 x 2 x 2 = 72
+    "batch_size": [15, 18],  
+    # total combos = 2 x 2 x 2 x 2 x 2 x 2 = 64
 }
 
 def _derived_F2(cfg: CNNTrainConfig) -> int:
@@ -321,6 +323,8 @@ def make_stratified_trial_batches(
     y: np.ndarray,
     *,
     max_windows_per_batch: int,
+    hz_a: int,
+    hz_b: int,
     seed: int = 0,
     logger: utils.DebugLogger | None = None,
 ) -> tuple[list[list[int]], list[utils.TrainIssue]]:
@@ -395,7 +399,7 @@ def make_stratified_trial_batches(
                     "min_windows_needed_per_class": min_windows_needed_per_class,
                 },
                 data_insufficiency={
-                    "frequency_hz": -1 if cls == 2 else None,
+                    "frequency_hz": -1 if cls == 2 else (hz_a if cls == 0 else hz_b),
                     "metric": "windows",
                     "required": min_windows_needed_per_class,
                     "actual": count,
@@ -416,7 +420,7 @@ def make_stratified_trial_batches(
                     "max_windows_per_batch": int(max_windows_per_batch),
                 },
                 data_insufficiency={
-                        "frequency_hz": -1 if c == 2 else None, # infer freq from elsewhere since this func doesn't have access to it
+                        "frequency_hz": -1 if cls == 2 else (hz_a if cls == 0 else hz_b),
                         "metric": "trials",
                         "required": utils.MIN_TRIALS_PER_CLASS_FOR_BATCHING,
                         "actual": len(trials_by_class[c]),
@@ -443,16 +447,31 @@ def make_stratified_trial_batches(
     example_ctrs: dict[int, int] = {0:0, 1:0, 2:0}
     trial_ctrs: dict[int, int] = {0:0, 1:0, 2:0}
 
+    # Safety Check 1: Max outer iters to prevent inf looping
+    MAX_OUTER_ITERS = 10000
+    outer_iteration = 0
+
     while True:
+        outer_iteration += 1
+        if outer_iteration > MAX_OUTER_ITERS:
+            if logger:
+                logger.log(f"[CNN_BATCH] WARNING: Hit max iterations ({MAX_OUTER_ITERS}), stopping batch creation")
+            break
         # (1) select a random trial for each class by going through trials_by_class (alr random shuffled)
         # (2) pop from that trial's deque if its not empty & append example to batch
         # (3) if queue is empty, try another trial
         # (4) if all trial queues are empty (exhausted), break
         for cidx in (0,1,2):
-            num_iters = 0
+            # Safety Check 2: Max inner iters per class
+            MAX_INNER_ITERS = 1000
+            inner_iter = 0
+
             while(example_ctrs[cidx] < windows_per_class):
-                num_iters = num_iters+1
-                
+                inner_iter += 1
+                if inner_iter > MAX_INNER_ITERS:
+                    if logger:
+                        logger.log(f"[CNN_BATCH] WARNING: Inner loop for class {cidx} hit max iterations")
+                    break
                 # if we've exhausted all trials -> exit, this is the most we can get for this minibatch
                 if len(exhausted_trials_per_class[cidx]) >= len(trials_by_class[cidx]):
                     break
@@ -559,6 +578,213 @@ def make_stratified_trial_batches(
             },
         )
 
+    return batches, batch_issues
+
+def make_pooled_batches(
+    trial_ids: np.ndarray,
+    y: np.ndarray,
+    *,
+    max_windows_per_batch: int,
+    hz_a: int,
+    hz_b: int,
+    seed: int = 0,
+    logger: utils.DebugLogger | None = None,
+) -> tuple[list[list[int]], list[utils.TrainIssue]]:
+    """
+    Pool-based batching with EXACT batch size behavior as current implementation.
+    
+    Batch sizes:
+    - Full batches: max_windows_per_batch (e.g., 18)
+    - Small batches: Balanced to minimum available class
+    - Minimum size: 3 (1 per class)
+    """
+    print("py ENTERED POOLED BATCHING \n")
+    batch_issues: list[utils.TrainIssue] = []
+    rng = np.random.default_rng(seed)
+    trial_ids = np.asarray(trial_ids).astype(np.int64)
+    y = np.asarray(y).astype(np.int64)
+
+    # Validation
+    if max_windows_per_batch < 3:
+        utils.abort("CNN_BATCH", "max_windows_per_batch must be >= 3",
+                   {"max_windows_per_batch": int(max_windows_per_batch)})
+    if max_windows_per_batch % 3 != 0:
+        utils.abort("CNN_BATCH", "max_windows_per_batch must be divisible by 3",
+                   {"max_windows_per_batch": int(max_windows_per_batch)})
+    
+    windows_per_class = int(max_windows_per_batch // 3)
+    
+    # Small batch minimum
+    small_batch_size = int((2 * max_windows_per_batch) // 3)
+    windows_per_class_small = small_batch_size // 3
+    if windows_per_class_small == 0:
+        windows_per_class_small = 1
+    
+    N0 = int((y == 0).sum())
+    N1 = int((y == 1).sum())
+    N2 = int((y == 2).sum())
+    
+    # 1) Create shuffled pools per class
+    pools = {0: [], 1: [], 2: []}
+    
+    for cls in [0, 1, 2]:
+        # Group by trial first (for diversity)
+        trial_groups = {}
+        for idx in np.where(y == cls)[0]:
+            tid = int(trial_ids[idx])
+            if tid not in trial_groups:
+                trial_groups[tid] = []
+            trial_groups[tid].append(int(idx))
+        
+        # Shuffle within each trial
+        for tid in trial_groups:
+            rng.shuffle(trial_groups[tid])
+        
+        # Shuffle trial order
+        trial_list = list(trial_groups.keys())
+        rng.shuffle(trial_list)
+        
+        # Build pool by concatenating shuffled trials
+        for tid in trial_list:
+            pools[cls].extend(trial_groups[tid])
+    
+    # 2) Validation: min trials check
+    unique_trials_per_class = {
+        0: len(set(trial_ids[y == 0])),
+        1: len(set(trial_ids[y == 1])),
+        2: len(set(trial_ids[y == 2])),
+    }
+    
+    for cls in [0, 1, 2]:
+        if unique_trials_per_class[cls] < utils.MIN_TRIALS_PER_CLASS_FOR_BATCHING:
+            utils.abort(
+                "CNN_BATCH",
+                "Not enough trials per class",
+                {
+                    "class": cls,
+                    "n_trials": unique_trials_per_class[cls],
+                    "required": utils.MIN_TRIALS_PER_CLASS_FOR_BATCHING,
+                },
+                data_insufficiency={
+                    "frequency_hz": -1 if cls == 2 else (hz_a if cls == 0 else hz_b),
+                    "metric": "trials",
+                    "required": utils.MIN_TRIALS_PER_CLASS_FOR_BATCHING,
+                    "actual": unique_trials_per_class[cls],
+                }
+            )
+    
+    # Check min windows
+    min_windows_needed = windows_per_class * utils.MIN_NUM_BATCHES_PER_CLASS
+    for cls, count in [(0, N0), (1, N1), (2, N2)]:
+        if count < min_windows_needed:
+            batch_issues.append(utils.issue(
+                "CNN_BATCH",
+                f"Class {cls} has insufficient windows",
+                {
+                    "class": cls,
+                    "n_windows": count,
+                    "required": min_windows_needed,
+                },
+                data_insufficiency={
+                    "frequency_hz": -1 if cls == 2 else (hz_a if cls == 0 else hz_b),
+                    "metric": "windows",
+                    "required": min_windows_needed,
+                    "actual": count,
+                }
+            ))
+    
+    # 3) Fill batches
+    batches = []
+    pos = {0: 0, 1: 0, 2: 0}
+    small_count = 0
+    
+    while True:
+        # Check available windows in each pool
+        avail = {
+            0: len(pools[0]) - pos[0],
+            1: len(pools[1]) - pos[1],
+            2: len(pools[2]) - pos[2],
+        }
+        
+        # Try to form a FULL batch (windows_per_class from each class)
+        if all(avail[c] >= windows_per_class for c in [0, 1, 2]):
+            batch = []
+            for cls in [0, 1, 2]:
+                batch.extend(pools[cls][pos[cls]:pos[cls] + windows_per_class])
+                pos[cls] += windows_per_class
+            rng.shuffle(batch)
+            batches.append(batch)
+            continue  # Try next batch
+        
+        # Can't form full batch. Try SMALL batch.
+        # accept if >= windows_per_class_small for all classes
+        if (small_count < utils.MAX_SMALL_BATCHES and
+            all(avail[c] >= windows_per_class_small for c in [0, 1, 2])):
+            
+            # truncate to minimum available
+            # we accept variable sizes like 15, 16, etc...
+            k = min(avail[0], avail[1], avail[2])
+            
+            batch = []
+            for cls in [0, 1, 2]:
+                batch.extend(pools[cls][pos[cls]:pos[cls] + k])
+                pos[cls] += k
+            
+            rng.shuffle(batch)
+            batches.append(batch)
+            small_count += 1
+            continue
+        
+        # Can't form any more batches
+        if logger:
+            logger.log(f"[CNN_BATCH] Stopping: avail c0={avail[0]} c1={avail[1]} c2={avail[2]}, "
+                      f"need full={windows_per_class} or small>={windows_per_class_small}")
+        break
+    
+    # 4) final Validation/debug
+    if len(batches) == 0:
+        utils.abort(
+            "CNN_BATCH",
+            "Could not create any batches",
+            {
+                "n_trials_c0": unique_trials_per_class[0],
+                "n_trials_c1": unique_trials_per_class[1],
+                "n_trials_c2": unique_trials_per_class[2],
+            },
+        )
+    
+    # Expected batch count check (same as current)
+    full_batches_possible = min(N0, N1, N2) // windows_per_class
+    R0 = N0 - full_batches_possible * windows_per_class
+    R1 = N1 - full_batches_possible * windows_per_class
+    R2 = N2 - full_batches_possible * windows_per_class
+    small_possible = min(R0, R1, R2) // windows_per_class_small
+    max_total = full_batches_possible + min(utils.MAX_SMALL_BATCHES, small_possible)
+    
+    if len(batches) < 0.9 * full_batches_possible or len(batches) > max_total:
+        batch_issues.append(utils.issue(
+            "CNN_BATCH",
+            "Batch count outside expected range",
+            {
+                "expected_min": int(0.9 * full_batches_possible),
+                "expected_max": int(max_total),
+                "actual": len(batches),
+            },
+        ))
+    
+    if logger:
+        # Report batch size statistics (for verification)
+        batch_sizes = [len(b) for b in batches]
+        logger.log(f"[CNN_BATCH] Created {len(batches)} batches: "
+                  f"sizes min={min(batch_sizes)} max={max(batch_sizes)} mean={np.mean(batch_sizes):.1f}")
+        
+        # Report class balance in first few batches
+        for i, batch in enumerate(batches[:3]):
+            c0 = sum(1 for idx in batch if y[idx] == 0)
+            c1 = sum(1 for idx in batch if y[idx] == 1)
+            c2 = sum(1 for idx in batch if y[idx] == 2)
+            logger.log(f"[CNN_BATCH] Batch {i}: size={len(batch)} c0={c0} c1={c1} c2={c2}")
+    
     return batches, batch_issues
 
 def debug_all_batches(loader, *, logger):
@@ -1309,6 +1535,8 @@ def train_single_final_model_with_holdout_and_export(
     out_onnx_path: Path,
     device: torch.device,
     holdout_frac: float = 0.15,
+    hz_a: int,
+    hz_b: int,
     zscore_norm: str,
     logger: utils.DebugLogger | None = None
 ) -> tuple[bool, bool, float, float, float, float, list[utils.TrainIssue]]:
@@ -1344,11 +1572,13 @@ def train_single_final_model_with_holdout_and_export(
         y_all_t = torch.from_numpy(y_pair.astype(np.int64)).long()
         ds_all = TensorDataset(X_all_t, y_all_t)
         try:
-            batches, batch_issues = make_stratified_trial_batches(
+            batches, batch_issues = make_pooled_batches(
                 trial_ids=trial_ids_pair,
                 y=y_pair,
                 max_windows_per_batch=int(cfg.batch_size),
                 seed=int(cfg.seed),
+                hz_a=hz_a,
+                hz_b=hz_b,
                 logger=logger,
             )
             final_issues.extend(batch_issues)
@@ -1389,6 +1619,7 @@ def train_single_final_model_with_holdout_and_export(
             cfg=cfg,
             max_epochs=int(cfg.MAX_EPOCHS),
             device=device,
+            hz_a=hz_a, hz_b=hz_b,
             zscorearg=zscore_norm,
             return_model=True,
         )
@@ -1422,6 +1653,8 @@ def train_final_cnn_and_export(
     out_onnx_path: Path,
     hparam_tuning: str,
     zscore_norm: str,
+    hz_a: int,
+    hz_b: int,
     logger: utils.DebugLogger | None = None,
 ) -> tuple[utils.FinalTrainResults, list[utils.TrainIssue]]:
     """
@@ -1446,12 +1679,18 @@ def train_final_cnn_and_export(
 
     # 2) Run grid search for hyperparameter tuning if ON
     # we will update this config object to get best 
-    if(hparam_tuning == "ON"):
+    if(hparam_tuning != "OFF"):
         best_cfg = cfg
         best_score = -1.0
+        if(hparam_tuning == "FULL"):
+            search_space = HPARAM_SPACE
+        elif(hparam_tuning == "QUICK"):
+            search_space = HPARAM_SPACE_MINIMAL
+        else:
+            utils.abort("[TRAIN]", "hparam arg not recognized")
         
         # grid search -> iter releases new candidate each time it gets called
-        for cand in iter_hparam_candidates(cfg, HPARAM_SPACE):
+        for cand in iter_hparam_candidates(cfg, search_space):
             score = score_hparam_cfg_cv_cnn(
                 cfg=cand,
                 X_pair=X_pair,
@@ -1462,6 +1701,7 @@ def train_final_cnn_and_export(
                 n_time=n_time,
                 device=device,
                 max_epochs=int(cfg.MAX_EPOCHS_HTUNING),
+                hz_a=hz_a, hz_b=hz_b,
                 logger=logger,
                 zscorearg=zscore_norm,
             )
@@ -1500,6 +1740,7 @@ def train_final_cnn_and_export(
                 cfg=fold_cfg,
                 max_epochs=cfg.MAX_EPOCHS,      # final training can use full schedule
                 device=device,
+                hz_a=hz_a, hz_b=hz_b,
                 zscorearg=zscore_norm,
                 logger=logger,
             )
@@ -1522,6 +1763,8 @@ def train_final_cnn_and_export(
         device=device,
         logger=logger,
         holdout_frac=0.15,
+        hz_a=hz_a,
+        hz_b=hz_b,
         zscore_norm=zscore_norm,
     )
     issues.extend(training_issues_2)
@@ -1562,6 +1805,8 @@ def train_cnn_on_split(
     max_epochs: int,
     device: torch.device,
     zscorearg: str,
+    hz_a: int,
+    hz_b: int,
     return_model: bool = False, # need model when we do onnx export at the end (once only)
     logger: utils.DebugLogger | None = None,
 ) -> tuple[float, float, float, float, float, list[utils.TrainIssue]] | tuple[float, float, float, float, float, list[utils.TrainIssue], EEGNet]:
@@ -1598,17 +1843,19 @@ def train_cnn_on_split(
 
     # deterministic shuffling for the train loader
     if trial_ids_train is not None:
-        batches, batch_issues = make_stratified_trial_batches(
+        batches, batch_issues = make_pooled_batches(
             trial_ids=trial_ids_train,
             y=y_train,
             max_windows_per_batch=int(cfg.batch_size),
             seed=int(cfg.seed),
+            hz_a=hz_a,
+            hz_b=hz_b,
             logger=logger,
         )
         issue_list.extend(batch_issues)
         train_loader = DataLoader(train_ds, batch_sampler=ListBatchSampler(batches))
-        batch_debug_issues = debug_all_batches(train_loader, logger=logger)
-        issue_list.extend(batch_debug_issues)
+        #batch_debug_issues = debug_all_batches(train_loader, logger=logger)
+        #issue_list.extend(batch_debug_issues)
     else:
         # fallback: window batching (less good for strongly overlapping ssvep windows...)
         g = torch.Generator().manual_seed(int(cfg.seed))
@@ -1733,6 +1980,8 @@ def score_hparam_cfg_cv_cnn(
     n_time: int,
     device: torch.device,
     max_epochs: int,
+    hz_a: int,
+    hz_b: int,
     logger: utils.DebugLogger | None = None,
     zscorearg: str,
 ) -> float:
@@ -1752,6 +2001,7 @@ def score_hparam_cfg_cv_cnn(
             cfg=fold_cfg,
             max_epochs=int(max_epochs),
             device=device,
+            hz_a=hz_a, hz_b=hz_b,
             zscorearg=zscorearg,
             logger=logger,
         )
@@ -1800,6 +2050,8 @@ def score_pair_cv_cnn(
             cfg=fold_cfg,
             max_epochs=int(cfg.MAX_EPOCHS_CV),
             device=device,
+            hz_a=freq_a_hz,
+            hz_b=freq_b_hz,
             zscorearg=zscorearg,
             logger=logger,
         )

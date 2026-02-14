@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-10" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-13" />
   </head>
   <body>
     <div class="app-shell">
@@ -69,6 +69,208 @@
             <p class="view-lead">
               Choose how you want to use the EEG page-turner today.
             </p>
+
+            <!-- ================= TRAINING SUMMARY (HOME) ================= -->
+            <section
+              id="home-train-summary"
+              class="train-summary hidden"
+              aria-label="Latest training summary"
+            >
+              <!-- Header row -->
+              <header class="train-summary-head">
+                <div class="train-summary-title">
+                  <div class="train-title-row">
+                    <h3>Latest Training Result</h3>
+                    <!-- status pill: success | warn | fail -->
+                    <span
+                      id="train-status-pill"
+                      class="train-status-pill success"
+                      aria-label="Training status"
+                    >
+                      <span class="dot"></span>
+                      <span id="train-status-label">Success</span>
+                    </span>
+                  </div>
+
+                  <p id="train-summary-sub" class="train-summary-sub">
+                    Model artifacts exported and ready for Run Mode.
+                  </p>
+                </div>
+
+                <div class="train-summary-actions">
+                  <button
+                    id="btn-dismiss-train-summary"
+                    class="btn train-btn-dismiss"
+                    type="button"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </header>
+
+              <!-- Top: KPI strip -->
+              <div class="train-kpis">
+                <div class="kpi">
+                  <div class="kpi-k">User</div>
+                  <div id="train-kpi-user" class="kpi-v">—</div>
+                </div>
+
+                <div class="kpi">
+                  <div class="kpi-k">Session</div>
+                  <div id="train-kpi-session" class="kpi-v">—</div>
+                </div>
+
+                <div class="kpi">
+                  <div class="kpi-k">Architecture</div>
+                  <div id="train-kpi-arch" class="kpi-v">—</div>
+                </div>
+
+                <div class="kpi">
+                  <div class="kpi-k">Holdout Accuracy</div>
+                  <div id="train-kpi-holdout" class="kpi-v">—%</div>
+                  <div class="kpi-sub">
+                    <span id="train-kpi-holdout-ok" class="kpi-badge ok hidden"
+                      >OK</span
+                    >
+                    <span
+                      id="train-kpi-holdout-warn"
+                      class="kpi-badge warn hidden"
+                      >Low</span
+                    >
+                  </div>
+                </div>
+
+                <div class="kpi">
+                  <div class="kpi-k">Train Accuracy</div>
+                  <div id="train-kpi-train" class="kpi-v">—%</div>
+                  <div class="kpi-sub muted">Sanity check only</div>
+                </div>
+              </div>
+
+              <!-- Mid: highlight best frequencies -->
+              <div class="train-best">
+                <div class="train-best-left">
+                  <div class="train-section-title">Best Frequency Pair</div>
+                  <div
+                    class="train-best-pair"
+                    role="group"
+                    aria-label="Best frequencies"
+                  >
+                    <div class="best-chip best-left">
+                      <div class="best-k">Left</div>
+                      <div class="best-v">
+                        <span id="train-best-left-hz" class="hz">—</span>
+                        <span class="unit">Hz</span>
+                      </div>
+                      <div id="train-best-left-e" class="best-sub">—</div>
+                    </div>
+
+                    <div class="best-divider" aria-hidden="true">→</div>
+
+                    <div class="best-chip best-right">
+                      <div class="best-k">Right</div>
+                      <div class="best-v">
+                        <span id="train-best-right-hz" class="hz">—</span>
+                        <span class="unit">Hz</span>
+                      </div>
+                      <div id="train-best-right-e" class="best-sub">—</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Data consistency block -->
+                <div class="train-best-right">
+                  <div class="train-section-title">Data Consistency</div>
+
+                  <div
+                    class="consistency-grid"
+                    role="group"
+                    aria-label="Consistency checks"
+                  >
+                    <div class="consistency-item">
+                      <span id="c-check-train-ok" class="c-pill ok">
+                        <span class="dot"></span> Train
+                      </span>
+                      <div id="c-train-msg" class="c-msg">Completed</div>
+                    </div>
+
+                    <div class="consistency-item">
+                      <span id="c-check-cv-ok" class="c-pill ok">
+                        <span class="dot"></span> CV
+                      </span>
+                      <div id="c-cv-msg" class="c-msg">Passed</div>
+                    </div>
+
+                    <div class="consistency-item">
+                      <span id="c-check-onnx-ok" class="c-pill ok">
+                        <span class="dot"></span> ONNX
+                      </span>
+                      <div id="c-onnx-msg" class="c-msg">Exported</div>
+                    </div>
+
+                    <div class="consistency-item">
+                      <span id="c-check-holdout-ok" class="c-pill ok">
+                        <span class="dot"></span> Holdout
+                      </span>
+                      <div id="c-holdout-msg" class="c-msg">Passed</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Bottom: data sufficiency table -->
+              <div class="train-suff">
+                <div class="train-suff-head">
+                  <div class="train-section-title">
+                    Data Sufficiency & Diagnostics
+                  </div>
+                  <div class="train-suff-hint muted">
+                    Issues are reported per metric/stage. Resolve low counts by
+                    collecting more calibration data or running longer
+                    calibration (see Settings page).
+                  </div>
+                </div>
+
+                <div id="train-suff-empty" class="train-empty">
+                  <div class="train-empty-title">No issues reported</div>
+                  <div class="train-empty-sub muted">
+                    All sufficiency checks passed for the selected frequency
+                    pool.
+                  </div>
+                </div>
+
+                <!-- table -->
+                <div id="train-suff-table-wrap" class="train-table-wrap hidden">
+                  <table
+                    class="train-table"
+                    aria-label="Data insufficiency table"
+                  >
+                    <thead>
+                      <tr>
+                        <th>Stage</th>
+                        <th>Metric</th>
+                        <th>Actual</th>
+                        <th>Required</th>
+                        <th>Freq</th>
+                        <th>Message</th>
+                      </tr>
+                    </thead>
+                    <tbody id="train-suff-tbody">
+                      <!-- JS injects rows -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <!-- Small “reopen” button shown when user dismisses -->
+            <button
+              id="btn-reopen-train-summary"
+              class="btn ghost train-reopen hidden"
+              type="button"
+            >
+              View last training result
+            </button>
 
             <div class="home-actions">
               <div class="home-card">
@@ -487,217 +689,296 @@
               </div>
 
               <!-- Right Column: Frequency Selection -->
-              <div class="settings-card">
-                <h3>Calibration Frequencies</h3>
+              <div class="settings-col">
+                <div class="settings-card">
+                  <h3>Calibration Frequencies</h3>
 
-                <p class="freq-instruction">
-                  Select <strong>up to 6 frequencies</strong> for calibration.
-                  Choose well-separated values for best accuracy.
-                </p>
+                  <p class="freq-instruction">
+                    Select <strong>up to 6 frequencies</strong> for calibration.
+                    Choose well-separated values for best accuracy.
+                  </p>
 
-                <div class="freq-grid">
-                  <!-- 8-12 Hz: Low/Alpha band -->
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="0"
-                      data-hz="8"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">8 Hz</span>
-                      <span class="freq-tag band-low">Low</span>
-                    </span>
-                  </label>
+                  <div class="freq-grid">
+                    <!-- 8-12 Hz: Low/Alpha band -->
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="0"
+                        data-hz="8"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">8 Hz</span>
+                        <span class="freq-tag band-low">Low</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="1"
-                      data-hz="9"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">9 Hz</span>
-                      <span class="freq-tag band-low">Low</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="1"
+                        data-hz="9"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">9 Hz</span>
+                        <span class="freq-tag band-low">Low</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="2"
-                      data-hz="10"
-                      checked
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">10 Hz</span>
-                      <span class="freq-tag recommended">Peak</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="2"
+                        data-hz="10"
+                        checked
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">10 Hz</span>
+                        <span class="freq-tag recommended">Peak</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="3"
-                      data-hz="11"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">11 Hz</span>
-                      <span class="freq-tag band-low">Low</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="3"
+                        data-hz="11"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">11 Hz</span>
+                        <span class="freq-tag band-low">Low</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="4"
-                      data-hz="12"
-                      checked
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">12 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="4"
+                        data-hz="12"
+                        checked
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">12 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <!-- 13-18 Hz: Medium band -->
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="5"
-                      data-hz="13"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">13 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <!-- 13-18 Hz: Medium band -->
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="5"
+                        data-hz="13"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">13 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="6"
-                      data-hz="14"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">14 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="6"
+                        data-hz="14"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">14 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="7"
-                      data-hz="15"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">15 Hz</span>
-                      <span class="freq-tag recommended">Peak</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="7"
+                        data-hz="15"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">15 Hz</span>
+                        <span class="freq-tag recommended">Peak</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="8"
-                      data-hz="16"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">16 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="8"
+                        data-hz="16"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">16 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="9"
-                      data-hz="17"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">17 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="9"
+                        data-hz="17"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">17 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="10"
-                      data-hz="18"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">18 Hz</span>
-                      <span class="freq-tag band-med">Med</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="10"
+                        data-hz="18"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">18 Hz</span>
+                        <span class="freq-tag band-med">Med</span>
+                      </span>
+                    </label>
 
-                  <!-- 20-35 Hz: High band -->
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="11"
-                      data-hz="20"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">20 Hz</span>
-                      <span class="freq-tag band-high">High</span>
-                    </span>
-                  </label>
+                    <!-- 20-35 Hz: High band -->
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="11"
+                        data-hz="20"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">20 Hz</span>
+                        <span class="freq-tag band-high">High</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="12"
-                      data-hz="25"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">25 Hz</span>
-                      <span class="freq-tag band-high">High</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="12"
+                        data-hz="25"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">25 Hz</span>
+                        <span class="freq-tag band-high">High</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="13"
-                      data-hz="30"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">30 Hz</span>
-                      <span class="freq-tag band-high">High</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="13"
+                        data-hz="30"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">30 Hz</span>
+                        <span class="freq-tag band-high">High</span>
+                      </span>
+                    </label>
 
-                  <label class="freq-checkbox">
-                    <input
-                      type="checkbox"
-                      name="freq-select"
-                      value="14"
-                      data-hz="35"
-                    />
-                    <span class="freq-label">
-                      <span class="freq-hz">35 Hz</span>
-                      <span class="freq-tag band-high">High</span>
-                    </span>
-                  </label>
+                    <label class="freq-checkbox">
+                      <input
+                        type="checkbox"
+                        name="freq-select"
+                        value="14"
+                        data-hz="35"
+                      />
+                      <span class="freq-label">
+                        <span class="freq-hz">35 Hz</span>
+                        <span class="freq-tag band-high">High</span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div id="freq-warning" class="freq-warning">2 selected</div>
                 </div>
+                <!-- Card: Hyperparameter Tuning -->
+                <div class="settings-card hparam-card" id="hparam-card">
+                  <div class="hparam-head">
+                    <div class="hparam-title-row">
+                      <h3>Hyperparameter Tuning</h3>
+                      <span id="hparam-badge" class="hparam-badge off"
+                        >Off</span
+                      >
+                    </div>
 
-                <div id="freq-warning" class="freq-warning">2 selected</div>
+                    <p class="muted hparam-sub">
+                      Optional model optimization pass. Searches a grid of
+                      different training settings to improve generalization
+                      (e.g.,
+                      <span class="hparam-inline">dropout</span>,
+                      <span class="hparam-inline">kernel length</span>,
+                      <span class="hparam-inline">pooling</span>).
+                    </p>
+                  </div>
+
+                  <div class="hparam-controls">
+                    <div
+                      class="hparam-seg"
+                      role="group"
+                      aria-label="Hyperparameter tuning mode"
+                    >
+                      <button
+                        type="button"
+                        class="hparam-seg-btn is-active"
+                        data-hp="0"
+                      >
+                        <span class="k">Off</span>
+                        <span class="s">Fastest</span>
+                      </button>
+
+                      <button type="button" class="hparam-seg-btn" data-hp="2">
+                        <span class="k">Quick</span>
+                        <span class="s">~5–10 min</span>
+                      </button>
+
+                      <button type="button" class="hparam-seg-btn" data-hp="1">
+                        <span class="k">Full</span>
+                        <span class="s">Can take hours</span>
+                      </button>
+                    </div>
+
+                    <div class="hparam-tradeoff">
+                      <div class="tradeoff-row">
+                        <div class="tradeoff-label">
+                          <span class="t">Speed</span>
+                          <span class="m">Lower runtime</span>
+                        </div>
+
+                        <div class="tradeoff-meter" aria-hidden="true">
+                          <div
+                            id="hparam-meter"
+                            class="tradeoff-fill off"
+                          ></div>
+                        </div>
+
+                        <div class="tradeoff-label right">
+                          <span class="t">Performance</span>
+                          <span class="m">Potential accuracy gain</span>
+                        </div>
+                      </div>
+
+                      <div id="hparam-hint" class="hparam-hint">
+                        Recommended when you have time and want the best model
+                        result.
+                      </div>
+                    </div>
+
+                    <div id="hparam-cnn-only" class="hparam-note hidden">
+                      This option currently applies to <b>CNN</b> training only.
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -739,22 +1020,37 @@
 
           <!-- SESSIONS PAGE VIEW -->
           <section id="view-saved-sessions" class="view hidden">
-            <h2>Saved Sessions</h2>
-            <p class="view-lead">
-              Select a previous session to load its trained model, or start a
-              new one.
-            </p>
-
-            <!-- Placeholder list; filled from GET /state as calib sessions are run -->
-            <!-- will be made clickable in css -->
-            <div id="sessions-empty" class="label" style="margin-bottom: 8px">
-              No saved sessions yet.
+            <!-- Page Header -->
+            <div class="sessions-page-header">
+              <div class="sessions-page-title">
+                <h2>Saved Sessions</h2>
+                <p>
+                  Select a previous session to load its trained model for Run
+                  Mode.
+                </p>
+              </div>
+              <div id="sessions-meta-strip" class="sessions-meta-strip">
+                <!-- injected by JS: e.g. "5 sessions" "3 ready" chips -->
+              </div>
             </div>
-            <ul id="sessions-list" class="sessions-list">
-              <!-- <li> items injected by JS -->
-            </ul>
 
-            <div class="button-row" style="margin-top: 14px">
+            <!-- Session grid: cards injected by JS -->
+            <div id="sessions-grid" class="sessions-grid">
+              <!-- JS: .session-card items inserted here -->
+            </div>
+
+            <!-- Empty state (shown when no sessions exist) -->
+            <div id="sessions-empty-state" class="sessions-empty-state hidden">
+              <div class="sessions-empty-icon">🧠</div>
+              <div class="sessions-empty-title">No saved sessions yet</div>
+              <div class="sessions-empty-sub">
+                Complete a calibration session first to create a trained model
+                you can load here.
+              </div>
+            </div>
+
+            <!-- Footer actions -->
+            <div class="sessions-footer">
               <button id="btn-sessions-new" class="btn primary">
                 Start new session
               </button>
@@ -917,6 +1213,6 @@
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-19"></script>
+    <script src="Stim.js?v=20251119-20"></script>
   </body>
 </html>

@@ -108,6 +108,53 @@ const btnCalibBack = document.getElementById("btn-calib-back");
 const elTrainingOverlay = document.getElementById("training-overlay");
 const btnCancelTraining = document.getElementById("btn-cancel-training");
 
+// Home page training results DOM elements
+const elHomeTrainSummary = document.getElementById("home-train-summary");
+const btnDismissTrainSummary = document.getElementById(
+  "btn-dismiss-train-summary",
+);
+const btnReopenTrainSummary = document.getElementById(
+  "btn-reopen-train-summary",
+);
+// Status pill
+const elTrainStatusPill = document.getElementById("train-status-pill");
+const elTrainStatusLabel = document.getElementById("train-status-label");
+const elTrainSummarySub = document.getElementById("train-summary-sub");
+// KPIs
+const elTrainKpiUser = document.getElementById("train-kpi-user");
+const elTrainKpiSession = document.getElementById("train-kpi-session");
+const elTrainKpiArch = document.getElementById("train-kpi-arch");
+const elTrainKpiHoldout = document.getElementById("train-kpi-holdout");
+const elTrainKpiTrain = document.getElementById("train-kpi-train");
+const elTrainKpiHoldoutOk = document.getElementById("train-kpi-holdout-ok");
+const elTrainKpiHoldoutWarn = document.getElementById("train-kpi-holdout-warn");
+// Best frequency pair
+const elTrainBestLeftHz = document.getElementById("train-best-left-hz");
+const elTrainBestRightHz = document.getElementById("train-best-right-hz");
+const elTrainBestLeftE = document.getElementById("train-best-left-e");
+const elTrainBestRightE = document.getElementById("train-best-right-e");
+// Consistency checks
+const elCTrainOk = document.getElementById("c-check-train-ok");
+const elCCvOk = document.getElementById("c-check-cv-ok");
+const elCOnnxOk = document.getElementById("c-check-onnx-ok");
+const elCHoldoutOk = document.getElementById("c-check-holdout-ok");
+const elCTrainMsg = document.getElementById("c-train-msg");
+const elCCvMsg = document.getElementById("c-cv-msg");
+const elCOnnxMsg = document.getElementById("c-onnx-msg");
+const elCHoldoutMsg = document.getElementById("c-holdout-msg");
+// Data insufficiency table
+const elTrainSuffEmpty = document.getElementById("train-suff-empty");
+const elTrainSuffTableWrap = document.getElementById("train-suff-table-wrap");
+const elTrainSuffTbody = document.getElementById("train-suff-tbody");
+
+// TODO: functionality to DELETE SAVED SESSIONS
+// Saved Sessions Page DOM elements
+const elSessionsGrid = document.getElementById("sessions-grid");
+const elSessionsEmptyState = document.getElementById("sessions-empty-state");
+const elSessionsMetaStrip = document.getElementById("sessions-meta-strip");
+let sessionsLoadInFlight = false; // guard against overlapping fetches from user or backend
+let sessionsPageConsumedRefresh = false; // should fetch and render sessions on rising edges of entering page
+
 // Settings Page DOM elements
 const viewSettings = document.getElementById("view-settings");
 const btnOpenSettings = document.getElementById("btn-open-settings");
@@ -120,11 +167,12 @@ const selModulation = document.getElementById("set-modulation");
 const elSettingsStatus = document.getElementById("settings-status");
 const elFreqWarning = document.getElementById("freq-warning");
 const freqInputs = Array.from(
-  document.querySelectorAll('input[name="freq-select"]')
+  document.querySelectorAll('input[name="freq-select"]'),
 );
 const FREQ_MAX_SELECT = 6;
 let currentWaveform = "square"; // "square" | "sine"
 let currentModulation = "flicker"; // "flicker" | "grow"
+let currentHparam = 0; // 0=Off, 2=Quick, 1=Full (match backend Types.h)
 let settingsInitiallyUpdated = false;
 // Slider elements
 const elDurActive = document.getElementById("set-duration-active");
@@ -135,6 +183,13 @@ const elDurActiveLbl = document.getElementById("set-duration-active-label");
 const elDurNoneLbl = document.getElementById("set-duration-none-label");
 const elDurRestLbl = document.getElementById("set-duration-rest-label");
 const elCycleRepLbl = document.getElementById("set-cycle-repeats-label");
+// hparam elements
+const elHparamCard = document.getElementById("hparam-card");
+const elHparamBadge = document.getElementById("hparam-badge");
+const elHparamMeter = document.getElementById("hparam-meter");
+const elHparamHint = document.getElementById("hparam-hint");
+const elHparamCnnOnly = document.getElementById("hparam-cnn-only");
+const hparamBtns = Array.from(document.querySelectorAll(".hparam-seg-btn"));
 
 // No SSVEP Block DOM elements
 const viewNoSSVEP = document.getElementById("view-neutral");
@@ -154,6 +209,17 @@ let neutralPairChosen = false;
 const elPauseOverlay = document.getElementById("pause-overlay");
 const btnResume = document.getElementById("btn-resume");
 const btnPauseExit = document.getElementById("btn-pause-exit");
+
+let currIdx = 0;
+let prevIdx = 0;
+let prevTrainFailMsg = "";
+let homeConsumedIdxChange = false;
+let homeConsumedTrainChange = false;
+let trainDismissed = false;
+try {
+  // remember dismiss across reloads
+  trainDismissed = localStorage.getItem("trainDismissed") === "1";
+} catch {}
 
 // ===================== 2) LOGGING HELPER =============================
 function logLine(msg) {
@@ -331,6 +397,7 @@ function updateSettingsFromState(data) {
   const calib = data.settings.calib_data_setting;
   const stim_mode_i = data.settings.stim_mode; // 0=flicker, 1=grow
   const waveform_i = data.settings.waveform; // 0=square, 1=sine
+  const hparam_i = data.settings.hparam;
   const duractive_i = Number(data.settings.duration_active_s);
   const durnone_i = Number(data.settings.duration_none_s);
   const durrest_i = Number(data.settings.duration_rest_s);
@@ -343,6 +410,8 @@ function updateSettingsFromState(data) {
     selModulation.value = stim_mode_i === 1 ? "grow" : "flicker";
   currentWaveform = selWaveform?.value ?? "square";
   currentModulation = selModulation?.value ?? "flicker";
+  const trainArchNow = Number(selTrainArch?.value ?? arch ?? 0);
+  renderHparamUI(hparam_i ?? 0, trainArchNow); // dep on train arch...
 
   if (elDurActive && !Number.isNaN(duractive_i))
     elDurActive.value = String(duractive_i);
@@ -454,8 +523,8 @@ function updateFreqCounterUI() {
     n === 0
       ? "rgba(250, 204, 21, 0.95)"
       : n <= FREQ_MAX_SELECT
-      ? "var(--success)"
-      : "var(--danger)";
+        ? "var(--success)"
+        : "var(--danger)";
 }
 function attachFreqGridHandlers() {
   freqInputs.forEach((inp) => {
@@ -470,7 +539,7 @@ function attachFreqGridHandlers() {
         showModal(
           "Too many frequencies selected",
           `Please select up to ${FREQ_MAX_SELECT} frequencies.`,
-          { okText: "OK" }
+          { okText: "OK" },
         );
         return;
       }
@@ -487,6 +556,349 @@ function bindSliderValue(sliderEl, labelEl) {
   const update = () => (labelEl.textContent = String(sliderEl.value));
   sliderEl.addEventListener("input", update);
   update();
+}
+
+// (10) Hparam helpers for settings page
+function getHparamBtn(val) {
+  return hparamBtns.find((b) => Number(b.dataset.hp) === Number(val)) || null;
+}
+function renderHparamUI(hpVal, trainArchVal) {
+  // trainArchVal: 0=CNN, 1=SVM (based on <select>)
+  const isCnn = Number(trainArchVal) === 0;
+
+  // If not CNN, force Off
+  const effectiveHp = isCnn ? Number(hpVal) : 0;
+
+  // CNN-only note visibility
+  if (elHparamCnnOnly) elHparamCnnOnly.classList.toggle("hidden", isCnn);
+
+  // Disable buttons when SVM
+  hparamBtns.forEach((b) => {
+    b.disabled = !isCnn;
+    b.classList.toggle("is-disabled", !isCnn); // if you want a CSS hook
+  });
+
+  // Active button styling
+  hparamBtns.forEach((b) =>
+    b.classList.toggle("is-active", Number(b.dataset.hp) === effectiveHp),
+  );
+
+  // Badge text + classes
+  if (elHparamBadge) {
+    elHparamBadge.classList.remove("off", "quick", "full");
+    if (effectiveHp === 2) {
+      elHparamBadge.textContent = "Quick";
+      elHparamBadge.classList.add("quick");
+    } else if (effectiveHp === 1) {
+      elHparamBadge.textContent = "Full";
+      elHparamBadge.classList.add("full");
+    } else {
+      elHparamBadge.textContent = "Off";
+      elHparamBadge.classList.add("off");
+    }
+  }
+
+  // Meter fill class
+  if (elHparamMeter) {
+    elHparamMeter.classList.remove("off", "quick", "full");
+    elHparamMeter.classList.add(
+      effectiveHp === 2 ? "quick" : effectiveHp === 1 ? "full" : "off",
+    );
+  }
+
+  // Hint text
+  if (elHparamHint) {
+    if (!isCnn) {
+      elHparamHint.textContent =
+        "Hyperparameter tuning is only available for CNN training.";
+    } else if (effectiveHp === 0) {
+      elHparamHint.textContent = "Fastest training. Uses default settings.";
+    } else if (effectiveHp === 2) {
+      elHparamHint.textContent =
+        "Good tradeoff: small search to improve generalization.";
+    } else {
+      elHparamHint.textContent = "Best potential model. Can take a long time.";
+    }
+  }
+  currentHparam = effectiveHp;
+}
+function attachHparamHandlers() {
+  hparamBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const hp = Number(btn.dataset.hp);
+
+      const trainArch = Number(selTrainArch?.value ?? 0); // 0=CNN, 1=SVM
+      // If SVM, ignore clicks (or show a modal)
+      if (trainArch !== 0) {
+        showModal(
+          "CNN only",
+          "Hyperparameter tuning currently applies to CNN training only.",
+        );
+        return;
+      }
+
+      renderHparamUI(hp, trainArch);
+      // NOTE: this does NOT save yet — it just updates UI state like waveform selection does
+    });
+  });
+
+  // Also re-render if user flips Model Architecture (CNN <-> SVM)
+  if (selTrainArch) {
+    selTrainArch.addEventListener("change", () => {
+      const trainArch = Number(selTrainArch.value);
+      renderHparamUI(currentHparam, trainArch);
+    });
+  }
+}
+
+/* contract with backend: expect state.train_fail_msg to contain:
+- empty string("") for successful training
+- error msg str for failed training
+*/
+// (11) rendering training result
+
+// (11a - subfunc) to render training result card upon FAILURE
+function renderTrainingFailure(state, failMsg) {
+  // Show the training summary card in failure state
+  if (elHomeTrainSummary) elHomeTrainSummary.classList.remove("hidden");
+  if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+
+  // Set status pill to fail
+  if (elTrainStatusPill) {
+    elTrainStatusPill.classList.remove("success", "warn");
+    elTrainStatusPill.classList.add("fail");
+  }
+  setTextEl(elTrainStatusLabel, "Failed");
+  setTextEl(elTrainSummarySub, failMsg || "Training job encountered an error.");
+
+  // Fill basic KPIs that we have
+  setTextEl(elTrainKpiUser, state.active_subject_id);
+  if (elTrainKpiArch) {
+    const archE = state.settings ? state.settings.train_arch_setting : null;
+    const archLbl = archE === 0 ? "CNN" : archE === 1 ? "SVM" : "—";
+    elTrainKpiArch.textContent = archLbl;
+  }
+
+  // Clear metrics that don't apply
+  setTextEl(elTrainKpiHoldout, "—");
+  setTextEl(elTrainKpiTrain, "—");
+  if (elTrainKpiHoldoutOk) elTrainKpiHoldoutOk.classList.add("hidden");
+  if (elTrainKpiHoldoutWarn) elTrainKpiHoldoutWarn.classList.add("hidden");
+
+  // Clear best frequency pair
+  setTextEl(elTrainBestLeftHz, "—");
+  setTextEl(elTrainBestRightHz, "—");
+  setTextEl(elTrainBestLeftE, "—");
+  setTextEl(elTrainBestRightE, "—");
+
+  // Set all consistency checks to fail
+  if (elCTrainOk) {
+    elCTrainOk.classList.remove("ok", "warn");
+    elCTrainOk.classList.add("fail");
+  }
+  if (elCCvOk) {
+    elCCvOk.classList.remove("ok", "warn");
+    elCCvOk.classList.add("fail");
+  }
+  if (elCOnnxOk) {
+    elCOnnxOk.classList.remove("ok", "warn");
+    elCOnnxOk.classList.add("fail");
+  }
+  if (elCHoldoutOk) {
+    elCHoldoutOk.classList.remove("ok", "warn");
+    elCHoldoutOk.classList.add("fail");
+  }
+  setTextEl(elCTrainMsg, "Failed");
+  setTextEl(elCCvMsg, "Failed");
+  setTextEl(elCOnnxMsg, "Failed");
+  setTextEl(elCHoldoutMsg, "Failed");
+
+  const issues = state.train_fail_issues || [];
+
+  if (issues.length > 0) {
+    // Show the table wrapper
+    if (elTrainSuffEmpty) elTrainSuffEmpty.classList.add("hidden");
+    if (elTrainSuffTableWrap) elTrainSuffTableWrap.classList.remove("hidden");
+    clearTbody(elTrainSuffTbody);
+
+    for (const issue of issues) {
+      const tr = document.createElement("tr");
+      tr.classList.add("row-bad"); // Red highlight
+
+      const td = (v) => {
+        const c = document.createElement("td");
+        c.textContent =
+          v === undefined || v === null || v === "" ? "—" : String(v);
+        return c;
+      };
+
+      tr.appendChild(td(issue.stage));
+      tr.appendChild(td("")); // Metric column (not applicable)
+      tr.appendChild(td("")); // Actual column (not applicable)
+      tr.appendChild(td("")); // Required column (not applicable)
+
+      // Frequency column: show candidate freqs if available
+      if (issue.details?.cand_freqs?.length > 0) {
+        const freqStr = issue.details.cand_freqs.join(", ") + " Hz";
+        tr.appendChild(td(freqStr));
+      } else {
+        tr.appendChild(td("—"));
+      }
+
+      // Message column: main diagnostic
+      const msgCell = td(issue.message);
+      msgCell.classList.add("msg"); // Use existing msg styling
+      tr.appendChild(msgCell);
+
+      elTrainSuffTbody.appendChild(tr);
+    }
+  } else {
+    // No detailed issues, show generic empty state
+    if (elTrainSuffEmpty) {
+      elTrainSuffEmpty.classList.remove("hidden");
+      const titleEl = elTrainSuffEmpty.querySelector(".train-empty-title");
+      const subEl = elTrainSuffEmpty.querySelector(".train-empty-sub");
+      if (titleEl) titleEl.textContent = "Training Failed";
+      if (subEl)
+        subEl.textContent =
+          "No diagnostic data available. Please try recalibrating.";
+    }
+    if (elTrainSuffTableWrap) elTrainSuffTableWrap.classList.add("hidden");
+    clearTbody(elTrainSuffTbody);
+  }
+}
+
+function renderTrainingResult(state) {
+  if (!state) return;
+  if (trainDismissed) return;
+
+  const failMsg = state.train_fail_msg || "";
+  const hasFailed = failMsg.trim() != ""; // removes whitespace for safety
+
+  // prioritize fail status if there is one in train_fail_msg (rising edge)
+  if (hasFailed) {
+    renderTrainingFailure(state, failMsg);
+    return;
+  }
+
+  // else -> SUCCESS CARD
+  // format from backend:
+  // state.data_insuff = [{ metric, required, actual, frequency_hz, stage, message }, ...]
+  const rows = state.data_insuff;
+  const hasRows = Array.isArray(rows) && rows.length > 0;
+  // Show the training summary card if we have either training numbers or issues.
+  const hasTrainingNumbers =
+    typeof state.final_holdout_acc === "number" ||
+    typeof state.final_train_acc === "number" ||
+    typeof state.freq_left_hz === "number" ||
+    typeof state.freq_right_hz === "number";
+
+  if (!hasRows && !hasTrainingNumbers) {
+    // Nothing to show at all
+    if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
+    // hide reopen too
+    if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+    return;
+  }
+
+  // Fill KPIs
+  setTextEl(elTrainKpiUser, state.active_subject_id);
+  if (elTrainKpiArch) {
+    const archE = state.settings ? state.settings.train_arch_setting : null;
+    // backend: TrainArch_CNN=0, TrainArch_SVM=1
+    const archLbl = archE === 0 ? "CNN" : archE === 1 ? "SVM" : "—";
+    elTrainKpiArch.textContent = archLbl;
+  }
+  setTextEl(elTrainKpiHoldout, fmtPct(state.final_holdout_acc));
+  setTextEl(elTrainKpiTrain, fmtPct(state.final_train_acc));
+
+  // Holdout badge
+  const h = state.final_holdout_acc;
+  let holdoutPct = null;
+  if (typeof h === "number" && isFinite(h)) holdoutPct = h <= 1.2 ? h * 100 : h;
+
+  const ok = holdoutPct !== null && holdoutPct >= 70.0;
+  if (ok) {
+    if (elTrainKpiHoldoutOk) elTrainKpiHoldoutOk.classList.remove("hidden");
+    if (elTrainKpiHoldoutWarn) elTrainKpiHoldoutWarn.classList.add("hidden");
+  } else {
+    if (elTrainKpiHoldoutWarn) elTrainKpiHoldoutWarn.classList.remove("hidden");
+    if (elTrainKpiHoldoutOk) elTrainKpiHoldoutOk.classList.add("hidden");
+  }
+
+  // Best frequency pair
+  setTextEl(elTrainBestLeftHz, state.freq_left_hz);
+  setTextEl(elTrainBestRightHz, state.freq_right_hz);
+  setTextEl(elTrainBestLeftE, state.freq_left_hz_e);
+  setTextEl(elTrainBestRightE, state.freq_right_hz_e);
+
+  // Status pill + subtitle
+  // If insuff rows exist -> warn; else success
+  if (elTrainStatusPill) {
+    elTrainStatusPill.classList.remove("success", "warn", "fail");
+    elTrainStatusPill.classList.add(hasRows ? "warn" : "success");
+  }
+  setTextEl(elTrainStatusLabel, hasRows ? "Warnings" : "Success");
+  setTextEl(
+    elTrainSummarySub,
+    hasRows
+      ? "Some sufficiency checks failed. Collect more calibration data."
+      : "Model artifacts exported and ready for Run Mode.",
+  );
+
+  // Table render
+  if (!hasRows) {
+    if (elTrainSuffEmpty) elTrainSuffEmpty.classList.remove("hidden");
+    if (elTrainSuffTableWrap) elTrainSuffTableWrap.classList.add("hidden");
+    clearTbody(elTrainSuffTbody);
+    return;
+  }
+
+  if (elTrainSuffEmpty) elTrainSuffEmpty.classList.add("hidden");
+  if (elTrainSuffTableWrap) elTrainSuffTableWrap.classList.remove("hidden");
+  clearTbody(elTrainSuffTbody);
+
+  for (const di of rows) {
+    const tr = document.createElement("tr");
+
+    const td = (v) => {
+      const c = document.createElement("td");
+      c.textContent =
+        v === undefined || v === null || v === "" ? "—" : String(v);
+      return c;
+    };
+
+    tr.appendChild(td(di.stage));
+    tr.appendChild(td(di.metric));
+    tr.appendChild(td(di.actual));
+    tr.appendChild(td(di.required));
+
+    // backend always emits numeric frequency_hz
+    tr.appendChild(td(`${di.frequency_hz} Hz`));
+
+    tr.appendChild(td(di.message));
+
+    elTrainSuffTbody.appendChild(tr);
+  }
+}
+
+// toggle home "welcome" containers visibility
+function setHomeWelcomeVisible(visible) {
+  const welcomeElements = [
+    document.querySelector("#view-home > h2"),
+    document.querySelector("#view-home > .view-lead"),
+    document.querySelector("#view-home > .home-actions"),
+    document.querySelector("#view-home > .home-tip"),
+  ];
+  welcomeElements.forEach((el) => {
+    if (el) {
+      if (visible) {
+        el.classList.remove("hidden");
+      } else {
+        el.classList.add("hidden");
+      }
+    }
+  });
 }
 
 // ==================== 4) CONNECTION STATUS HELPER =====================
@@ -603,6 +1015,74 @@ function fmtFreqEnumLabel(enumType, intVal) {
   return label;
 }
 
+// lil helper to make decimals -> percents
+// Accepts 0..1 OR 0..100. Returns string like "84.2%"
+function fmtPct(x) {
+  if (typeof x !== "number" || !isFinite(x)) return "—%";
+  const pct = x <= 1.2 ? x * 100.0 : x;
+  return `${pct.toFixed(1)}%`;
+}
+
+function fmt1(x) {
+  if (x == null || Number.isNaN(x)) return "—";
+  return Number(x).toFixed(1);
+}
+
+// SAVED SESSION FORMATTING
+// Formatters for holdout accuracy
+function holdoutAccClass(acc) {
+  if (acc == null || acc <= 0) return "acc-none";
+  const pct = acc < 1.0 ? acc * 100 : acc;
+  if (pct >= 77) return "acc-good";
+  if (pct >= 63) return "acc-warn";
+  return "acc-fail";
+}
+function fmtAcc(acc) {
+  if (acc == null || acc <= 0) return "—";
+  const pct = acc < 1.0 ? acc * 100 : acc;
+  return `${pct.toFixed(1)}%`;
+}
+// Formatter for readable session_id timestamp
+// e.g. "2026-02-05_12-03-10" -> "Feb 5, 2026 · 12:03"
+function fmtSessionId(id) {
+  if (!id) return "—";
+  // Match date portion wherever it appears: YYYY-MM-DD_HH-MM
+  const m = id.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})/);
+  if (!m) return id;
+  const [, yr, mo, dy, hr, mn] = m;
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const mLabel = months[parseInt(mo, 10) - 1] ?? mo;
+  return `${mLabel} ${parseInt(dy, 10)}, ${yr} · ${hr}:${mn}`;
+}
+
+function setText(id, txt) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = txt;
+}
+
+function setTextEl(el, v) {
+  if (!el) return;
+  el.textContent = v === undefined || v === null || v === "" ? "—" : String(v);
+}
+
+function clearTbody(tbody) {
+  if (!tbody) return;
+  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+}
+
 // HELPER FOR CHOOSING freq pair randomly in NEUTRAL (NO_SSVEP)
 // Allowed TestFreq enums for randomly selecting neutral targets
 // (exclude 0=None and 99=NoSSVEP because those are not flicker freqs)
@@ -679,6 +1159,14 @@ function stimModeToInt(m) {
   return m === "grow" ? 1 : 0;
 }
 
+// Model arch enum -> label
+function archEnumToLabel(arch) {
+  if (typeof arch == "string" && arch.trim()) return arch.trim().toUpperCase();
+  if (arch == 0) return "CNN";
+  if (arch == 1) return "SVM";
+  return "Unknown";
+}
+
 // Convert checkbox value="0..14" -> backend enum e="1..15"
 function getSelectedFreqEnumsFromGrid() {
   // HTML checkbox inputs have:
@@ -714,6 +1202,8 @@ function updateUiFromState(data) {
 
   // View routing based on stim_window value (MUST MATCH UISTATE_E)
   const stimState = data.stim_window;
+  const currIdx = data.curr_idx;
+  const currTrainFailMsg = data.train_fail_msg;
 
   // capture no_ssvep_test state transitions so we only randomize freq pair ONCE per entry
   const enteringNeutral = stimState === 10 && prevStimState !== 10;
@@ -724,8 +1214,22 @@ function updateUiFromState(data) {
     neutralPairChosen = false;
   }
 
-  // general detection of rising edges for any state
+  // detect when we're leaving saved sessions page to reset consumption flag
+  const leavingSavedSessions = prevStimState === 4 && stimState !== 4;
+  if (leavingSavedSessions) {
+    sessionsPageConsumedRefresh = false;
+  }
+
+  // detection of rising edges for different params
   const stateChanged = prevStimState !== stimState;
+  const sessionIdxChanged = currIdx != prevIdx;
+  const trainStatusChanged = currTrainFailMsg != prevTrainFailMsg;
+  if (sessionIdxChanged) {
+    homeConsumedIdxChange = false;
+  }
+  if (trainStatusChanged) {
+    homeConsumedTrainChange = false;
+  }
 
   const pauseVisible =
     stimState === 0 || // Active_Run
@@ -740,6 +1244,27 @@ function updateUiFromState(data) {
     stopHardwareMode();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     settingsInitiallyUpdated = false; // reset flag
+    if (
+      (sessionIdxChanged && !homeConsumedIdxChange) ||
+      (trainStatusChanged && !homeConsumedTrainChange)
+    ) {
+      // new result arrived or new session arrived -> open
+      renderTrainingResult(data);
+      if (elHomeTrainSummary) elHomeTrainSummary.classList.remove("hidden");
+      if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+      setHomeWelcomeVisible(false); // hide home content
+      homeConsumedIdxChange = true;
+      homeConsumedTrainChange = true;
+      trainDismissed = false;
+      try {
+        localStorage.setItem("trainDismissed", "0");
+      } catch {}
+    } else if (trainDismissed == true) {
+      setHomeWelcomeVisible(true); // recover home content
+      if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
+      if (btnReopenTrainSummary)
+        btnReopenTrainSummary.classList.remove("hidden");
+    }
     showView("home");
   } else if (stimState === 2 /* Instructions */) {
     stopAllStimuli();
@@ -782,8 +1307,10 @@ function updateUiFromState(data) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     showView("saved_sessions");
-
-    // TODO: render session list from backend
+    if (!sessionsPageConsumedRefresh) {
+      fetchAndRenderSessions(); /// fetch fresh on each entry to saved sess
+      sessionsPageConsumedRefresh = true;
+    }
   } else if (stimState === 5 /* Run Options */) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
@@ -867,13 +1394,13 @@ function updateUiFromState(data) {
       case 1: // UIPopup_MustCalibBeforeRun
         showModal(
           "No trained models found",
-          "Please complete at least one calibration session before trying to start run mode."
+          "Please complete at least one calibration session before trying to start run mode.",
         );
         break;
       case 3: // UIPopup_TooManyBadWindowsInRun
         showModal(
           "Too many artifactual windows detected",
-          "Please check headset placement and rerun hardware checks to verify signal."
+          "Please check headset placement and rerun hardware checks to verify signal.",
         );
         break;
       case 5: // UIPopup_ConfirmOverwriteCalib
@@ -886,31 +1413,33 @@ function updateUiFromState(data) {
             showCancel: true,
             okText: "Overwrite",
             cancelText: "Cancel",
-          }
+          },
         );
         break;
       case 6: // UIPopup_ConfirmHighFreqOk
         showModal(
           "High frequency SSVEP decoding (>20Hz) will be attempted",
-          "The final model's performance may be poor, and device functionality may be limited."
+          "The final model's performance may be poor, and device functionality may be limited.",
         );
         break;
       case 7: // UIPopup_TrainJobFailed
         showModal(
           "Training job failed",
-          "There was an internal error. Please try calibration again."
+          "There was an internal error. Please try calibration again.",
         );
         break;
       default:
         showModal(
           "DEBUG MSG",
-          "we should not reach here! check that UIPopup Enum matches JS cases"
+          "we should not reach here! check that UIPopup Enum matches JS cases",
         );
         break;
     }
   }
   // update state
   prevStimState = stimState;
+  prevIdx = currIdx;
+  prevTrainFailMsg = currTrainFailMsg;
 }
 
 // ============= 6) START POLLING FOR GET/STATE ===============
@@ -1229,7 +1758,246 @@ function stopNeutralFlicker() {
   if (neutralRightStimulus) neutralRightStimulus.stop();
 }
 
-// ================ 11) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
+// ================================ 11) SAVED SESSIONS RUNTIME BUILDER ==========================================
+
+function buildSessionCard(sess, activeSessionId) {
+  // diagnostics & info from sess (http server GET/SESSIONS)
+  const isActive = sess.session_id == activeSessionId;
+  const isBroken = !sess.onnx_model_found || !sess.json_meta_found;
+  const hasInsuff = sess.data_insufficiency == true;
+  const accClass = holdoutAccClass(sess.model_holdout_acc);
+  const accText = fmtAcc(sess.model_holdout_acc);
+  const leftHz = sess.freq_left_hz > 0 ? sess.freq_left_hz : null;
+  const rightHz = sess.freq_right_hz > 0 ? sess.freq_right_hz : null;
+
+  // main card element <3
+  const card = document.createElement("div");
+  card.className = "session-card";
+  if (isActive) card.classList.add("is-active");
+  if (isBroken) card.classList.add("is-broken");
+  card.dataset.sessIdx = sess.sess_idx;
+
+  // badges for da cards, we'll make them spans
+  const activeBadge = isActive
+    ? `<span class="sess-badge active"><span class="bdot"></span>Active</span>`
+    : "";
+  const archLabel = archEnumToLabel(sess.model_arch);
+  const archBadge =
+    archLabel !== "—"
+      ? `<span class="sess-badge arch">${archLabel}</span>`
+      : "";
+  const qualBadge = isBroken
+    ? `<span class="sess-badge fail">Incomplete</span>`
+    : hasInsuff
+      ? `<span class="sess-badge warn">Low data</span>`
+      : "";
+  const freqPairHtml =
+    leftHz || rightHz
+      ? `<div class="session-freq-pair">
+        ${leftHz ? `<span class="freq-chip fc-left">${leftHz}<span class="fc-unit">Hz</span></span>` : ""}
+        ${leftHz && rightHz ? `<span class="freq-pair-arrow">→</span>` : ""}
+        ${rightHz ? `<span class="freq-chip fc-right">${rightHz}<span class="fc-unit">Hz</span></span>` : ""}
+       </div>`
+      : `<span style="font-size:0.78rem;color:rgba(148,163,184,0.55)">No freq data</span>`;
+  const onnxChip = sess.onnx_model_found
+    ? `<span class="artifact-chip found"><span class="ac-icon">✓</span>ONNX</span>`
+    : `<span class="artifact-chip missing"><span class="ac-icon">✗</span>ONNX</span>`;
+
+  const metaChip = sess.json_meta_found
+    ? `<span class="artifact-chip found"><span class="ac-icon">✓</span>Meta</span>`
+    : `<span class="artifact-chip missing"><span class="ac-icon">✗</span>Meta</span>`;
+
+  const insuffChip = hasInsuff
+    ? `<span class="artifact-chip warn"><span class="ac-icon">⚠</span>Low data</span>`
+    : "";
+
+  // Build card HTML
+  card.innerHTML = `
+    <div class="session-card-head">
+      <div class="session-card-identity">
+        <div class="session-card-subject">${sess.subject || "Unknown user"}</div>
+        <div class="session-card-id">${fmtSessionId(sess.session_id)}</div>
+      </div>
+      <div class="session-card-badges">
+        ${activeBadge}${archBadge}${qualBadge}
+      </div>
+    </div>
+
+    <div class="session-card-divider"></div>
+
+    <div class="session-card-metrics">
+      <div class="sess-metric">
+        <div class="sess-metric-k">Holdout Acc</div>
+        <div class="sess-metric-v ${accClass}">${accText}</div>
+      </div>
+      <div class="sess-metric">
+        <div class="sess-metric-k">Freq Pair</div>
+        ${freqPairHtml}
+      </div>
+    </div>
+
+    <div class="session-card-artifacts">
+      ${onnxChip}${metaChip}${insuffChip}
+    </div>
+
+    <!-- Loading indicator shown on click -->
+    <div class="session-card-loading">
+      <div class="loading-spinner"></div>
+    </div>
+  `;
+
+  // Select handler
+  if (!isBroken) {
+    card.addEventListener("click", () => {
+      selectSession(sess.sess_idx, card); // select by idx
+    });
+  } else {
+    // no clicks allowed !
+    card.title =
+      "Session artifacts are corrupt or incomplete, cannot load this model.";
+  }
+
+  return card;
+}
+
+// render meta strip chips
+function renderSessionsMetaStrip(data) {
+  const el = document.getElementById("sessions-meta-strip");
+  if (!el) return;
+  // info from GET/sessions
+  const total = data.num_saved_sessions ?? 0;
+  const ok = data.num_saved_sessions_ok ?? 0;
+  const bad = total - ok; // the ones with missing artifacts
+
+  el.innerHTML = `
+    <span class="sessions-meta-chip ok">
+      <span class="chip-dot"></span>${total} session${total !== 1 ? "s" : ""}
+    </span>
+    <span class="sessions-meta-chip ok">
+      <span class="chip-dot"></span>${ok} ready
+    </span>
+    ${bad > 0 ? `<span class="sessions-meta-chip fail"><span class="chip-dot"></span>${bad} incomplete</span>` : ""}
+  `;
+}
+
+// Show skeleton cards while loading data upon entering page
+function showSessionSkeletons(n = 3) {
+  const grid = document.getElementById("sessions-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  for (let i = 0; i < n; i++) {
+    const sk = document.createElement("div");
+    sk.className = "session-card-skeleton";
+    sk.innerHTML = `
+      <div class="skeleton-line" style="width:55%;height:13px;margin-bottom:10px"></div>
+      <div class="skeleton-line" style="width:38%;height:9px;margin-bottom:14px"></div>
+      <div class="skeleton-line" style="width:100%;height:1px;opacity:0.4;margin-bottom:12px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div class="skeleton-line" style="height:44px;border-radius:10px"></div>
+        <div class="skeleton-line" style="height:44px;border-radius:10px"></div>
+      </div>
+      <div style="display:flex;gap:5px">
+        <div class="skeleton-line" style="width:56px;height:20px;border-radius:6px"></div>
+        <div class="skeleton-line" style="width:56px;height:20px;border-radius:6px"></div>
+      </div>
+    `;
+    grid.appendChild(sk);
+  }
+}
+
+// Main fetch + render function for entering the saved sessions page
+async function fetchAndRenderSessions() {
+  if (
+    typeof sessionsLoadInFlight != "undefined" &&
+    sessionsLoadInFlight == true
+  )
+    return; // don't render again if we're already trying to render
+  sessionsLoadInFlight = true;
+
+  const grid = document.getElementById("sessions-grid");
+  const emptyState = document.getElementById("sessions-empty-state");
+  if (!grid || !emptyState) {
+    sessionsLoadInFlight = false;
+    return;
+  }
+
+  // show skeleton while fetching
+  showSessionSkeletons(3);
+  emptyState.classList.add("hidden");
+
+  try {
+    const res = await fetch(`${API_BASE}/sessions`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = await res.json();
+    grid.innerHTML = "";
+
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+
+    if (sessions.length === 0) {
+      emptyState.classList.remove("hidden");
+      const strip = document.getElementById("sessions-meta-strip");
+      if (strip) strip.innerHTML = "";
+      console.log("pathway 1 for remove emptystate hidden");
+    } else {
+      console.log("pathway 2 for remove emptystate hidden"); // HERE
+      renderSessionsMetaStrip(data);
+      emptyState.classList.add("hidden");
+
+      // Sort: active session first, then by sess_idx descending (newest first!!)
+      sessions.sort((a, b) => {
+        if (a.session_id === data.active_session_id) return -1;
+        if (b.session_id === data.active_session_id) return 1;
+        return (b.sess_idx ?? 0) - (a.sess_idx ?? 0);
+      });
+      // Build all the cards
+      sessions.forEach((sess) => {
+        const card = buildSessionCard(sess, data.active_session_id);
+        grid.appendChild(card);
+      });
+    }
+    logLine(`Loaded ${sessions.length} saved session(s)`);
+  } catch (err) {
+    grid.innerHTML = "";
+    emptyState.classList.remove("hidden");
+    console.log("GET /sessions error:", err);
+    logLine("GET /sessions error: " + err);
+  } finally {
+    sessionsLoadInFlight = false; // always reset before exiting this func...
+  }
+}
+
+// Select a new session (post req to backend)
+async function selectSession(sessIdx, cardEl) {
+  if (cardEl) cardEl.classList.add("is-loading"); // for when backend is consuming the req
+
+  const payload = {
+    action: "select_session",
+    sess_idx: sessIdx,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      logLine(
+        `POST /event failed (${res.status}) for select_session idx=${sessIdx}`,
+      );
+      if (cardEl) cardEl.classList.remove("is-loading");
+      return;
+    }
+
+    logLine(`Selected session idx=${sessIdx}`);
+  } catch (err) {
+    logLine(`POST /event error for select_session: ${err}`);
+    if (cardEl) cardEl.classList.remove("is-loading");
+  }
+}
+
+// ================ 12) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
 // MAIN LOOP
 async function hardwareLoop() {
   // if user left hw mode, do nothing
@@ -1458,7 +2226,7 @@ function initHardwareCharts(nChannels, labels, fs, units) {
   }
 }
 
-// ============================== 12) HW HEALTH HELPERS ! =============================
+// ============================== 13) HW HEALTH HELPERS ! =============================
 function pct(x) {
   if (x == null || Number.isNaN(x)) return "—";
   return (x * 100).toFixed(1) + "%";
@@ -1491,16 +2259,6 @@ function updateHwHealthHeader(rates) {
   if (elHealthRollN) elHealthRollN.textContent = n == null ? "—" : String(n);
 }
 
-function fmt1(x) {
-  if (x == null || Number.isNaN(x)) return "—";
-  return Number(x).toFixed(1);
-}
-
-function setText(id, txt) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = txt;
-}
-
 function updatePerChannelStats(statsJson) {
   const roll = statsJson?.rolling;
   const n = statsJson?.n_channels || 0;
@@ -1527,7 +2285,7 @@ function applyChipClass(valueId, v, warnTh, badTh) {
   else if (v >= warnTh) chip.classList.add("warn");
 }
 
-// =============== 13) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
+// =============== 14) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
 // Helper to send a session event to C++
 async function sendSessionEvent(kind) {
   // IMPORTANT: kind is defined sporadically in init(), e.g. "start_calib", "start_run"
@@ -1572,7 +2330,7 @@ async function sendCalibOptionsAndStart() {
   if (raw === "2" || raw === "3") {
     showModal(
       "Cannot proceed",
-      "This device is not safe for use for individuals with photosensitivity."
+      "This device is not safe for use for individuals with photosensitivity.",
     );
     return;
   }
@@ -1615,7 +2373,7 @@ async function sendSettingsAndSave() {
   if (Number.isNaN(trainArch) || Number.isNaN(calibData)) {
     showModal(
       "Missing selection",
-      "Please select both training architecture and calibration data options."
+      "Please select both training architecture and calibration data options.",
     );
     return;
   }
@@ -1630,6 +2388,7 @@ async function sendSettingsAndSave() {
     calib_data_setting: calibData,
     stim_mode: stimModeToInt(modStr),
     waveform: waveformToInt(waveformStr),
+    hparam: trainArch === 0 ? currentHparam : 0, // force off for SVM
     duration_active_s: Number(elDurActive?.value ?? 11), // otherwise default
     duration_none_s: Number(elDurNone?.value ?? 10),
     duration_rest_s: Number(elDurRest?.value ?? 8),
@@ -1638,7 +2397,7 @@ async function sendSettingsAndSave() {
   };
   console.log("SET_SETTINGS payload:", payload);
   logLine(
-    `Saving timers: active=${payload.duration_active_s}s none=${payload.duration_none_s}s rest=${payload.duration_rest_s}s reps=${payload.num_times_cycle_repeats}`
+    `Saving timers: active=${payload.duration_active_s}s none=${payload.duration_none_s}s rest=${payload.duration_rest_s}s reps=${payload.num_times_cycle_repeats}`,
   );
 
   try {
@@ -1660,7 +2419,7 @@ async function sendSettingsAndSave() {
     currentModulation = modStr;
 
     logLine(
-      `Settings saved (train_arch=${trainArch}, calib_data=${calibData})`
+      `Settings saved (train_arch=${trainArch}, calib_data=${calibData} hparam=${currentHparam})`,
     );
     if (elSettingsStatus) {
       elSettingsStatus.textContent = "Saved ✓";
@@ -1676,7 +2435,7 @@ async function sendSettingsAndSave() {
   }
 }
 
-// ================== 14) INIT ON PAGE LOAD ===================
+// ================== 15) INIT ON PAGE LOAD ===================
 async function init() {
   logLine("Initializing UI…");
   const estimated_refresh = await estimateRefreshHz();
@@ -1693,16 +2452,17 @@ async function init() {
   rightStimulus = new FlickerStimulus(elRunRight, measuredRefreshHz);
   neutralLeftStimulus = new FlickerStimulus(
     elNeutralLeftArrow,
-    measuredRefreshHz
+    measuredRefreshHz,
   );
   neutralRightStimulus = new FlickerStimulus(
     elNeutralRightArrow,
-    measuredRefreshHz
+    measuredRefreshHz,
   );
 
   stimAnimationLoop();
   startPolling();
   attachFreqGridHandlers();
+  attachHparamHandlers();
 
   // add event listeners for all the sliders (settings page)
   bindSliderValue(elDurActive, elDurActiveLbl);
@@ -1803,6 +2563,30 @@ async function init() {
     btnCancelTraining.addEventListener("click", () => {
       // Cancel python job + return home
       sendSessionEvent("exit");
+    });
+  }
+
+  if (btnDismissTrainSummary) {
+    btnDismissTrainSummary.addEventListener("click", () => {
+      if (btnReopenTrainSummary)
+        btnReopenTrainSummary.classList.remove("hidden");
+      if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
+      trainDismissed = true;
+      setHomeWelcomeVisible(true);
+      try {
+        localStorage.setItem("trainDismissed", "1");
+      } catch {}
+    });
+  }
+  if (btnReopenTrainSummary) {
+    btnReopenTrainSummary.addEventListener("click", () => {
+      if (elHomeTrainSummary) elHomeTrainSummary.classList.remove("hidden");
+      if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+      trainDismissed = false;
+      setHomeWelcomeVisible(false);
+      try {
+        localStorage.setItem("trainDismissed", "0");
+      } catch {}
     });
   }
 

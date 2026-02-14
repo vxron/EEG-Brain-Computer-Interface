@@ -163,7 +163,11 @@ enum SettingWaveform_E : int {
   Waveform_Sinusoid = 1,
 };
 
-
+enum SettingHparam_E {
+	HPARAM_OFF,
+	HPARAM_FULL,
+	HPARAM_QUICK
+};
 
 /* END ENUMS */
 
@@ -274,6 +278,24 @@ inline std::string WaveformEnumToString(SettingWaveform_E e){
     }
 }
 
+inline std::string HParamEnumToString(SettingHparam_E e){
+    switch (e) {
+        case HPARAM_FULL:  return "FULL";
+        case HPARAM_OFF:   return "OFF";
+		case HPARAM_QUICK: return "QUICK";
+        default:           return "Unknown";
+    }
+}
+
+inline SSVEPState_E PythonClassToSSVEPState(int classNum){
+    switch (classNum) {
+        case -1:  return SSVEP_Unknown;
+        case 0:   return SSVEP_Left;
+		case 1:   return SSVEP_Right;
+		case 2:   return SSVEP_None;
+        default:  return SSVEP_Unknown;
+    }
+}
 
 /* END HELPERS */
 
@@ -370,6 +392,25 @@ struct SessionPaths {
     std::string session_id;     // "2025-12-22_14-31-08"
     fs::path data_session_dir;  // .../data/<subject>/<session>/
     fs::path model_session_dir; // .../models/<subject>/<session>/
+};
+
+/* TRAINING RESULT FOR UI */
+struct DataInsufficiency_s {
+	std::string metric; // windows, trials, etc
+	int required = 0;
+	int actual = 0;
+	int frequency_hz; // from issue["data_insufficiency"]["frequency_hz"] (may be null)
+	std::string stage; // issue["stage"]
+	std::string message; // issue["message"]
+};
+
+struct TrainingIssue_s {
+    std::string stage;          // e.g., "PAIR_SEARCH", "DATA_LOAD", etc.
+    std::string message;        // Human-readable error message
+    // Details (optional, may be empty)
+    std::vector<int> details_cand_freqs;  // Candidate frequencies tried
+    int details_n_pairs = 0;              // Number of pairs attempted
+    int details_skip_count = 0;           // Number skipped
 };
 
 /* END STRUCTS */

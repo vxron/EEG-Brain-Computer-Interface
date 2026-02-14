@@ -5,6 +5,7 @@
 // unicorn sampling rate of 250 Hz means 1 scan is about 4ms (or, 32 scans per getData() call is about 128ms)
 inline constexpr std::size_t WINDOW_SCANS         = NUM_SCANS_CHUNK*20;     // 640 samples @250Hz (sampling period 4ms), this is 2.56s
 inline constexpr std::size_t WINDOW_HOP_SCANS     = 80;      // every 0.32s (87.5% overlap) 
+inline constexpr std::size_t TRIM_SCANS_EACH_SIDE = 40;
 
 struct sliding_window_t {
     size_t const winLen = WINDOW_SCANS*NUM_CH_CHUNK;
