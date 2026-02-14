@@ -5,6 +5,8 @@
 #include <iterator>
 #include <string>
 #include <filesystem>
+#include "json.hpp"
+#include <stdexcept>
 
 namespace JSON {
 
@@ -175,6 +177,37 @@ inline std::string json_escape(const std::string& s) {
         }
     }
     return out;
+}
+
+inline void write_json_atomic(const std::filesystem::path& path, const nlohmann::json& j, int indent = 2) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(),ec);
+
+    auto tmp = path;
+    tmp += ".tmp"; //append tmp placeholder during write
+
+    {
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+        if (!ofs) throw std::runtime_error("Failed to open tmp file: " + tmp.string());
+        ofs << j.dump(indent);
+        ofs.flush();
+        if (!ofs) throw std::runtime_error("Failed to write tmp file: " + tmp.string());
+    }
+    std::filesystem::rename(tmp, path, ec); // rename tmp to path now
+    if (ec) {
+        // if rename fails, try cleanup tmp
+        std::error_code ec2;
+        std::filesystem::remove(tmp, ec2);
+        throw std::runtime_error("Failed to rename tmp->final: " + ec.message());
+    }
+}
+
+inline nlohmann::json read_json_if_exists(const std::filesystem::path& path){
+    std::ifstream ifs(path, std::ios::binary);
+    if(!ifs) return nlohmann::json(); // null
+    nlohmann::json j;
+    ifs >> j;
+    return j;
 }
 
 }

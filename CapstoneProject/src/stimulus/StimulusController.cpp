@@ -2,6 +2,7 @@
 #include <thread>
 #include "../utils/Logger.hpp"
 #include "../utils/SessionPaths.hpp"
+#include "utils/json.hpp"
 
 struct state_transition{
     UIState_E from;
@@ -45,10 +46,16 @@ static const state_transition state_transition_table[] = {
     // return states from state_paused must be specially handled in the detect_event function since they are dynamic
  
     {UIState_Run_Options,      UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
-    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Active_Run},
-    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_NoSSVEP_Test},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Home},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_Calib_Options},
     {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesSettings,             UIState_Settings},
     {UIState_Run_Options,      UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
+    {UIState_Run_Options,      UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Run_Options,      UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Run_Options,      UIStateEvent_UserPushesSettings,             UIState_Settings},
 
     // Non full screen pages where buttons remain visible (therefore transitions can happen)
     {UIState_Calib_Options,    UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
@@ -166,7 +173,25 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
             // reset any timers that got weird/paused/etc
             if(currentWindowTimer_.is_paused() || currentWindowTimer_.is_started()) { currentWindowTimer_.stop_timer(); }
 
+            if(prevState == UIState_None){
+                // STARTUP CONDITIONS
+                if (!stateStoreRef_->g_sessions_loaded_from_disk.exchange(true)){
+                    // load all sessions
+                    const bool ok = sesspaths::load_saved_sessions_from_disk(stateStoreRef_);
+                    if (!ok){
+                        LOG_ALWAYS("No saved sessions loaded");
+                    }
+                    else {
+                        stateStoreRef_->currentSessionInfo.g_isModelReady.store(true, std::memory_order_release); // we have a model ready
+                    }
+                }
+            }
             break;
+
+            if(prevState == UIState_Saved_Sessions){
+                // just switched sessions -> intrinsic guards mean the model must be ready.
+                stateStoreRef_->currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
+            }
         }
         
         case UIState_Active_Calib: {
@@ -312,6 +337,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
         }
 
         case UIState_Saved_Sessions: {
+            // TODO : LOAD ALL THE METAS FROM DISK (CAN DO FROM FRONTEND THO)
             stateStoreRef_->g_ui_state.store(UIState_Saved_Sessions, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
@@ -373,12 +399,13 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
                 // calib over... need to save csv in consumer thread (finalize training data)
                 {
-                    LOG_ALWAYS("reached inside final event");
+                    LOG_ALWAYS("SC: SETTING FINALIZE REQUESTED — state=" << (int)state_ 
+                    << " event=" << (int)ev);  
                     // scope for locking & changing bool flag (mtx unlocked again at end of scope)
                     std::lock_guard<std::mutex> lock(stateStoreRef_->mtx_finalize_request);
                     stateStoreRef_->finalize_requested = true;
                 }
-                stateStoreRef_->cv_finalize_request.notify_one();                
+                stateStoreRef_->cv_finalize_request.notify_one();          
             }
             if(ev == UIStateEvent_UserPushesExit) {
                 // calib incomplete... delete session (if still __IN_PROGRESS)

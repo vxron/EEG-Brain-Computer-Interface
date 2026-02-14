@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-10" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-13" />
   </head>
   <body>
     <div class="app-shell">
@@ -226,7 +226,8 @@
                   </div>
                   <div class="train-suff-hint muted">
                     Issues are reported per metric/stage. Resolve low counts by
-                    collecting more calibration data.
+                    collecting more calibration data or running longer
+                    calibration (see Settings page).
                   </div>
                 </div>
 
@@ -1019,22 +1020,37 @@
 
           <!-- SESSIONS PAGE VIEW -->
           <section id="view-saved-sessions" class="view hidden">
-            <h2>Saved Sessions</h2>
-            <p class="view-lead">
-              Select a previous session to load its trained model, or start a
-              new one.
-            </p>
-
-            <!-- Placeholder list; filled from GET /state as calib sessions are run -->
-            <!-- will be made clickable in css -->
-            <div id="sessions-empty" class="label" style="margin-bottom: 8px">
-              No saved sessions yet.
+            <!-- Page Header -->
+            <div class="sessions-page-header">
+              <div class="sessions-page-title">
+                <h2>Saved Sessions</h2>
+                <p>
+                  Select a previous session to load its trained model for Run
+                  Mode.
+                </p>
+              </div>
+              <div id="sessions-meta-strip" class="sessions-meta-strip">
+                <!-- injected by JS: e.g. "5 sessions" "3 ready" chips -->
+              </div>
             </div>
-            <ul id="sessions-list" class="sessions-list">
-              <!-- <li> items injected by JS -->
-            </ul>
 
-            <div class="button-row" style="margin-top: 14px">
+            <!-- Session grid: cards injected by JS -->
+            <div id="sessions-grid" class="sessions-grid">
+              <!-- JS: .session-card items inserted here -->
+            </div>
+
+            <!-- Empty state (shown when no sessions exist) -->
+            <div id="sessions-empty-state" class="sessions-empty-state hidden">
+              <div class="sessions-empty-icon">🧠</div>
+              <div class="sessions-empty-title">No saved sessions yet</div>
+              <div class="sessions-empty-sub">
+                Complete a calibration session first to create a trained model
+                you can load here.
+              </div>
+            </div>
+
+            <!-- Footer actions -->
+            <div class="sessions-footer">
               <button id="btn-sessions-new" class="btn primary">
                 Start new session
               </button>
@@ -1197,6 +1213,6 @@
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-19"></script>
+    <script src="Stim.js?v=20251119-20"></script>
   </body>
 </html>

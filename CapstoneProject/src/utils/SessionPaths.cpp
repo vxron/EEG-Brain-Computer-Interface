@@ -249,3 +249,90 @@ SessionPaths sesspaths::create_session(const std::string& preferred_subject_name
 }
 
 
+bool sesspaths::load_saved_sessions_from_disk(StateStore_s* stateStoreRef){
+    // Find project root (CapstoneProject) then models root 
+    fs::path project_root = find_project_root();
+    const fs::path models_root = project_root / "models";
+    const fs::path all_sess_path = models_root / "all_sessions.json";
+    
+    nlohmann::json idx;
+    {
+        // lock while reading
+        std::lock_guard<std::mutex> lock_idx(stateStoreRef->global_session_list_json_mtx);
+        idx = JSON::read_json_if_exists(all_sess_path);
+    }
+    if(!idx.is_object() || !idx.contains("meta_paths") || !idx["meta_paths"].is_array()){
+        LOG_ALWAYS("'all sessions' json non-existent yet, missing or invalid at " << all_sess_path.string());
+        return false;
+    }
+
+    // reserve vector space for saved sessions
+    std::vector<StateStore_s::SavedSession_s> loaded;
+    loaded.reserve(idx["meta_paths"].size() + 1); // +1 for default
+    // invariant index 0 reserved (default/sentinel)
+    loaded.push_back(StateStore_s::SavedSession_s{});
+
+    std::unordered_set<std::string> seen_ids; // prevent dupes
+    // loop through and allocate the rest
+    for(const auto& meta_path: idx["meta_paths"]){
+        if(!meta_path.is_string()) continue;
+        fs::path meta_rel = fs::path(meta_path.get<std::string>()); // .get = nlohmann::json's typed extraction API
+        fs::path meta_path = meta_rel.is_absolute() ? meta_rel : (models_root/meta_rel);
+        fs::path model_dir = meta_path.parent_path(); // infer model_dir for this meta
+
+        if(!fs::exists(meta_path)){
+            // stale entry in the json all lists file (shouldn't happen)
+            LOG_ALWAYS("stale entry in all sessions json at " << meta_path.string());
+            continue;
+        }
+        nlohmann::json meta;
+        try {
+            meta = JSON::read_json_if_exists(meta_path);
+        } catch (...) {
+            LOG_ALWAYS("failed to read " << meta_path.string());
+            continue;
+        }
+        if (!meta.is_object()) continue; // empty meta, nothing to load 
+
+        StateStore_s::SavedSession_s tmp{};
+        // parse acc meta json now
+        tmp.id = meta.value("session_id", "");
+        tmp.subject = meta.value("subject", "");
+        tmp.model_dir = model_dir.string();
+        tmp.model_arch = meta.value("model_arch", "");
+        tmp.final_holdout_acc = meta.value("model_holdout_acc", 0.0);
+        tmp.freq_left_hz = meta.value("freq_left_hz", 0);
+        tmp.freq_right_hz = meta.value("freq_right_hz", 0);
+        tmp.freq_left_hz_e = IntToTestFreqEnum(tmp.freq_left_hz);
+        tmp.freq_right_hz_e = IntToTestFreqEnum(tmp.freq_right_hz);
+        tmp.label = make_label_from_id(tmp.id, tmp.subject);
+        tmp.has_data_insuff = meta.value("data_insufficiency", false);
+
+        // de-dupe by id so bad index doesn't duplicate sessions
+        if(!tmp.id.empty()){
+            auto insert_result = seen_ids.insert(tmp.id);
+            if(!insert_result.second) continue; // .second returns true if insertion happened (id was new), false otherwise (dupe)
+        }
+
+        loaded.push_back(std::move(tmp)); // tmp is done for this iter; transfer ownership
+        
+    }
+
+    // write to saved sessions w mtx protection
+    {
+        std::lock_guard<std::mutex> saved_sess_protect(stateStoreRef->saved_sessions_mutex);
+        stateStoreRef->saved_sessions = std::move(loaded); // again ownership transfer
+        if(stateStoreRef->saved_sessions.size() > 1) {
+            stateStoreRef->currentSessionIdx.store((int)stateStoreRef->saved_sessions.size() - 1, std::memory_order_release); // last idx (most recent)
+        } else {
+            stateStoreRef->currentSessionIdx.store(0, std::memory_order_release);
+        }
+
+        int debug_num_sess = stateStoreRef->saved_sessions.size();
+        LOG_ALWAYS("new size of saved sessions in state store is " << debug_num_sess);
+    }
+
+    LOG_ALWAYS("Loaded # sessions from disk: " << idx["meta_paths"].size());
+    return true;
+}
+
