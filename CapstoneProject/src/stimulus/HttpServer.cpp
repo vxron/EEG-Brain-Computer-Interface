@@ -270,13 +270,14 @@ void HttpServer_C::handle_get_sessions(const httplib::Request& req, httplib::Res
         std::lock_guard<std::mutex> lock_sess(stateStoreRef_.saved_sessions_mutex);
         if(stateStoreRef_.saved_sessions.size() <= 1){
             // no sessions -> keep num_sessions = 0, idx = 1 & rtn
-            write_json(res, j);
+            write_json(res, j.dump());
             return;
         }
 
         int currIdx = stateStoreRef_.currentSessionIdx.load(std::memory_order_acquire);
-        if(currIdx < 1 || currIdx >= (int)stateStoreRef_.saved_sessions.size()){
-            write_json(res, j);
+        LOG_ALWAYS("handle_get_sessions: num_saved_sessions=" << (vec_saved_sess.size() - 1));
+        if(currIdx < 0 || currIdx >= (int)stateStoreRef_.saved_sessions.size()){
+            write_json(res, j.dump());
             LOG_ALWAYS("Warn: currIdx out of bounds (backend error)");
             return;
         }
@@ -284,10 +285,14 @@ void HttpServer_C::handle_get_sessions(const httplib::Request& req, httplib::Res
         vec_saved_sess = stateStoreRef_.saved_sessions;
         j["num_saved_sessions"] = vec_saved_sess.size() - 1; // TODO: on frontend will need to see acc size based on which ones have/dont have onnx/json metas
         j["active_session_id"] = vec_saved_sess[currIdx].id;
-        
+        LOG_ALWAYS("handle_get_sessions: currIdx=" << currIdx << " size=" << stateStoreRef_.saved_sessions.size());
+        LOG_ALWAYS("handle_get_sessions: active_id=" << vec_saved_sess[currIdx].id);
         // start at 2nd el in vec
         int ok = 0;
         for(std::size_t i=1; i<vec_saved_sess.size(); i++){
+            LOG_ALWAYS("handle_get_sessions: checking session i=" << i 
+                << " subject=" << vec_saved_sess[i].subject
+                << " model_dir=" << vec_saved_sess[i].model_dir);
             // for each sess...
             // 1) verify on-disk artifacts exist
             // (1a) verify model_dir/subject/session_id contains onnx file, titled "ssvep_model.onnx"
@@ -316,6 +321,8 @@ void HttpServer_C::handle_get_sessions(const httplib::Request& req, httplib::Res
             if(onnx_found && meta_found){
                 ok++;
             }
+            LOG_ALWAYS("handle_get_sessions: onnx_path=" << onnx_path.string() << " found=" << onnx_found);
+            LOG_ALWAYS("handle_get_sessions: meta_path=" << meta_path.string() << " found=" << meta_found);
 
             // 2) get all the info
             nlohmann::json item; // create sessions array items
@@ -334,7 +341,7 @@ void HttpServer_C::handle_get_sessions(const httplib::Request& req, httplib::Res
         }
         j["num_saved_sessions_ok"] = ok;
     }
-    write_json(res, j);
+    write_json(res, j.dump());
 }
 
 // handle ui state transition events written by JS
@@ -388,7 +395,6 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserPushesHardwareChecks;
                 } 
                 else if (action == "start_calib_from_options") {
-                    
                     // read form fields from JSON
                     std::string subj;
                     int epilepsy_i = static_cast<int>(EpilepsyRisk_Unknown);
@@ -415,6 +421,26 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                 }
                 else if (action == "pause") {
                     ev = UIStateEvent_UserPushesPause;
+                }
+                else if (action == "select_session") {
+                    // change idx based on payload (sess_idx)
+                    int idx = 0;
+                    if (!JSON::extract_json_int(body, "\"sess_idx\"", idx)) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "sess_idx");
+                        return;
+                    }
+                    {
+                        std::lock_guard<std::mutex> savedsess_lock(stateStoreRef_.saved_sessions_mutex);
+                        // guard
+                        int n = static_cast<int>(stateStoreRef_.saved_sessions.size());
+                        if(idx < 1 || idx >= n) {
+                            write_json_error(res, 400, "missing_or_invalid_field", "sess_idx");
+                            return;
+                        }
+                        stateStoreRef_.currentSessionIdx.store(idx, std::memory_order_release);
+                    }
+
+                    ev = UIStateEvent_UserSelectsSession;
                 }
                 else if (action == "open_settings") {
                     ev = UIStateEvent_UserPushesSettings;

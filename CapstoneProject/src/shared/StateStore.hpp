@@ -186,6 +186,7 @@ struct StateStore_s{
     // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success
     // conditional variable! 
+    // TODO: FINALIZE SHOULDNT HAPPEN ON UI TRANSITION BCUZ THERE COULD STILL BE THINGS TO PULL FROM RB, OR FLUSH FROM CSV
     std::mutex mtx_finalize_request;
     std::condition_variable cv_finalize_request;
     bool finalize_requested = false;

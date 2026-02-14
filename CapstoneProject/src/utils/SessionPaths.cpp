@@ -327,6 +327,9 @@ bool sesspaths::load_saved_sessions_from_disk(StateStore_s* stateStoreRef){
         } else {
             stateStoreRef->currentSessionIdx.store(0, std::memory_order_release);
         }
+
+        int debug_num_sess = stateStoreRef->saved_sessions.size();
+        LOG_ALWAYS("new size of saved sessions in state store is " << debug_num_sess);
     }
 
     LOG_ALWAYS("Loaded # sessions from disk: " << idx["meta_paths"].size());

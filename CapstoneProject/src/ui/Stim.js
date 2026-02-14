@@ -147,6 +147,14 @@ const elTrainSuffEmpty = document.getElementById("train-suff-empty");
 const elTrainSuffTableWrap = document.getElementById("train-suff-table-wrap");
 const elTrainSuffTbody = document.getElementById("train-suff-tbody");
 
+// TODO: functionality to DELETE SAVED SESSIONS
+// Saved Sessions Page DOM elements
+const elSessionsGrid = document.getElementById("sessions-grid");
+const elSessionsEmptyState = document.getElementById("sessions-empty-state");
+const elSessionsMetaStrip = document.getElementById("sessions-meta-strip");
+let sessionsLoadInFlight = false; // guard against overlapping fetches from user or backend
+let sessionsPageConsumedRefresh = false; // should fetch and render sessions on rising edges of entering page
+
 // Settings Page DOM elements
 const viewSettings = document.getElementById("view-settings");
 const btnOpenSettings = document.getElementById("btn-open-settings");
@@ -1020,6 +1028,46 @@ function fmt1(x) {
   return Number(x).toFixed(1);
 }
 
+// SAVED SESSION FORMATTING
+// Formatters for holdout accuracy
+function holdoutAccClass(acc) {
+  if (acc == null || acc <= 0) return "acc-none";
+  const pct = acc < 1.0 ? acc * 100 : acc;
+  if (pct >= 77) return "acc-good";
+  if (pct >= 63) return "acc-warn";
+  return "acc-fail";
+}
+function fmtAcc(acc) {
+  if (acc == null || acc <= 0) return "—";
+  const pct = acc < 1.0 ? acc * 100 : acc;
+  return `${pct.toFixed(1)}%`;
+}
+// Formatter for readable session_id timestamp
+// e.g. "2026-02-05_12-03-10" -> "Feb 5, 2026 · 12:03"
+function fmtSessionId(id) {
+  if (!id) return "—";
+  // Match date portion wherever it appears: YYYY-MM-DD_HH-MM
+  const m = id.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})/);
+  if (!m) return id;
+  const [, yr, mo, dy, hr, mn] = m;
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const mLabel = months[parseInt(mo, 10) - 1] ?? mo;
+  return `${mLabel} ${parseInt(dy, 10)}, ${yr} · ${hr}:${mn}`;
+}
+
 function setText(id, txt) {
   const el = document.getElementById(id);
   if (el) el.textContent = txt;
@@ -1111,6 +1159,14 @@ function stimModeToInt(m) {
   return m === "grow" ? 1 : 0;
 }
 
+// Model arch enum -> label
+function archEnumToLabel(arch) {
+  if (typeof arch == "string" && arch.trim()) return arch.trim().toUpperCase();
+  if (arch == 0) return "CNN";
+  if (arch == 1) return "SVM";
+  return "Unknown";
+}
+
 // Convert checkbox value="0..14" -> backend enum e="1..15"
 function getSelectedFreqEnumsFromGrid() {
   // HTML checkbox inputs have:
@@ -1156,6 +1212,12 @@ function updateUiFromState(data) {
   if (leavingNeutral) {
     stopNeutralFlicker();
     neutralPairChosen = false;
+  }
+
+  // detect when we're leaving saved sessions page to reset consumption flag
+  const leavingSavedSessions = prevStimState === 4 && stimState !== 4;
+  if (leavingSavedSessions) {
+    sessionsPageConsumedRefresh = false;
   }
 
   // detection of rising edges for different params
@@ -1245,8 +1307,10 @@ function updateUiFromState(data) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     showView("saved_sessions");
-
-    // TODO: render session list from backend
+    if (!sessionsPageConsumedRefresh) {
+      fetchAndRenderSessions(); /// fetch fresh on each entry to saved sess
+      sessionsPageConsumedRefresh = true;
+    }
   } else if (stimState === 5 /* Run Options */) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
@@ -1694,7 +1758,246 @@ function stopNeutralFlicker() {
   if (neutralRightStimulus) neutralRightStimulus.stop();
 }
 
-// ================ 11) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
+// ================================ 11) SAVED SESSIONS RUNTIME BUILDER ==========================================
+
+function buildSessionCard(sess, activeSessionId) {
+  // diagnostics & info from sess (http server GET/SESSIONS)
+  const isActive = sess.session_id == activeSessionId;
+  const isBroken = !sess.onnx_model_found || !sess.json_meta_found;
+  const hasInsuff = sess.data_insufficiency == true;
+  const accClass = holdoutAccClass(sess.model_holdout_acc);
+  const accText = fmtAcc(sess.model_holdout_acc);
+  const leftHz = sess.freq_left_hz > 0 ? sess.freq_left_hz : null;
+  const rightHz = sess.freq_right_hz > 0 ? sess.freq_right_hz : null;
+
+  // main card element <3
+  const card = document.createElement("div");
+  card.className = "session-card";
+  if (isActive) card.classList.add("is-active");
+  if (isBroken) card.classList.add("is-broken");
+  card.dataset.sessIdx = sess.sess_idx;
+
+  // badges for da cards, we'll make them spans
+  const activeBadge = isActive
+    ? `<span class="sess-badge active"><span class="bdot"></span>Active</span>`
+    : "";
+  const archLabel = archEnumToLabel(sess.model_arch);
+  const archBadge =
+    archLabel !== "—"
+      ? `<span class="sess-badge arch">${archLabel}</span>`
+      : "";
+  const qualBadge = isBroken
+    ? `<span class="sess-badge fail">Incomplete</span>`
+    : hasInsuff
+      ? `<span class="sess-badge warn">Low data</span>`
+      : "";
+  const freqPairHtml =
+    leftHz || rightHz
+      ? `<div class="session-freq-pair">
+        ${leftHz ? `<span class="freq-chip fc-left">${leftHz}<span class="fc-unit">Hz</span></span>` : ""}
+        ${leftHz && rightHz ? `<span class="freq-pair-arrow">→</span>` : ""}
+        ${rightHz ? `<span class="freq-chip fc-right">${rightHz}<span class="fc-unit">Hz</span></span>` : ""}
+       </div>`
+      : `<span style="font-size:0.78rem;color:rgba(148,163,184,0.55)">No freq data</span>`;
+  const onnxChip = sess.onnx_model_found
+    ? `<span class="artifact-chip found"><span class="ac-icon">✓</span>ONNX</span>`
+    : `<span class="artifact-chip missing"><span class="ac-icon">✗</span>ONNX</span>`;
+
+  const metaChip = sess.json_meta_found
+    ? `<span class="artifact-chip found"><span class="ac-icon">✓</span>Meta</span>`
+    : `<span class="artifact-chip missing"><span class="ac-icon">✗</span>Meta</span>`;
+
+  const insuffChip = hasInsuff
+    ? `<span class="artifact-chip warn"><span class="ac-icon">⚠</span>Low data</span>`
+    : "";
+
+  // Build card HTML
+  card.innerHTML = `
+    <div class="session-card-head">
+      <div class="session-card-identity">
+        <div class="session-card-subject">${sess.subject || "Unknown user"}</div>
+        <div class="session-card-id">${fmtSessionId(sess.session_id)}</div>
+      </div>
+      <div class="session-card-badges">
+        ${activeBadge}${archBadge}${qualBadge}
+      </div>
+    </div>
+
+    <div class="session-card-divider"></div>
+
+    <div class="session-card-metrics">
+      <div class="sess-metric">
+        <div class="sess-metric-k">Holdout Acc</div>
+        <div class="sess-metric-v ${accClass}">${accText}</div>
+      </div>
+      <div class="sess-metric">
+        <div class="sess-metric-k">Freq Pair</div>
+        ${freqPairHtml}
+      </div>
+    </div>
+
+    <div class="session-card-artifacts">
+      ${onnxChip}${metaChip}${insuffChip}
+    </div>
+
+    <!-- Loading indicator shown on click -->
+    <div class="session-card-loading">
+      <div class="loading-spinner"></div>
+    </div>
+  `;
+
+  // Select handler
+  if (!isBroken) {
+    card.addEventListener("click", () => {
+      selectSession(sess.sess_idx, card); // select by idx
+    });
+  } else {
+    // no clicks allowed !
+    card.title =
+      "Session artifacts are corrupt or incomplete, cannot load this model.";
+  }
+
+  return card;
+}
+
+// render meta strip chips
+function renderSessionsMetaStrip(data) {
+  const el = document.getElementById("sessions-meta-strip");
+  if (!el) return;
+  // info from GET/sessions
+  const total = data.num_saved_sessions ?? 0;
+  const ok = data.num_saved_sessions_ok ?? 0;
+  const bad = total - ok; // the ones with missing artifacts
+
+  el.innerHTML = `
+    <span class="sessions-meta-chip ok">
+      <span class="chip-dot"></span>${total} session${total !== 1 ? "s" : ""}
+    </span>
+    <span class="sessions-meta-chip ok">
+      <span class="chip-dot"></span>${ok} ready
+    </span>
+    ${bad > 0 ? `<span class="sessions-meta-chip fail"><span class="chip-dot"></span>${bad} incomplete</span>` : ""}
+  `;
+}
+
+// Show skeleton cards while loading data upon entering page
+function showSessionSkeletons(n = 3) {
+  const grid = document.getElementById("sessions-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  for (let i = 0; i < n; i++) {
+    const sk = document.createElement("div");
+    sk.className = "session-card-skeleton";
+    sk.innerHTML = `
+      <div class="skeleton-line" style="width:55%;height:13px;margin-bottom:10px"></div>
+      <div class="skeleton-line" style="width:38%;height:9px;margin-bottom:14px"></div>
+      <div class="skeleton-line" style="width:100%;height:1px;opacity:0.4;margin-bottom:12px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div class="skeleton-line" style="height:44px;border-radius:10px"></div>
+        <div class="skeleton-line" style="height:44px;border-radius:10px"></div>
+      </div>
+      <div style="display:flex;gap:5px">
+        <div class="skeleton-line" style="width:56px;height:20px;border-radius:6px"></div>
+        <div class="skeleton-line" style="width:56px;height:20px;border-radius:6px"></div>
+      </div>
+    `;
+    grid.appendChild(sk);
+  }
+}
+
+// Main fetch + render function for entering the saved sessions page
+async function fetchAndRenderSessions() {
+  if (
+    typeof sessionsLoadInFlight != "undefined" &&
+    sessionsLoadInFlight == true
+  )
+    return; // don't render again if we're already trying to render
+  sessionsLoadInFlight = true;
+
+  const grid = document.getElementById("sessions-grid");
+  const emptyState = document.getElementById("sessions-empty-state");
+  if (!grid || !emptyState) {
+    sessionsLoadInFlight = false;
+    return;
+  }
+
+  // show skeleton while fetching
+  showSessionSkeletons(3);
+  emptyState.classList.add("hidden");
+
+  try {
+    const res = await fetch(`${API_BASE}/sessions`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = await res.json();
+    grid.innerHTML = "";
+
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+
+    if (sessions.length === 0) {
+      emptyState.classList.remove("hidden");
+      const strip = document.getElementById("sessions-meta-strip");
+      if (strip) strip.innerHTML = "";
+      console.log("pathway 1 for remove emptystate hidden");
+    } else {
+      console.log("pathway 2 for remove emptystate hidden"); // HERE
+      renderSessionsMetaStrip(data);
+      emptyState.classList.add("hidden");
+
+      // Sort: active session first, then by sess_idx descending (newest first!!)
+      sessions.sort((a, b) => {
+        if (a.session_id === data.active_session_id) return -1;
+        if (b.session_id === data.active_session_id) return 1;
+        return (b.sess_idx ?? 0) - (a.sess_idx ?? 0);
+      });
+      // Build all the cards
+      sessions.forEach((sess) => {
+        const card = buildSessionCard(sess, data.active_session_id);
+        grid.appendChild(card);
+      });
+    }
+    logLine(`Loaded ${sessions.length} saved session(s)`);
+  } catch (err) {
+    grid.innerHTML = "";
+    emptyState.classList.remove("hidden");
+    console.log("GET /sessions error:", err);
+    logLine("GET /sessions error: " + err);
+  } finally {
+    sessionsLoadInFlight = false; // always reset before exiting this func...
+  }
+}
+
+// Select a new session (post req to backend)
+async function selectSession(sessIdx, cardEl) {
+  if (cardEl) cardEl.classList.add("is-loading"); // for when backend is consuming the req
+
+  const payload = {
+    action: "select_session",
+    sess_idx: sessIdx,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      logLine(
+        `POST /event failed (${res.status}) for select_session idx=${sessIdx}`,
+      );
+      if (cardEl) cardEl.classList.remove("is-loading");
+      return;
+    }
+
+    logLine(`Selected session idx=${sessIdx}`);
+  } catch (err) {
+    logLine(`POST /event error for select_session: ${err}`);
+    if (cardEl) cardEl.classList.remove("is-loading");
+  }
+}
+
+// ================ 12) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
 // MAIN LOOP
 async function hardwareLoop() {
   // if user left hw mode, do nothing
@@ -1923,7 +2226,7 @@ function initHardwareCharts(nChannels, labels, fs, units) {
   }
 }
 
-// ============================== 12) HW HEALTH HELPERS ! =============================
+// ============================== 13) HW HEALTH HELPERS ! =============================
 function pct(x) {
   if (x == null || Number.isNaN(x)) return "—";
   return (x * 100).toFixed(1) + "%";
@@ -1982,7 +2285,7 @@ function applyChipClass(valueId, v, warnTh, badTh) {
   else if (v >= warnTh) chip.classList.add("warn");
 }
 
-// =============== 13) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
+// =============== 14) SEND POST EVENTS WHEN USER CLICKS BUTTONS (OR OTHER INPUTS) ===============
 // Helper to send a session event to C++
 async function sendSessionEvent(kind) {
   // IMPORTANT: kind is defined sporadically in init(), e.g. "start_calib", "start_run"
@@ -2132,7 +2435,7 @@ async function sendSettingsAndSave() {
   }
 }
 
-// ================== 14) INIT ON PAGE LOAD ===================
+// ================== 15) INIT ON PAGE LOAD ===================
 async function init() {
   logLine("Initializing UI…");
   const estimated_refresh = await estimateRefreshHz();
