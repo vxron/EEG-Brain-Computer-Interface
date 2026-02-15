@@ -143,13 +143,24 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
     stateStoreRef_->g_ui_seq.store(currSeq + 1, std::memory_order_release);
     switch (newState) {
         case UIState_Active_Run: {
+            // may take some time since onnx can be huge
+            guardAgainstInfLoopTimer_.start_timer(std::chrono::milliseconds{ 10000 });
+            stateStoreRef_->g_onnx_session_is_reloading.store(-1, std::memory_order_release);
+            while(!(stateStoreRef_->g_onnx_session_is_reloading.load(std::memory_order_acquire)==0)){
+                // wait for any reload to be done (0)
+                // timer guard to avoid inf loops
+                if(guardAgainstInfLoopTimer_.check_timer_expired()){
+                    LOG_ALWAYS("Timing Issue with g_onnx_session_is_reloading: Not being set to -1 deterministically from StimController, or not propagating to Consumer Thread.");
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{5}); // sleep-wait to save CPU, since ONNX load takes 100s of ms anyway
+            }
+            guardAgainstInfLoopTimer_.stop_timer();
+
+            // now we can transition globally
             stateStoreRef_->g_ui_state.store(UIState_Active_Run, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
-            // TODO: make these per person based on saved sessions (see struct in types.h)
-            //stateStoreRef_->g_freq_left_hz.store(10, std::memory_order_release);
-            //stateStoreRef_->g_freq_right_hz.store(12, std::memory_order_release);
-            //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_10_Hz, std::memory_order_release);
-            //stateStoreRef_->g_freq_right_hz_e.store(TestFreq_12_Hz, std::memory_order_release);
+
             break;
         }
         

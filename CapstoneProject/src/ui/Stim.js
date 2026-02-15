@@ -391,6 +391,14 @@ function showPauseOverlay(show) {
   }
 }
 
+// (5c) onnx loading overlay helper
+function showOnnxLoadingOverlay(show) {
+  const el = document.getElementById("onnx-loading-overlay");
+  if (!el) return;
+  el.classList.toggle("hidden", !show);
+  el.setAttribute("aria-hidden", show ? "false" : "true");
+}
+
 // (6) update settings from backend when we first enter settings page (rising edge trigger)
 function updateSettingsFromState(data) {
   const arch = data.settings.train_arch_setting;
@@ -1372,6 +1380,7 @@ function updateUiFromState(data) {
   // pending training overlay driven purely by state
   showTrainingOverlay(stimState === 8); // uistate_pending_training
   showPauseOverlay(stimState == 11); // uistate_paused
+  showOnnxLoadingOverlay(data.is_onnx_reloading === true);
 
   // HANDLE POPUPS TRIGGERED BY BACKEND:
   const popupEnumIdx = data.popup ?? 0; // 0 is fallback (popup NONE)
