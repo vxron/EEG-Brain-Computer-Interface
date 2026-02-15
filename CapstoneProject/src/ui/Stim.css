@@ -3307,6 +3307,238 @@ body:not(.fullscreen-mode) {
   }
 }
 
+/* ONNX LOADING OVERLAY */
+
+.onnx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2100; /* above training overlay (2000) */
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.onnx-card {
+  width: min(460px, 92vw);
+  border-radius: 18px;
+  padding: 18px 18px 14px;
+  background: rgba(2, 6, 23, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.75);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Gradient border glow — same trick as busy-card */
+.onnx-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 18px;
+  padding: 1px;
+  background: linear-gradient(
+    135deg,
+    rgba(56, 189, 248, 0.6),
+    /* sky blue — distinct from training purple */ rgba(99, 102, 241, 0.35),
+    rgba(139, 92, 246, 0.2)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+/* pop-in entrance */
+.onnx-backdrop:not(.hidden) .onnx-card {
+  animation: onnx-pop-in 160ms ease-out;
+}
+
+@keyframes onnx-pop-in {
+  from {
+    transform: translateY(8px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Head row: icon + text */
+.onnx-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+/* Icon with animated pulse ring */
+.onnx-icon-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.onnx-icon {
+  width: 22px;
+  height: 22px;
+  color: rgba(56, 189, 248, 0.9);
+  position: relative;
+  z-index: 1;
+  animation: onnx-icon-spin 3s linear infinite;
+}
+
+@keyframes onnx-icon-spin {
+  0% {
+    transform: rotate(0deg) scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: rotate(180deg) scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+    opacity: 0.85;
+  }
+}
+
+.onnx-icon-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  animation: onnx-pulse 1.8s ease-out infinite;
+}
+
+@keyframes onnx-pulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+.onnx-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.onnx-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-main);
+}
+
+.onnx-sub {
+  font-size: 0.8rem;
+  color: rgba(203, 213, 225, 0.65);
+  line-height: 1.3;
+}
+
+/* Progress track — same dimensions as busy-progress */
+.onnx-progress {
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(2, 6, 23, 0.45);
+}
+
+/* Bar uses cyan/sky palette to distinguish from training's purple */
+.onnx-bar {
+  height: 100%;
+  width: 38%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(56, 189, 248, 0),
+    rgba(56, 189, 248, 0.9),
+    rgba(99, 102, 241, 0.85),
+    rgba(56, 189, 248, 0.9),
+    rgba(56, 189, 248, 0)
+  );
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.3));
+  animation: onnx-indet 1.1s ease-in-out infinite;
+}
+
+@keyframes onnx-indet {
+  0% {
+    transform: translateX(-145%);
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(330%);
+    opacity: 0.8;
+  }
+}
+
+/* Footer pill */
+.onnx-foot {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 10px;
+}
+
+.onnx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 0.76rem;
+}
+
+.onnx-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.95);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+  flex: 0 0 auto;
+  animation: onnx-dot-blink 1.1s ease-in-out infinite;
+}
+
+@keyframes onnx-dot-blink {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+  }
+  50% {
+    opacity: 0.5;
+    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0.05);
+  }
+}
+
 /* PENDING TRAINING LOADING BAR & POPUP OVERLAY */
 
 /* when overlay is visible, prevent scroll & clicks */

@@ -160,9 +160,15 @@ struct StateStore_s{
         return saved_sessions;
     }
 
+    std::atomic<int> g_onnx_session_is_reloading{0}; 
+    // since it can be a very time-consuming process, let ui know
+    // -1: "waiting for onnx session status from consumer thread" (since it can take it some time to reach that part of the code)
+    // +1: consumer responds "yes i am reloading"
+    // 0: consumer responds "no reloading" or "done reloading"
+
     // flag to tell consumer it should re-init onnx model -> notify on session change
     // - whenever currentSessionIdx changes (e.g. from sessions page, from training manager when training finishes)
-    std::atomic<bool> g_onnx_session_needs_reload{true}; // init true for first load
+    //std::atomic<bool> g_onnx_session_needs_reload{true}; // init true for first load
     // TODO: make GENERAL to all things that should reload on new session (e.g. UI as well...)
     // this can get set by stim controller when user selects a new or diff sess?
 

@@ -167,6 +167,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     size_t run_mode_bad_window_count = 0;
     size_t run_mode_clean_window_count = 0;
     SW_Timer_C run_mode_bad_window_timer;
+    SW_Timer_C reload_timer_guard;
 
     // run mode pseudo state machine
     int window_class = -1;
@@ -175,6 +176,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     SSVEPState_E last_win_prediction = SSVEP_Unknown;
     int num_windows_stable_prediction = 0;
     int num_windows_unknown = 0;
+    int bad_win_from_onnx_ct = 0;
     // new window every 0.32s -> means we'll have 3s/0.32s = 9.375 windows necessary for 2s
     int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10; // req users to look at stimulus for min 3s
     int NUM_ALLOWED_WRONG_WINDOWS_BEFORE_DEBOUNCE_RESET = 3; // TODO
@@ -765,14 +767,36 @@ try{
                 // resets
             }
 
-            if(stateStoreRef.g_onnx_session_needs_reload.load(std::memory_order_acquire)){
+            // if we have a new sess, we need the onnx models to be reloaded
+            // check our curr model path from statestore
+            std::string curr_expected_model_path = "";
+            int currSessIdx = 0;
+            {
                 std::lock_guard<std::mutex> saved_sess_lock(stateStoreRef.saved_sessions_mutex);
-                int currSessIdx = stateStoreRef.currentSessionIdx.load(std::memory_order_acquire);
-                std::string model_dir = stateStoreRef.saved_sessions[currSessIdx].model_dir;
+                currSessIdx = stateStoreRef.currentSessionIdx.load(std::memory_order_acquire);
+                curr_expected_model_path = stateStoreRef.saved_sessions[currSessIdx].model_dir;
+            }
+            // in case stim controller is slower -> wait for it to set g_onnx_session_is_reloading to -1
+            reload_timer_guard.start_timer(std::chrono::milliseconds{ 2000 });
+            while(stateStoreRef.g_onnx_session_is_reloading.load(std::memory_order_acquire) != -1){
+                // timer guard
+                if(reload_timer_guard.check_timer_expired()){
+                    LOG_ALWAYS("Timing Issue with g_onnx_session_is_reloading: Not being set to -1 deterministically from StimController, or not propagating to Consumer Thread.");
+                    break;
+                }
+                continue; // should be rly fast from stim controller, so spin-wait is ok
+            }
+            reload_timer_guard.stop_timer();
+
+            if(ONNX_RT.get_curr_onnx_model_path() != curr_expected_model_path && (stateStoreRef.g_onnx_session_is_reloading.load(std::memory_order_acquire)==-1)){
+                // NEED RELOAD, which can be time consuming so we also store status var in statestore
+                stateStoreRef.g_onnx_session_is_reloading.store(1, std::memory_order_release);
                 std::string model_arch = stateStoreRef.saved_sessions[currSessIdx].model_arch;
-                ONNX_RT.init_onnx_model(model_dir, TrainArchStringToEnum(model_arch));
+                ONNX_RT.init_onnx_model(curr_expected_model_path, TrainArchStringToEnum(model_arch));
                 // reload complete
-                stateStoreRef.g_onnx_session_needs_reload.store(false, std::memory_order_release);
+                stateStoreRef.g_onnx_session_is_reloading.store(0, std::memory_order_release);
+            } else {
+                stateStoreRef.g_onnx_session_is_reloading.store(0, std::memory_order_release);
             }
             
             // TODO: NEEDS TESTING IN RUN MODE (BCUZ WE HAVENT IMPLEMENTED THIS MODE YET)
@@ -796,6 +820,7 @@ try{
                 run_mode_bad_window_count++;
                 // reset counter for debounce (TODO: DECIDE IF WANT TO KEEP OR REMOVE FOR MORE AGGRESSIVENESS IN PRED)
                 num_windows_stable_prediction = 0; // reset
+                last_win_prediction = SSVEP_Unknown;
                 continue; // don't use this window
             } else {
                 // clean window
@@ -804,6 +829,9 @@ try{
                     run_mode_clean_window_count++;
                 }
                 window_class = ONNX_RT.classify_window(window);
+                if (window_class == -1) {
+                    bad_win_from_onnx_ct++;
+                }
                 // mapping from output logits->freqs
                 // hz_a -> 0, hz_b -> 1, hz_rest -> 2
                 // Convention: left = freq a, right = freq b
@@ -825,21 +853,18 @@ try{
                 // in that span, allow A FEW SSVEP_Nones or SSVEP_Unknowns in case of bad windows - before calling off 
                 // check if debounce period has passed
                 if(num_windows_stable_prediction > NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION){
-                    // check if it's diff than the state we're alr in
-                    if(last_stable_prediction == curr_win_prediction){
-                        // do nothn
-                    } else {
-                        // request actuation if it's an actuating state
-                        if(curr_win_prediction == SSVEP_Left || curr_win_prediction == SSVEP_Right){
-                            std::lock_guard<std::mutex> lock_actuation(stateStoreRef.mtx_actuation_request);
-                            stateStoreRef.actuation_requested = true;
-                            stateStoreRef.actuation_direction = curr_win_prediction;
-                            stateStoreRef.actuation_request.notify_one(); // notify actuator thread
-                        }
+                    // passed debounce
+                    // request actuation if it's an actuating state
+                    if(curr_win_prediction == SSVEP_Left || curr_win_prediction == SSVEP_Right){
+                        std::lock_guard<std::mutex> lock_actuation(stateStoreRef.mtx_actuation_request);
+                        stateStoreRef.actuation_requested = true;
+                        stateStoreRef.actuation_direction = curr_win_prediction;
+                        stateStoreRef.actuation_request.notify_one(); // notify actuator thread
                     }
                 }   
-            }
+            } 
         }
+        // TODO: logging sys for testing that logs when ssvep happens in fake data stream and when onnx predicts things and we call for actuation
 	}
     // exiting due to producer exiting means we need to close window rb
     window.sliding_window.close();
@@ -1295,15 +1320,16 @@ void actuation_controller_thread_fn(StateStore_s& stateStoreRef){
     // but this would introduce a lot of latency overheads & is def not optimal soln
     ServoDriver_C ServoDriver;
 
-    // (1) wait for cv request from consumer thread -> then wake up
-    std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request); // acquire lock momentarily
-    stateStoreRef.actuation_request.wait(actuation_lock, [&]{return stateStoreRef.actuation_requested;}); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
-    // [&] = capture all by reference
-    SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
-    
-    // (2) Implement requested_direction cycle
+    while(!g_stop.load(std::memory_order_acquire)){
+        // (1) continuously wait for cv request from consumer thread -> then wake up
+        std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request); // acquire lock momentarily
+        stateStoreRef.actuation_request.wait(actuation_lock, [&]{return stateStoreRef.actuation_requested;}); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
+        SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
+        
+        // (2) Implement requested_direction cycle using ServoDriver API
 
-    // sleep (fixed rate frequency)
+        // sleep (fixed rate frequency)
+    }
 
 }
 

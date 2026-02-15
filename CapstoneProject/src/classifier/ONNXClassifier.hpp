@@ -20,6 +20,7 @@ constexpr std::size_t RESERVED_THREADS = 7; // number of threads in app + margin
 constexpr int32_t CNN_EXPECTED_C = NUM_CH_CHUNK; // num channels
 constexpr int32_t CNN_EXPECTED_T = WINDOW_SCANS; // num time samples in window
 constexpr ONNXTensorElementDataType CNN_EXPECTED_INPUT_DATA_TYPE = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+constexpr std::array<int64_t, 4> CNN_EXPECTED_SHAPE = {1, 1, CNN_EXPECTED_C, CNN_EXPECTED_T};
 constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.75; // required confidence in active prediction to publish to consumer (else rtn unknown -> acts like no-op)
 // TODO: debounce window in consumer thread
 // - req sustained prediction for actuation before beginning actuation
@@ -29,12 +30,11 @@ constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.75; // required confidence in acti
 // [s0ch0, s0ch1, s0ch2, s0ch3, s0ch4, s0ch5, s0ch6, s0ch7, s1ch0, s1ch1, s1ch2, s1ch3, s1ch4, s1ch5, s1ch6, s1ch7... sNch0, sNch1, sNch2, sNch3, sNch4, sNch5, sNch6, sNch7...]
 // alternative: [ch0s0, ch0s1, ch0s2, ch0s3, ch0s4.. ; ch1s0, ch1s1...] 
 struct LoadedModel_s {
-    // identity
     std::string model_path; 
     SettingTrainArch_E model_arch;
 
-    // ORT objects (model-specific)
-    Ort::Session session;
+    // ORT objects (model-specific) -> store as ptr bcuz its not default-constructible
+    std::unique_ptr<Ort::Session> sessionPtr;
     
     // IO name caching (for io channel names returned by ORT)
     // duration = model lifetime
@@ -52,7 +52,7 @@ struct LoadedModel_s {
 
     // IO Contract
     // expected datatype for tensors
-    std::array<int64_t,3> input_shape; // should never be more than 3 in length
+    std::array<int64_t, CNN_EXPECTED_SHAPE.size()> input_shape; // TODO HADEEL: if svm input shape is longer, must preallocate that size instead.
     bool input_tensor_order_is_1ct = true; // true for [1,C,T], false for [1,T,C]
     // artifact cleaning happens at window-level, so we should always have same-size windows.
     int32_t expected_C;
@@ -70,6 +70,9 @@ public:
     bool init_onnx_model(std::string model_dir, SettingTrainArch_E model_arch);
     
     int classify_window(const sliding_window_t& window); // return class idx w/ guard if probability is too low... -> consumer handles the rest
+
+    // allow checking of currently loaded model path
+    std::string get_curr_onnx_model_path() const;
 private:
     // global refs we can reuse safely throughout diff sessions
     Ort::Env env_; // save ref to env (once per app turn-on)

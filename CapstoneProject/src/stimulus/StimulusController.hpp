@@ -31,6 +31,7 @@ private:
     std::deque<TestFreq_E> activeBlockQueue_;
     std::size_t activeQueueIdx_ = 0;
     SW_Timer_C currentWindowTimer_;
+    SW_Timer_C guardAgainstInfLoopTimer_;
     std::chrono::milliseconds activeBlockDur_ms_{0};
     std::chrono::milliseconds restBlockDur_ms_{0};
     std::chrono::milliseconds noSSVEPBlockDur_ms_{0};

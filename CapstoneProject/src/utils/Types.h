@@ -131,6 +131,7 @@ enum UIPopup_E {
 	UIPopup_ConfirmOverwriteCalib, // 5
 	UIPopup_ConfirmHighFreqOk, // 6
 	UIPopup_TrainJobFailed, // 7
+	UIPopup_LoadingOnnxModels, // 8
 };
 
 // SETTINGS PAGE ENUMS
