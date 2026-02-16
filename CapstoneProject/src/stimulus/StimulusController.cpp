@@ -143,6 +143,10 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
     stateStoreRef_->g_ui_seq.store(currSeq + 1, std::memory_order_release);
     switch (newState) {
         case UIState_Active_Run: {
+            // publish state first so consumer can enter reload block
+            stateStoreRef_->g_ui_state.store(UIState_Active_Run, std::memory_order_release);
+            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
+
             // may take some time since onnx can be huge
             guardAgainstInfLoopTimer_.start_timer(std::chrono::milliseconds{ 10000 });
             stateStoreRef_->g_onnx_session_is_reloading.store(-1, std::memory_order_release);
@@ -156,10 +160,6 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
                 std::this_thread::sleep_for(std::chrono::milliseconds{5}); // sleep-wait to save CPU, since ONNX load takes 100s of ms anyway
             }
             guardAgainstInfLoopTimer_.stop_timer();
-
-            // now we can transition globally
-            stateStoreRef_->g_ui_state.store(UIState_Active_Run, std::memory_order_release);
-            stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
 
             break;
         }
@@ -475,6 +475,12 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
         prevState_ = UIState_Paused;
         // dont run onstateenter cuz we don't want the side effects; just publish state to ui
         stateStoreRef_->g_ui_state.store(state_, std::memory_order_release);
+
+        // if the state was previously run mode, need to tell cons that we've entered it for operational g_onnx_session_is_reloading pathway
+        // signal -1 from stim controller
+        if(state_ == UIState_Active_Run){
+            stateStoreRef_->g_onnx_session_is_reloading.store(-1, std::memory_order_release);
+        }
         return;
     }
 

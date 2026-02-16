@@ -1,6 +1,7 @@
 #include "ONNXClassifier.hpp"
 #include <iostream>
 #include <array>
+#include "../utils/Logger.hpp"
 
     // create ONNX env (once per app)
     // arena allocation: pre-allocate large mem pool, then sub-allocate (no constant malloc/free, reduces heap fragmentation); default CPU mem
@@ -159,7 +160,11 @@ std::array<float, 3> ONNX_RT_C::run_inference(const sliding_window_t& window) {
     // validate against expected shape
     auto shape_info = output_tensors[0].GetTensorTypeAndShapeInfo();
     std::vector<int64_t> shape = shape_info.GetShape();
-    if(!(shape[0]==1 && shape[1]==3) && !(shape[0]==3 && shape[1]==1)) {
+
+    bool valid_out_shape = (shape.size() == 2) &&
+                           (((shape[0] == 1 || shape[0] == -1) && shape[1] == 3) ||
+                           (shape[0] == 3 && (shape[1] == 1 || shape[1] == -1))); // allow transpose as well
+    if(!valid_out_shape) {
         // incorrect output shape
         throw std::runtime_error("[ONNX] Expected 3 output classes in .onnx model shape");
     }
@@ -262,11 +267,27 @@ bool ONNX_RT_C::load_onnx_on_new_session(std::string model_path, SettingTrainArc
         throw std::runtime_error("[ONNX] Expected input tensor data type to be float32");
     }
 
+    // fill cached input shape array from model
+    // if dynamic batching (-1 in first el of shape), need to make it 1 for tensor creation
+    if (shape[0] == -1){
+        loaded_model_cache_->input_shape[0] = 1;
+    }
+    loaded_model_cache_->input_shape[1] = shape[1];
+    loaded_model_cache_->input_shape[2] = shape[2];
+    loaded_model_cache_->input_shape[3] = shape[3];
+
     // 5) read output shape for number of classes and make sure its 3
     auto typeInfo_out = loaded_model_cache_->sessionPtr->GetOutputTypeInfo(0);
     auto tensorInfo_out = typeInfo_out.GetTensorTypeAndShapeInfo();
     std::vector<int64_t> shape_out = tensorInfo_out.GetShape();
-    if(!(shape_out[0]==1 && shape_out[1]==3) && !(shape_out[0]==3 && shape_out[1]==1)) {
+
+    // expected shape_out[0] is batch dim: can be 1 or -1 (dynamic)
+    // shape_out[1] is num classes: must be 3
+    // also accept transpose of this
+    bool valid_out_shape = (shape_out.size() == 2) &&
+                           (((shape_out[0] == 1 || shape_out[0] == -1) && shape_out[1] == 3) ||
+                           (shape_out[0] == 3 && (shape_out[1] == 1 || shape_out[1] == -1))); // allow transpose as well
+    if(!valid_out_shape) {
         // incorrect output shape
         throw std::runtime_error("[ONNX] Expected 3 output classes in .onnx model shape");
     }
