@@ -192,7 +192,9 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
 try{
     SignalQualityAnalyzer_C SignalQualityAnalyzer(&stateStoreRef);
 
-    sliding_window_t window; // should acquire the data for 1 window with that many pops n then increment by hop... 
+    sliding_window_t window_run(false); // should acquire the data for 1 window with that many pops n then increment by hop... 
+    sliding_window_t window_calib(true);
+    sliding_window_t* windowPtr = &window_run; // ptr to window were using -> default start to run mode
     bufferChunk_S temp; // placeholder
 
     namespace fs = std::filesystem;
@@ -204,6 +206,7 @@ try{
     bool win_opened   = false;
     size_t rows_written_chunk = 0;
     size_t rows_written_win   = 0;
+    bool run_mode_onnx_ready = false;
 
     // Track which session these files belong to so we can reopen when session changes
     std::string active_session_id;
@@ -299,8 +302,8 @@ try{
         if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
 
         // Window config
-        const std::size_t winLen = window.winLen;
-        const std::size_t winHop = window.winHop;
+        const std::size_t winLen = windowPtr->winLen;
+        const std::size_t winHop = windowPtr->winHop;
 
         // Trim
         const std::size_t trim_scans_each_side = TRIM_SCANS_EACH_SIDE;
@@ -593,26 +596,14 @@ try{
         LOG_ALWAYS("notify");
         stateStoreRef.cv_train_job_request.notify_one();
     };
-
-	// build first window
-	while(window.sliding_window.get_count()<window.winLen){
-		// sc
-		if(!rb.pop(&temp)){ // internally wait here (pop cmd is blocking)
-			break;
-		} 
-		else { 
-			// this will fit fine because winLen is a multiple of number of scans per channel = 32
-			// pop sucessful -> push into sliding window
-			for(int i = 0; i<NUM_SAMPLES_CHUNK;i++){
-				window.sliding_window.push(temp.data[i]);
-			}
-		}
-	}
     
     UIState_E currState  = UIState_None;
     UIState_E prevState = UIState_None;
     TestFreq_E currLabel  = TestFreq_None;
     TestFreq_E prevLabel = TestFreq_None;
+    bool firstCalibWindowBuilt = false;
+    bool firstRunWindowBuilt = false;
+    bool* firstWinCheckPtr = &firstRunWindowBuilt;
 
     while(!g_stop.load(std::memory_order_relaxed)){
         // if currently actuating -> skip everything
@@ -636,42 +627,74 @@ try{
             if(!rb.pop(&temp)) break;
             continue; //back to top while loop
         }
+
+        // decide which sliding window we're using right now...
+        // & BUILD FIRST WINDOW - do we need this??
+        // based on state machine -> only possible to start calib from the no ssvep state, so this is the rising edge we want to detect for making a calib window instead of run
+        if(currState == UIState_NoSSVEP_Test && prevState != UIState_NoSSVEP_Test){
+            window_calib.stash_len = 0; // flush stale stash
+            std::vector<float> tmp(window_calib.winLen); // max amount we might need to drain is winLen
+            window_calib.sliding_window.drain(tmp.data()); // as well as any partial refill
+            windowPtr = &window_calib;
+            firstCalibWindowBuilt = false; // reset
+            firstWinCheckPtr = &firstCalibWindowBuilt;
+        }
+        // falling edge to go back to default run mode window is when the currState enters pendingTraining (just finished calib)
+        else if (currState == UIState_Pending_Training && prevState != UIState_Pending_Training){
+            window_run.stash_len = 0; // flush stale stash
+            std::vector<float> tmp(window_run.winLen);
+            window_run.sliding_window.drain(tmp.data()); // as well as any partial refill
+            windowPtr = &window_run;
+            firstRunWindowBuilt = false; // reset
+            firstWinCheckPtr = &firstRunWindowBuilt;
+        } 
+
+        // run_mode_onnx_ready must be reset to false on run mode entry
+        if(prevState != UIState_Active_Run){
+            run_mode_onnx_ready = false;
+        }
+
         // save this as prev state to check after window is built to make sure UI state hasn't changed in between
         prevState = currState;
         prevLabel = currLabel;
         
         // 2) ============================= build the new window =============================
         float discard; // first pop
-        for(size_t k=0;k<window.winHop;k++){
-            window.sliding_window.pop(&discard); 
+        if(*firstWinCheckPtr){
+            size_t to_pop = std::min(windowPtr->winHop, windowPtr->sliding_window.get_count()); // guard against truncated windows
+            for(size_t k=0; k<to_pop; k++){
+                windowPtr->sliding_window.pop(&discard); 
+            }
         }
 
-        while(window.sliding_window.get_count()<window.winLen){ // now push
+        while(windowPtr->sliding_window.get_count()<windowPtr->winLen){ // now push
             UIState_E intState = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
             TestFreq_E intLabel = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
             if((intState != prevState) || (intLabel != prevLabel)){
+                windowPtr->stash_len = 0; // discard stale overflow
+
                 break; // change in UI; not a good window
             }
-			std::size_t amnt_left_to_add = window.winLen - window.sliding_window.get_count(); // in samples
+			std::size_t amnt_left_to_add = windowPtr->winLen - windowPtr->sliding_window.get_count(); // in samples
 			// if there is previous 'len' in stash, we should take it and decrement len
-            if (window.stash_len > 0) {
+            if (windowPtr->stash_len > 0) {
                 // take full amnt_left_to_add from stash if it's available, otherwise take window.stash_len
-                const std::size_t take = (window.stash_len > amnt_left_to_add) ? amnt_left_to_add : window.stash_len;
+                const std::size_t take = (windowPtr->stash_len > amnt_left_to_add) ? amnt_left_to_add : windowPtr->stash_len;
                 for (std::size_t i = 0; i < take; ++i){
-                    window.sliding_window.push(window.stash[i]);
+                    windowPtr->sliding_window.push(windowPtr->stash[i]);
 				}
                 // move leftover stash to front of array for next round
-                if (take < window.stash_len) {
-                    std::memmove(window.stash.data(), // start of stash array (dest)
-                                 window.stash.data() + take, // ptr to where remaining data starts (src)
-                                 (window.stash_len - take) * sizeof(float)); // number of bytes to move
+                if (take < windowPtr->stash_len) {
+                    std::memmove(windowPtr->stash.data(), // start of stash array (dest)
+                                 windowPtr->stash.data() + take, // ptr to where remaining data starts (src)
+                                 (windowPtr->stash_len - take) * sizeof(float)); // number of bytes to move
                 }
-                window.stash_len -= take; // how much we lost for next time; will never be <0
+                windowPtr->stash_len -= take; // how much we lost for next time; will never be <0
 
                 continue; // go check while-condition again
             }
             // stash is empty
-            if(window.stash_len != 0){
+            if(windowPtr->stash_len != 0){
                 LOG_ALWAYS("There's an issue with sliding window stash.");
                 break;
             }
@@ -681,17 +704,17 @@ try{
 				// pop successful -> push into sliding window
 				if(amnt_left_to_add >= NUM_SAMPLES_CHUNK){
                     for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
-                        window.sliding_window.push(temp.data[j]);
+                        windowPtr->sliding_window.push(temp.data[j]);
                     } // goes back to check while for next chunk
 				}
 				else {
 					// take what we need and stash the rest for next window
 					for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
 						if(j<amnt_left_to_add){
-							window.sliding_window.push(temp.data[j]);
+							windowPtr->sliding_window.push(temp.data[j]);
 						} else {
-							window.stash[j-amnt_left_to_add]=temp.data[j];
-                            window.stash_len++; // increasing slots to add from stash for next time
+							windowPtr->stash[j-amnt_left_to_add]=temp.data[j];
+                            windowPtr->stash_len++; // increasing slots to add from stash for next time
 						}
 					}
 				}
@@ -704,22 +727,25 @@ try{
         currLabel = stateStoreRef.g_freq_hz_e.load(std::memory_order_acquire);
         if((currState != prevState) || (currLabel != prevLabel)){
             // changed halfway through -> not a valid window for processing
-            window.decision = SSVEP_Unknown;
-            window.has_label = false;
+            windowPtr->decision = SSVEP_Unknown;
+            windowPtr->has_label = false;
             continue; // go build next window
         }
 
         // verified it's an ok window
+        if(!(*firstWinCheckPtr)){
+            *firstWinCheckPtr = true;
+        }
         ++tick_count;
-        window.tick=tick_count;
+        windowPtr->tick=tick_count;
 
         // reset before looking at state store vals
-        window.isTrimmed = false;
-        window.has_label = false;
-        window.testFreq = TestFreq_None;
+        windowPtr->isTrimmed = false;
+        windowPtr->has_label = false;
+        windowPtr->testFreq = TestFreq_None;
 
         // always check artifacts and flag bad windows
-        SignalQualityAnalyzer.check_artifact_and_flag_window(window);
+        SignalQualityAnalyzer.check_artifact_and_flag_window(*windowPtr);
 
         if(currState == UIState_Active_Calib || currState == UIState_NoSSVEP_Test) {
             if (!ensure_csv_open_window()) {
@@ -735,16 +761,16 @@ try{
             if (n_ch_local <= 0 || n_ch_local > NUM_CH_CHUNK) n_ch_local = NUM_CH_CHUNK;
             
             // trim window ends for training data (GUARD)
-            window.trimmed_window.clear();
-            window.sliding_window.get_trimmed_snapshot(window.trimmed_window,
+            windowPtr->trimmed_window.clear();
+            windowPtr->sliding_window.get_trimmed_snapshot(windowPtr->trimmed_window,
                 TRIM_SCANS_EACH_SIDE * n_ch_local,
                 TRIM_SCANS_EACH_SIDE * n_ch_local);
-            window.isTrimmed = true;
-            const std::size_t expected_trimmed = window.winLen - (2 * TRIM_SCANS_EACH_SIDE * (std::size_t)n_ch_local);
-            if (window.trimmed_window.size() != expected_trimmed) {
-                LOG_ALWAYS("TRIMDBG: trimmed size mismatch: got=" << window.trimmed_window.size()
+            windowPtr->isTrimmed = true;
+            const std::size_t expected_trimmed = windowPtr->winLen - (2 * TRIM_SCANS_EACH_SIDE * (std::size_t)n_ch_local);
+            if (windowPtr->trimmed_window.size() != expected_trimmed) {
+                LOG_ALWAYS("TRIMDBG: trimmed size mismatch: got=" << windowPtr->trimmed_window.size()
                     << " expected=" << expected_trimmed
-                    << " winLen=" << window.winLen
+                    << " winLen=" << windowPtr->winLen
                     << " n_ch=" << n_ch_local
                     << " tick_per_session=" << tick_count_per_session
                     << " ui_state=" << (int)currState
@@ -752,11 +778,11 @@ try{
             }
 
             // we should be attaching a label to our windows for calibration data
-            window.testFreq = currLabel;
-            window.has_label = (currLabel != TestFreq_None);
+            windowPtr->testFreq = currLabel;
+            windowPtr->has_label = (currLabel != TestFreq_None);
             // Log trimmed window (only if has label)
-            if(window.has_label){
-                log_window_snapshot(window, currState, tick_count_per_session, /*use_trimmed=*/true);
+            if(windowPtr->has_label){
+                log_window_snapshot(*windowPtr, currState, tick_count_per_session, /*use_trimmed=*/true);
             }
         }
         
@@ -776,30 +802,34 @@ try{
                 currSessIdx = stateStoreRef.currentSessionIdx.load(std::memory_order_acquire);
                 curr_expected_model_path = stateStoreRef.saved_sessions[currSessIdx].model_dir;
             }
-            // in case stim controller is slower -> wait for it to set g_onnx_session_is_reloading to -1
-            reload_timer_guard.start_timer(std::chrono::milliseconds{ 2000 });
-            while(stateStoreRef.g_onnx_session_is_reloading.load(std::memory_order_acquire) != -1){
-                // timer guard
-                if(reload_timer_guard.check_timer_expired()){
-                    LOG_ALWAYS("Timing Issue with g_onnx_session_is_reloading: Not being set to -1 deterministically from StimController, or not propagating to Consumer Thread.");
-                    break;
-                }
-                continue; // should be rly fast from stim controller, so spin-wait is ok
-            }
-            reload_timer_guard.stop_timer();
 
-            if(ONNX_RT.get_curr_onnx_model_path() != curr_expected_model_path && (stateStoreRef.g_onnx_session_is_reloading.load(std::memory_order_acquire)==-1)){
-                // NEED RELOAD, which can be time consuming so we also store status var in statestore
-                stateStoreRef.g_onnx_session_is_reloading.store(1, std::memory_order_release);
-                std::string model_arch = stateStoreRef.saved_sessions[currSessIdx].model_arch;
-                ONNX_RT.init_onnx_model(curr_expected_model_path, TrainArchStringToEnum(model_arch));
-                // reload complete
-                stateStoreRef.g_onnx_session_is_reloading.store(0, std::memory_order_release);
-            } else {
-                stateStoreRef.g_onnx_session_is_reloading.store(0, std::memory_order_release);
-            }
+            // prepare onnx if not already ready -> complete handshake w stim controller & model loading once per run mode entry
+            if(!run_mode_onnx_ready){
+                // in case stim controller is slower -> wait for it to set g_onnx_session_is_reloading to -1
+                reload_timer_guard.start_timer(std::chrono::milliseconds{ 2000 });
+                while(stateStoreRef.g_onnx_session_is_reloading.load(std::memory_order_acquire) != -1){
+                    // timer guard
+                    if(reload_timer_guard.check_timer_expired()){
+                        LOG_ALWAYS("Timing Issue with g_onnx_session_is_reloading: Not being set to -1 deterministically from StimController, or not propagating to Consumer Thread.");
+                        break;
+                    }
+                    continue; // should be rly fast from stim controller, so spin-wait is ok
+                }
+                reload_timer_guard.stop_timer();
             
-            // TODO: NEEDS TESTING IN RUN MODE (BCUZ WE HAVENT IMPLEMENTED THIS MODE YET)
+
+                if(ONNX_RT.get_curr_onnx_model_path() != curr_expected_model_path && (stateStoreRef.g_onnx_session_is_reloading.load(std::memory_order_acquire)==-1)){
+                    // NEED RELOAD, which can be time consuming so we also store status var in statestore
+                    stateStoreRef.g_onnx_session_is_reloading.store(1, std::memory_order_release);
+                    std::string model_arch = stateStoreRef.saved_sessions[currSessIdx].model_arch;
+                    ONNX_RT.init_onnx_model(curr_expected_model_path, TrainArchStringToEnum(model_arch));
+                    // reload complete
+                    stateStoreRef.g_onnx_session_is_reloading.store(0, std::memory_order_release);
+                } else {
+                    stateStoreRef.g_onnx_session_is_reloading.store(0, std::memory_order_release);
+                }
+                run_mode_onnx_ready = true;
+            }
 
             // popup saying 'signal is bad, too many artifactual windows. run hardware checks' when too many bad windows detected in a certain time frame, then reset
             if(run_mode_bad_window_timer.check_timer_expired()){
@@ -813,7 +843,7 @@ try{
                 run_mode_clean_window_count = 0;
             }
 
-            if(window.isArtifactualWindow){
+            if(windowPtr->isArtifactualWindow){
                 if(!run_mode_bad_window_timer.is_started()){
                     run_mode_bad_window_timer.start_timer(std::chrono::milliseconds{9000});
                 }
@@ -828,7 +858,7 @@ try{
                     // add to within-timer clean window count for comparison
                     run_mode_clean_window_count++;
                 }
-                window_class = ONNX_RT.classify_window(window);
+                window_class = ONNX_RT.classify_window(*windowPtr);
                 if (window_class == -1) {
                     bad_win_from_onnx_ct++;
                 }
@@ -848,6 +878,8 @@ try{
                 else if(curr_win_prediction!=last_win_prediction){
                     num_windows_stable_prediction = 0; // reset
                 }
+                // reset
+                last_win_prediction = curr_win_prediction;
                 // debounce for minimum windows before we publish new cmd to actuation
                 // should have consistent windows for about 2 seconds to register user really looking at target
                 // in that span, allow A FEW SSVEP_Nones or SSVEP_Unknowns in case of bad windows - before calling off 
@@ -867,7 +899,7 @@ try{
         // TODO: logging sys for testing that logs when ssvep happens in fake data stream and when onnx predicts things and we call for actuation
 	}
     // exiting due to producer exiting means we need to close window rb
-    window.sliding_window.close();
+    windowPtr->sliding_window.close();
     rb.close();
     if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); }
     if (win_opened)   { csv_win.flush();   csv_win.close();   }

@@ -18,7 +18,7 @@
 // Inference selection = saved_sessions[currentSessionIdx].model_dir
 constexpr std::size_t RESERVED_THREADS = 7; // number of threads in app + margin of
 constexpr int32_t CNN_EXPECTED_C = NUM_CH_CHUNK; // num channels
-constexpr int32_t CNN_EXPECTED_T = WINDOW_SCANS; // num time samples in window
+constexpr int32_t CNN_EXPECTED_T = WINDOW_SCANS_RUN_MODE; // num time samples in window
 constexpr ONNXTensorElementDataType CNN_EXPECTED_INPUT_DATA_TYPE = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
 constexpr std::array<int64_t, 4> CNN_EXPECTED_SHAPE = {1, 1, CNN_EXPECTED_C, CNN_EXPECTED_T};
 constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.75; // required confidence in active prediction to publish to consumer (else rtn unknown -> acts like no-op)
