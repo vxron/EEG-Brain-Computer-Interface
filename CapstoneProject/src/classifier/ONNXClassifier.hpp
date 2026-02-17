@@ -69,7 +69,7 @@ public:
     // load if diff, no-op if same
     bool init_onnx_model(std::string model_dir, SettingTrainArch_E model_arch);
     
-    int classify_window(const sliding_window_t& window); // return class idx w/ guard if probability is too low... -> consumer handles the rest
+    ClassifyResult_s classify_window(const sliding_window_t& window); // return class idx w/ guard if probability is too low... -> consumer handles the rest
 
     // allow checking of currently loaded model path
     std::string get_curr_onnx_model_path() const;
@@ -92,5 +92,5 @@ private:
     std::unique_ptr<LoadedModel_s> loaded_model_cache_; // inits to nullptr
 
     // get final class from model logits output (w guards for low probability results)
-    int apply_softmax_to_publish_final_class(std::array<float,3> &logits);
+    int apply_softmax_to_publish_final_class(std::array<float,3> &logits, ClassifyResult_s& result);
 };
