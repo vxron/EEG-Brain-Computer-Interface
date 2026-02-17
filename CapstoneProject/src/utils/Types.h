@@ -297,6 +297,15 @@ inline SSVEPState_E PythonClassToSSVEPState(int classNum){
     }
 }
 
+inline std::string ssvep_str(SSVEPState_E s) {
+    switch(s){
+        case SSVEP_Left:  return "left";
+        case SSVEP_Right: return "right";
+        case SSVEP_None:  return "none";
+        default:          return "unknown";
+    }
+}
+
 /* END HELPERS */
 
 /* START STRUCTS */
@@ -396,21 +405,29 @@ struct SessionPaths {
 
 /* TRAINING RESULT FOR UI */
 struct DataInsufficiency_s {
-	std::string metric; // windows, trials, etc
+	std::string metric;    // windows, trials, etc
 	int required = 0;
 	int actual = 0;
-	int frequency_hz; // from issue["data_insufficiency"]["frequency_hz"] (may be null)
-	std::string stage; // issue["stage"]
-	std::string message; // issue["message"]
+	int frequency_hz;      // from issue["data_insufficiency"]["frequency_hz"] (may be null)
+	std::string stage;     // issue["stage"]
+	std::string message;   // issue["message"]
 };
 
 struct TrainingIssue_s {
-    std::string stage;          // e.g., "PAIR_SEARCH", "DATA_LOAD", etc.
-    std::string message;        // Human-readable error message
+    std::string stage;                    // e.g., "PAIR_SEARCH", "DATA_LOAD", etc.
+    std::string message;                  // Human-readable error message
     // Details (optional, may be empty)
     std::vector<int> details_cand_freqs;  // Candidate frequencies tried
     int details_n_pairs = 0;              // Number of pairs attempted
     int details_skip_count = 0;           // Number skipped
+};
+
+/* Real-Time Classification Result */
+struct ClassifyResult_s {
+	int final_class = -1;
+	std::array<float,3> logits = {};  
+	std::array<float,3> softmax = {};
+	bool ran_inference = false; // false if verify_requirements failed
 };
 
 /* END STRUCTS */

@@ -118,6 +118,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
 
     bool is_model_ready = stateStoreRef_.currentSessionInfo.g_isModelReady.load(std::memory_order_acquire);
     int popup = stateStoreRef_.g_ui_popup.load(std::memory_order_acquire); // any popup event
+    bool onnx_sess_reloading = (stateStoreRef_.g_onnx_session_is_reloading.load(std::memory_order_acquire)==1); 
 
     // Pending session info
     std::lock_guard<std::mutex> lock2(stateStoreRef_.calib_options_mtx);
@@ -175,21 +176,22 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
             if (i + 1 < train_issues.size()) oss << ",";
         }
     oss << "]," 
-        << "\"is_model_ready\":"         << (is_model_ready ? "true" : "false") << ","
-        << "\"popup\":"                  << popup                               << ","
-        << "\"pending_subject_name\":\"" << pending_subject_name                << "\","
-        << "\"active_subject_id\":\""    << active_subject_id                   << "\","
-        << "\"settings\":{"
-            << "\"calib_data_setting\":" << calib_data_setting_e << ","
-            << "\"train_arch_setting\":" << train_arch_e << ","
-            << "\"stim_mode\":"          << stim_mode_e << ","
-            << "\"waveform\":"           << waveform_e  << ","
-            << "\"hparam\":"             << hparam_e    << ","
-            << "\"num_times_cycle_repeats\":" << total_cycles << ","
-            << "\"duration_active_s\":"  << duration_active << ","
-            << "\"duration_rest_s\":"    << duration_rest << ","
-            << "\"duration_none_s\":"    << duration_none << ","
-            << "\"selected_freqs_n\":"   << sel_n << ","
+        << "\"is_model_ready\":"              << (is_model_ready ? "true" : "false")      << ","
+        << "\"is_onnx_reloading\":"           << (onnx_sess_reloading ? "true" : "false") << ","
+        << "\"popup\":"                       << popup                                    << ","
+        << "\"pending_subject_name\":\""      << pending_subject_name                     << "\","
+        << "\"active_subject_id\":\""         << active_subject_id                        << "\","
+        << "\"settings\":{"     
+            << "\"calib_data_setting\":"      << calib_data_setting_e                     << ","
+            << "\"train_arch_setting\":"      << train_arch_e                             << ","
+            << "\"stim_mode\":"               << stim_mode_e                              << ","
+            << "\"waveform\":"                << waveform_e                               << ","
+            << "\"hparam\":"                  << hparam_e                                 << ","
+            << "\"num_times_cycle_repeats\":" << total_cycles                        << ","
+            << "\"duration_active_s\":"       << duration_active                          << ","
+            << "\"duration_rest_s\":"         << duration_rest                            << ","
+            << "\"duration_none_s\":"         << duration_none                            << ","
+            << "\"selected_freqs_n\":"        << sel_n                                    << ","
             << "\"selected_freqs_e\":[";
                 for (int i = 0; i < sel_n; ++i) {
                     int e = static_cast<int>(stateStoreRef_.settings.selected_freqs_e[i]);
