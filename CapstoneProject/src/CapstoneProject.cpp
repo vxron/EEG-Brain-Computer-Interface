@@ -180,6 +180,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     // new window every 0.32s -> means we'll have 3s/0.32s = 9.375 windows necessary for 2s
     int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10; // req users to look at stimulus for min 3s
     int NUM_ALLOWED_WRONG_WINDOWS_BEFORE_DEBOUNCE_RESET = 3; // TODO
+    ClassifyResult_s currResults{};
     
     // single instance of onnx env
     ONNX_RT_C ONNX_RT;
@@ -202,8 +203,11 @@ try{
     // Two independent CSV files, one at window level, one at chunk level
     std::ofstream csv_chunk;   // eeg_chunk_data.csv
     std::ofstream csv_win;     // eeg_windows.csv
+    std::ofstream csv_run_log; // run mode csv log
     bool chunk_opened = false;
     bool win_opened   = false;
+    bool run_log_opened = false;
+    std::chrono::steady_clock::time_point run_log_t0; // start of run log (using steady_clock)
     size_t rows_written_chunk = 0;
     size_t rows_written_win   = 0;
     bool run_mode_onnx_ready = false;
@@ -534,6 +538,102 @@ try{
         if ((rows_written_win % 5000) == 0) csv_win.flush();
     };
 
+    auto log_run_classifier_window = [&](
+        int stim_hz,                      // g_freq_hz snapshotted at window-build time for fake acq, default -1 for real acq
+        bool is_artifact,       
+        bool was_used,                    // !artifactual && onnx ran
+        const ClassifyResult_s& clf,
+        int class_out,                    // actual current class
+        SSVEPState_E pred_state,          // curr_win_prediction as string
+        int stable_ct,                    // debounce
+        bool act_fired,                   // whether actuation was fired this window
+        SSVEPState_E act_dir
+    ) {
+        // Open log file on first call
+        if (!run_log_opened) {
+            // get data dir for active session
+            std::string subject;
+            std::string session;
+            {
+                std::lock_guard<std::mutex> savedsesslock(stateStoreRef.saved_sessions_mutex);
+                int currIdx = stateStoreRef.currentSessionIdx.load(std::memory_order_acquire);
+                subject = stateStoreRef.saved_sessions[currIdx].subject;
+                session = stateStoreRef.saved_sessions[currIdx].session;
+            }
+            const fs::path PROJECT_ROOT = sesspaths::find_project_root();
+            const fs::path data_dir = PROJECT_ROOT / "data";
+            fs::path log_path;
+            if(session != "" && !session.empty()){
+                log_path = data_dir / subject / session / "run_classifier_log.csv";
+            }
+            // fallback to making new "unknown session" path -> overwrites
+            else {
+                log_path = data_dir / subject / "run_mode_logs" / "run_classifier_log.csv";
+            }
+            // Create directory if it doesn't exist
+            std::error_code ec;
+            fs::create_directories(log_path.parent_path(), ec);
+            if (ec) {
+                LOG_ALWAYS("RUN_LOG: failed to create directory: " << ec.message());
+                return;
+            }
+            
+            csv_run_log.open(log_path, std::ios::out | std::ios::trunc);
+            LOG_ALWAYS("RUN_LOG: attempted open at " << log_path.string());
+            if (!csv_run_log.is_open()) return;
+            LOG_ALWAYS("RUN_LOG: opened at " << log_path.string());
+
+            // Write header
+            csv_run_log << "window_idx,timestamp_ms"
+                        << ",stim_freq_hz,stim_state"
+                        << ",is_artifactual,was_used"
+                        << ",logit_0,logit_1,logit_2"
+                        << ",softmax_0,softmax_1,softmax_2"
+                        << ",onnx_class_raw,predicted_state"
+                        << ",num_stable_windows,stable_target"
+                        << ",actuation_requested,actuation_direction"
+                        << ",bad_win_count_in_period,clean_win_count_in_period\n";
+
+            run_log_opened = true;
+            run_log_t0 = std::chrono::steady_clock::now();
+        }
+
+        // if we're in real mode, we acc don't know what "stim_hz" is (dont know where user is looking)
+#ifndef ACQ_BACKEND_FAKE
+        stim_hz = -1; // default
+#endif
+
+        // map hz to state string via session's known freqs
+        std::string stim_state = "none";
+        if (stim_hz != -1 && stim_hz != 0) {
+            std::lock_guard<std::mutex> lk(stateStoreRef.saved_sessions_mutex);
+            int idx = stateStoreRef.currentSessionIdx.load(std::memory_order_acquire);
+            if (stim_hz == stateStoreRef.saved_sessions[idx].freq_left_hz)  stim_state = "left";
+            else if (stim_hz == stateStoreRef.saved_sessions[idx].freq_right_hz) stim_state = "right";
+            else stim_state = "other";
+        }
+
+        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - run_log_t0).count();
+        
+        csv_run_log << tick_count << "," << now_ms
+                    << "," << stim_hz << "," << stim_state
+                    << "," << (is_artifact ? 1 : 0) << "," << (was_used ? 1 : 0);
+        
+        if (was_used) {
+            csv_run_log << "," << clf.logits[0] << "," << clf.logits[1] << "," << clf.logits[2]
+                        << "," << clf.softmax[0] << "," << clf.softmax[1] << "," << clf.softmax[2]
+                        << "," << class_out << "," << ssvep_str(pred_state);
+        } else {
+            csv_run_log << ",,,,,,"  // blank logits/softmax
+                        << ",-1,unknown";
+        }
+
+        csv_run_log << "," << stable_ct << "," << NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION
+                    << "," << (act_fired ? 1 : 0) << "," << (act_fired ? ssvep_str(act_dir) : "")
+                    << "," << run_mode_bad_window_count << "," << run_mode_clean_window_count << "\n";
+    };
+
     auto handle_finalize_if_requested = [&]() {
         // quick check flag (locked)
         bool do_finalize = false;
@@ -649,9 +749,10 @@ try{
             firstWinCheckPtr = &firstRunWindowBuilt;
         } 
 
-        // run_mode_onnx_ready must be reset to false on run mode entry
-        if(prevState != UIState_Active_Run){
+        // run_mode_onnx_ready must be reset to false on run mode exit
+        if(prevState == UIState_Active_Run && currState != UIState_Active_Run){
             run_mode_onnx_ready = false;
+            run_log_opened = false; // redo logging each run sess
         }
 
         // save this as prev state to check after window is built to make sure UI state hasn't changed in between
@@ -842,7 +943,11 @@ try{
                 run_mode_bad_window_count = 0;
                 run_mode_clean_window_count = 0;
             }
-
+            
+            int stim_hz = -1; // default for non-fake acq
+#ifdef ACQ_BACKEND_FAKE
+            stim_hz = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+#endif
             if(windowPtr->isArtifactualWindow){
                 if(!run_mode_bad_window_timer.is_started()){
                     run_mode_bad_window_timer.start_timer(std::chrono::milliseconds{9000});
@@ -851,6 +956,8 @@ try{
                 // reset counter for debounce (TODO: DECIDE IF WANT TO KEEP OR REMOVE FOR MORE AGGRESSIVENESS IN PRED)
                 num_windows_stable_prediction = 0; // reset
                 last_win_prediction = SSVEP_Unknown;
+                ClassifyResult_s dummy_clf{};
+                log_run_classifier_window(stim_hz, true, false, dummy_clf, -1, SSVEP_Unknown, 0, false, SSVEP_Unknown);
                 continue; // don't use this window
             } else {
                 // clean window
@@ -858,7 +965,8 @@ try{
                     // add to within-timer clean window count for comparison
                     run_mode_clean_window_count++;
                 }
-                window_class = ONNX_RT.classify_window(*windowPtr);
+                currResults = ONNX_RT.classify_window(*windowPtr);
+                window_class = currResults.final_class;
                 if (window_class == -1) {
                     bad_win_from_onnx_ct++;
                 }
@@ -884,25 +992,32 @@ try{
                 // should have consistent windows for about 2 seconds to register user really looking at target
                 // in that span, allow A FEW SSVEP_Nones or SSVEP_Unknowns in case of bad windows - before calling off 
                 // check if debounce period has passed
+                bool actuation_fired = false;
+                SSVEPState_E act_dir = SSVEP_Unknown;
                 if(num_windows_stable_prediction > NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION){
                     // passed debounce
                     // request actuation if it's an actuating state
                     if(curr_win_prediction == SSVEP_Left || curr_win_prediction == SSVEP_Right){
+                        actuation_fired = true;
+                        act_dir = curr_win_prediction;
                         std::lock_guard<std::mutex> lock_actuation(stateStoreRef.mtx_actuation_request);
                         stateStoreRef.actuation_requested = true;
                         stateStoreRef.actuation_direction = curr_win_prediction;
                         stateStoreRef.actuation_request.notify_one(); // notify actuator thread
                     }
-                }   
+                }
+                
+                log_run_classifier_window(stim_hz, false, true, currResults, window_class, curr_win_prediction, 
+                                   num_windows_stable_prediction, actuation_fired, act_dir);
             } 
         }
-        // TODO: logging sys for testing that logs when ssvep happens in fake data stream and when onnx predicts things and we call for actuation
 	}
     // exiting due to producer exiting means we need to close window rb
     windowPtr->sliding_window.close();
     rb.close();
-    if (chunk_opened) { csv_chunk.flush(); csv_chunk.close(); }
-    if (win_opened)   { csv_win.flush();   csv_win.close();   }
+    if (chunk_opened)   { csv_chunk.flush(); csv_chunk.close(); }
+    if (win_opened)     { csv_win.flush();   csv_win.close();   }
+    if (run_log_opened) { csv_run_log.flush(); csv_run_log.close(); }
 }
 catch (const std::exception& e) {
         LOG_ALWAYS("consumer: FATAL unhandled exception: " << e.what());

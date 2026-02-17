@@ -59,20 +59,24 @@ bool ONNX_RT_C::verify_requirements(const sliding_window_t& window){
     }
 }
 
-int ONNX_RT_C::classify_window(const sliding_window_t& window){
+ClassifyResult_s ONNX_RT_C::classify_window(const sliding_window_t& window){
+    ClassifyResult_s result{}; 
     bool isOk = verify_requirements(window);
     if(isOk){
         std::array<float, 3> logits = run_inference(window);
-        // todo: raw debug for logits (maybe log csv file here)
-        return apply_softmax_to_publish_final_class(logits);
+        result.ran_inference = true;
+        result.logits = logits;
+        result.final_class = apply_softmax_to_publish_final_class(logits, result);
     }
     else {
-        return -1; // will skip this window -> perform no action
+        result.ran_inference = false;
+        result.final_class = -1; // will skip this window -> perform no action
         // TODO: from consumer, check for too many ssvep_unknown cases
     }
+    return result;
 }
 
-int ONNX_RT_C::apply_softmax_to_publish_final_class(std::array<float,3> &logits){
+int ONNX_RT_C::apply_softmax_to_publish_final_class(std::array<float,3> &logits, ClassifyResult_s& result){
     // for each logit x_i: softmax(x_i) = exp(x_i) / sum(exp(x_j) for all j)
     // improve for numerical stability (avoid exp overflow for large logits) -> subtract off largest logit
     // softmax(x_i) = exp(x_i-max(x)) / sum(exp(x_j-max(x)) for all j)
@@ -89,6 +93,7 @@ int ONNX_RT_C::apply_softmax_to_publish_final_class(std::array<float,3> &logits)
     }
     for(int i=0; i<3;i++){
         softmax_res[i] = std::exp(logits[i]-max_logit)/denom;
+        result.softmax[i] = std::exp(logits[i]-max_logit)/denom;
     }
     
     // get max softmax now
