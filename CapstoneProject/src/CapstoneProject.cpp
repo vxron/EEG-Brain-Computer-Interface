@@ -1004,6 +1004,8 @@ try{
                         stateStoreRef.actuation_requested = true;
                         stateStoreRef.actuation_direction = curr_win_prediction;
                         stateStoreRef.actuation_request.notify_one(); // notify actuator thread
+                        // reset num_windows_stable_prediction
+                        num_windows_stable_prediction = 0;
                     }
                 }
                 

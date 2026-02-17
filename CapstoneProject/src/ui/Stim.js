@@ -1239,6 +1239,16 @@ function updateUiFromState(data) {
     homeConsumedTrainChange = false;
   }
 
+  // on sessIdx change -> clear training summary (as long as its not from pending_training state)
+  if (sessionIdxChanged && prevStimState !== 8) {
+    if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
+    if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
+    trainDismissed = false; // for when we go back into training next time
+    homeConsumedIdxChange = false; // in case we're coming in here instead of above if
+    homeConsumedTrainChange = true; // dont need to consume train change again
+    setHomeWelcomeVisible(true); // Show welcome content instead of training status
+  }
+
   const pauseVisible =
     stimState === 0 || // Active_Run
     stimState === 1 || // Active_Calib
@@ -1253,10 +1263,12 @@ function updateUiFromState(data) {
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     settingsInitiallyUpdated = false; // reset flag
     if (
-      (sessionIdxChanged && !homeConsumedIdxChange) ||
-      (trainStatusChanged && !homeConsumedTrainChange)
+      prevStimState !== 4 /*Saved Sessions*/ &&
+      ((sessionIdxChanged && !homeConsumedIdxChange) ||
+        (trainStatusChanged && !homeConsumedTrainChange))
     ) {
-      // new result arrived or new session arrived -> open
+      // new result arrived -> open
+      // if we just changed session from saved sessions -> don't open (not available anymore)
       renderTrainingResult(data);
       if (elHomeTrainSummary) elHomeTrainSummary.classList.remove("hidden");
       if (btnReopenTrainSummary) btnReopenTrainSummary.classList.add("hidden");
@@ -1267,7 +1279,11 @@ function updateUiFromState(data) {
       try {
         localStorage.setItem("trainDismissed", "0");
       } catch {}
-    } else if (trainDismissed == true) {
+    } else if (
+      trainDismissed == true ||
+      (sessionIdxChanged && !homeConsumedIdxChange && prevStimState == 4)
+    ) {
+      // hide training summary
       setHomeWelcomeVisible(true); // recover home content
       if (elHomeTrainSummary) elHomeTrainSummary.classList.add("hidden");
       if (btnReopenTrainSummary)
