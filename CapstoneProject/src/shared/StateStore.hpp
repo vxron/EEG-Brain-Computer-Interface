@@ -47,6 +47,16 @@ struct StateStore_s{
     std::atomic<int> g_block_id{0}; // block index in protocol
     std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None}; 
     std::atomic<int> g_freq_hz{0}; // ************USED FOR FAKE ACQ DURING RUN MODE
+    // cv from stim controller -> producer for notifying producer when its time to start calib/run mode dataset streaming
+    // i.e. producer will then call unicorn_start_acq w appropriate settings
+    std::mutex mtx_streaming_request;
+    std::condition_variable streaming_request;
+    bool streaming_requested = false;
+    trainingProto_S training_proto; // ***********USED FOR FAKE ACQ STREAMER DURING CALIB
+    bool test_mode_arg = 0; // 1 for calib, 0 for run
+
+    std::mutex mtx_streamer_freqs;
+    std::vector<int> acc_freqs_in_use_by_streamer;
 
     // ============ For displaying signal in real-time on UI (hardware checks page) ============
     std::atomic<bool> g_hasEegChunk{false};

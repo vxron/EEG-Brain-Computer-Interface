@@ -177,6 +177,15 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
             fakeAcq_buildSeqAndShuffle();
             fakeAcq_advanceToNextSSVEP();
 #endif
+
+            // if it's in streaming mode, need to do cv hand off again
+            {
+                std::lock_guard<std::mutex> lock_proto(stateStoreRef_->mtx_streaming_request);
+                stateStoreRef_->test_mode_arg = 0; // run
+                stateStoreRef_->streaming_requested = true;
+                stateStoreRef_->streaming_request.notify_all();
+            }
+
             break;
         }
         
@@ -336,6 +345,16 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
                 // clear pending entries we just used to create session
                 pending_subject_name_.clear();
                 pending_epilepsy_ = EpilepsyRisk_Unknown;
+
+                // store the training proto in the statestore and notify producer to start dataset fake acq if applicable (call unicorn_start_acq)
+                // todo: add compile time flags for dataset acq only
+                {
+                    std::lock_guard<std::mutex> lock_proto(stateStoreRef_->mtx_streaming_request);
+                    stateStoreRef_->training_proto = trainingProtocol_;
+                    stateStoreRef_->test_mode_arg = 1; // calib
+                    stateStoreRef_->streaming_requested = true;
+                    stateStoreRef_->streaming_request.notify_all();
+                }
             }
             stateStoreRef_->g_is_calib.store(true,std::memory_order_release);
 
