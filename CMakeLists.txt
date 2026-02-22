@@ -14,5 +14,9 @@ option(USE_FAKE_ACQ "Use fake acquisition backend" OFF)
 option(CALIBRATION_MODE "Calibrate Mode to Train Model" ON)
 option(USE_EEG_FILTERS "Use EEG filters for preprocessing" ON)
 
+set(SKIP_TRAINING "" CACHE STRING
+    "If non-empty, skip training and load pretrained model from this path")
+# usage: cmake -DSKIP_TRAINING="alexandra3/2026-02-02_15-02-55" ..
+
 # Build the subdir that defines the executable
 add_subdirectory(CapstoneProject)

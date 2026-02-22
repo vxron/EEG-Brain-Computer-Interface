@@ -13,7 +13,9 @@
 #include <vector>
 #include <algorithm>
 #include <mutex>
+#include <filesystem>
 #include "../utils/JsonUtils.hpp"
+#include "../utils/json.hpp"
 
 // Constructor
 HttpServer_C::HttpServer_C(StateStore_s& stateStoreRef, int port) : stateStoreRef_(stateStoreRef), liveServerRef_(nullptr), port_(port) {
@@ -84,7 +86,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_hz = stateStoreRef_.g_freq_hz.load(std::memory_order_acquire);
     
     // Run-mode pair
-    std::lock_guard<std::mutex> lock(stateStoreRef_.saved_sessions_mutex);
+    std::unique_lock<std::mutex> lock(stateStoreRef_.saved_sessions_mutex);
     int currIdx = stateStoreRef_.currentSessionIdx.load(std::memory_order_acquire);
     int n = static_cast<int>(stateStoreRef_.saved_sessions.size());
     // guard against out of range errors
@@ -94,11 +96,29 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int freq_right_hz  = stateStoreRef_.saved_sessions[currIdx].freq_right_hz;
     int freq_left_hz_e = static_cast<int>(stateStoreRef_.saved_sessions[currIdx].freq_left_hz_e);
     int freq_right_hz_e = static_cast<int>(stateStoreRef_.saved_sessions[currIdx].freq_right_hz_e);
+    // "just trained" info from active session
+    double final_holdout_acc = stateStoreRef_.saved_sessions[currIdx].final_holdout_acc;
+    double final_train_acc = stateStoreRef_.saved_sessions[currIdx].final_train_acc;
+    // data insuff
+    std::vector<DataInsufficiency_s> data_insuff = stateStoreRef_.saved_sessions[currIdx].data_insuff;
+    std::string active_subject_id = "";
+    if (stateStoreRef_.saved_sessions[currIdx].subject != "") {
+        // use saved session cfg if available (post-calib)
+        active_subject_id = stateStoreRef_.saved_sessions[currIdx].subject;
+    } else {
+        // else fallback to currentsessioninfo (used during calib before training complete)
+        active_subject_id = stateStoreRef_.currentSessionInfo.get_active_subject_id();
+    }
+    lock.unlock();
 
-    // Active session info
-    bool is_model_ready = stateStoreRef_.currentSessionInfo.g_isModelReady.load(std::memory_order_acquire); // for training job monitoring
-    std::string active_subject_id = stateStoreRef_.currentSessionInfo.get_active_subject_id();
+    std::unique_lock<std::mutex> lock_pop(stateStoreRef_.train_fail_mtx);
+    std::string train_fail_msg = stateStoreRef_.train_fail_msg;
+    std::vector<TrainingIssue_s> train_issues = stateStoreRef_.train_fail_issues;
+    lock_pop.unlock();
+
+    bool is_model_ready = stateStoreRef_.currentSessionInfo.g_isModelReady.load(std::memory_order_acquire);
     int popup = stateStoreRef_.g_ui_popup.load(std::memory_order_acquire); // any popup event
+    bool onnx_sess_reloading = (stateStoreRef_.g_onnx_session_is_reloading.load(std::memory_order_acquire)==1); 
 
     // Pending session info
     std::lock_guard<std::mutex> lock2(stateStoreRef_.calib_options_mtx);
@@ -109,6 +129,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int train_arch_e = stateStoreRef_.settings.train_arch_setting.load(std::memory_order_acquire);
     int stim_mode_e = stateStoreRef_.settings.stim_mode.load(std::memory_order_acquire);
     int waveform_e  = stateStoreRef_.settings.waveform.load(std::memory_order_acquire);
+    int hparam_e = stateStoreRef_.settings.hparam_setting.load(std::memory_order_acquire);
     int sel_n = stateStoreRef_.settings.selected_freqs_n.load(std::memory_order_acquire);
     if (sel_n < 0) sel_n = 0;
     if (sel_n > 6) sel_n = 6;
@@ -124,41 +145,205 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
         << "\"seq\":"                    << seq                                 << ","
         << "\"stim_window\":"            << stim_window                         << ","
         << "\"block_id\":"               << block_id                            << ","
+        << "\"curr_idx\":"               << currIdx                             << ","
         << "\"freq_hz\":"                << freq_hz                             << ","
         << "\"freq_hz_e\":"              << freq_hz_e                           << ","
         << "\"freq_left_hz\":"           << freq_left_hz                        << ","
         << "\"freq_right_hz\":"          << freq_right_hz                       << ","
         << "\"freq_left_hz_e\":"         << freq_left_hz_e                      << ","
         << "\"freq_right_hz_e\":"        << freq_right_hz_e                     << ","
-        << "\"is_model_ready\":"         << (is_model_ready ? "true" : "false") << ","
-        << "\"popup\":"                  << popup                               << ","
-        << "\"pending_subject_name\":\"" << pending_subject_name                << "\","
-        << "\"active_subject_id\":\""    << active_subject_id                   << "\","
-        << "\"settings\":{"
-            << "\"calib_data_setting\":" << calib_data_setting_e << ","
-            << "\"train_arch_setting\":" << train_arch_e << ","
-            << "\"stim_mode\":"          << stim_mode_e << ","
-            << "\"waveform\":"           << waveform_e  << ","
-            << "\"num_times_cycle_repeats\":" << total_cycles << ","
-            << "\"duration_active_s\":"  << duration_active << ","
-            << "\"duration_rest_s\":"    << duration_rest << ","
-            << "\"duration_none_s\":"    << duration_none << ","
-            << "\"selected_freqs_n\":"   << sel_n << ","
+        << "\"final_holdout_acc\":"      << final_holdout_acc                   << ","
+        << "\"final_train_acc\":"        << final_train_acc                     << ","
+        << "\"train_fail_msg\":\""       << JSON::json_escape(train_fail_msg)   << "\","
+        << "\"train_fail_issues\":[";
+        for (size_t i = 0; i < train_issues.size(); ++i) {
+            const auto& iss = train_issues[i];
+            oss << "{"
+                << "\"stage\":\""   << JSON::json_escape(iss.stage)   << "\","
+                << "\"message\":\"" << JSON::json_escape(iss.message) << "\","
+                << "\"details\":{"
+                    << "\"cand_freqs\":[";
+                    for (size_t j = 0; j < iss.details_cand_freqs.size(); ++j) {
+                        oss << iss.details_cand_freqs[j];
+                        if (j + 1 < iss.details_cand_freqs.size()) oss << ",";
+                    }
+            oss     << "],"
+                    << "\"n_pairs\":"     << iss.details_n_pairs     << ","
+                    << "\"skip_count\":"  << iss.details_skip_count
+                << "}"
+                << "}";
+                
+            if (i + 1 < train_issues.size()) oss << ",";
+        }
+    oss << "]," 
+        << "\"is_model_ready\":"              << (is_model_ready ? "true" : "false")      << ","
+        << "\"is_onnx_reloading\":"           << (onnx_sess_reloading ? "true" : "false") << ","
+        << "\"popup\":"                       << popup                                    << ","
+        << "\"pending_subject_name\":\""      << pending_subject_name                     << "\","
+        << "\"active_subject_id\":\""         << active_subject_id                        << "\","
+        << "\"settings\":{"     
+            << "\"calib_data_setting\":"      << calib_data_setting_e                     << ","
+            << "\"train_arch_setting\":"      << train_arch_e                             << ","
+            << "\"stim_mode\":"               << stim_mode_e                              << ","
+            << "\"waveform\":"                << waveform_e                               << ","
+            << "\"hparam\":"                  << hparam_e                                 << ","
+            << "\"num_times_cycle_repeats\":" << total_cycles                        << ","
+            << "\"duration_active_s\":"       << duration_active                          << ","
+            << "\"duration_rest_s\":"         << duration_rest                            << ","
+            << "\"duration_none_s\":"         << duration_none                            << ","
+            << "\"selected_freqs_n\":"        << sel_n                                    << ","
             << "\"selected_freqs_e\":[";
                 for (int i = 0; i < sel_n; ++i) {
                     int e = static_cast<int>(stateStoreRef_.settings.selected_freqs_e[i]);
                     oss << e;
                     if (i < sel_n - 1) oss << ",";
                 }
-            oss << "]"
-        << "}"
-    << "}";
-    
+        oss << "]"
+            << "}"   // end settings
+            << ",";  // continue root object
+        oss << "\"data_insuff\":[";
+        for (size_t i = 0; i < data_insuff.size(); ++i) {
+            const auto& di = data_insuff[i];
+            oss << "{"
+                << "\"metric\":\""       << JSON::json_escape(di.metric)      << "\","
+                << "\"required\":"       << di.required                       << ","
+                << "\"actual\":"         << di.actual                         << ","
+                << "\"frequency_hz\":"   << di.frequency_hz                   << ","
+                << "\"stage\":\""        << JSON::json_escape(di.stage)       << "\","
+                << "\"message\":\""      << JSON::json_escape(di.message)     << "\""
+                << "}";
+
+            if (i + 1 < data_insuff.size()) oss << ",";
+        }
+        oss << "]";
+    oss << "}";
+
     lock3.unlock();
     std::string json_snapshot = oss.str();
-    
+
     // 3) send json back to client through res
     write_json(res, json_snapshot);
+}
+
+/* contract:
+{
+  "num_saved_sessions": 5,
+  "num_saved_sessions_ok": 0, // rest are bad
+  "active_session_id": "2026-02-05_12-03-10",
+  "sessions": [
+    {
+      "sessIdx": 2,
+      "subject": "veronicaa",
+      "session_id": "2026-02-05_12-03-10",
+      "onnx_model_found": true,
+      "json_meta_found": true,
+      "train_succeeded": true,
+      "model_arch": CNN,
+      "model_holdout_acc": 0.7,
+      "freq_left_hz": 12,
+      "freq_right_hz": 10,
+      "data_insufficiency": false,
+    }
+  ]
+}
+*/
+// new API method for handling SAVED SESSIONS on saved sessions page
+void HttpServer_C::handle_get_sessions(const httplib::Request& req, httplib::Response& res){
+    // acquire saved sessions from state store
+    logger::tlabel = "HTTP Server";
+    std::vector<StateStore_s::SavedSession_s> vec_saved_sess;
+    // init json
+    nlohmann::json j;
+    j["num_saved_sessions"] = 0;
+    j["active_session_id"] = "";
+    j["sessions"] = nlohmann::json::array(); // must init as array since multiple elements will be appended
+
+    auto get_bool_from_train_result_json = [](const char *key, std::string& body) -> std::optional<bool> {
+        bool dest = false; // temp
+        if(!JSON::extract_json_bool(body, key, dest)){
+            JSON::json_extract_fail("train_result.json", key);
+            return std::nullopt;
+        }
+        return int(dest);
+    };
+
+    // take mutex & hold until json is ready (so we don't end up in a situation where frontend thinks it can read saved sessions but doesn't have meta yet)
+    {
+        std::lock_guard<std::mutex> lock_sess(stateStoreRef_.saved_sessions_mutex);
+        if(stateStoreRef_.saved_sessions.size() <= 1){
+            // no sessions -> keep num_sessions = 0, idx = 1 & rtn
+            write_json(res, j.dump());
+            return;
+        }
+
+        int currIdx = stateStoreRef_.currentSessionIdx.load(std::memory_order_acquire);
+        LOG_ALWAYS("handle_get_sessions: num_saved_sessions=" << (vec_saved_sess.size() - 1));
+        if(currIdx < 0 || currIdx >= (int)stateStoreRef_.saved_sessions.size()){
+            write_json(res, j.dump());
+            LOG_ALWAYS("Warn: currIdx out of bounds (backend error)");
+            return;
+        }
+
+        vec_saved_sess = stateStoreRef_.saved_sessions;
+        j["num_saved_sessions"] = vec_saved_sess.size() - 1; // TODO: on frontend will need to see acc size based on which ones have/dont have onnx/json metas
+        j["active_session_id"] = vec_saved_sess[currIdx].id;
+        LOG_ALWAYS("handle_get_sessions: currIdx=" << currIdx << " size=" << stateStoreRef_.saved_sessions.size());
+        LOG_ALWAYS("handle_get_sessions: active_id=" << vec_saved_sess[currIdx].id);
+        // start at 2nd el in vec
+        int ok = 0;
+        for(std::size_t i=1; i<vec_saved_sess.size(); i++){
+            LOG_ALWAYS("handle_get_sessions: checking session i=" << i 
+                << " subject=" << vec_saved_sess[i].subject
+                << " model_dir=" << vec_saved_sess[i].model_dir);
+            // for each sess...
+            // 1) verify on-disk artifacts exist
+            // (1a) verify model_dir/subject/session_id contains onnx file, titled "ssvep_model.onnx"
+            // (1b) verify model_dir/subject/session_id contains meta file, titled "meta.json" (this is how disk will remember btwn open/close browser)
+            std::filesystem::path model_dir = std::filesystem::path(vec_saved_sess[i].model_dir);
+            const auto onnx_path = model_dir / "ssvep_model.onnx";
+            const auto meta_path = model_dir / "meta.json";
+            std::error_code ec;
+            const bool onnx_found = std::filesystem::exists(onnx_path, ec);
+            const bool meta_found = std::filesystem::exists(meta_path, ec);
+            /*
+            // check if train succeeded from train_result.json
+            std::string train_res_body;
+            bool train_succeeded = false;
+            if(!JSON::read_file_to_string(meta_path, train_res_body)){
+                write_json_error(res, 400, "Invalid or missing body", "train_result.json");
+            }
+            else {
+                train_succeeded = (get_bool_from_train_result_json("train_ok", train_res_body) &&
+                                              get_bool_from_train_result_json("onnx_ok", train_res_body) &&
+                                              get_bool_from_train_result_json("cv_ok", train_res_body) &&
+                                              get_bool_from_train_result_json("final_holdout_ok", train_res_body));
+            }*/
+
+            // make sure meta is ok
+            if(onnx_found && meta_found){
+                ok++;
+            }
+            LOG_ALWAYS("handle_get_sessions: onnx_path=" << onnx_path.string() << " found=" << onnx_found);
+            LOG_ALWAYS("handle_get_sessions: meta_path=" << meta_path.string() << " found=" << meta_found);
+
+            // 2) get all the info
+            nlohmann::json item; // create sessions array items
+            item["sess_idx"] = i; // how to make sure were not overwriting the older sessions
+            item["subject"] = vec_saved_sess[i].subject;
+            item["session_id"] = vec_saved_sess[i].id;
+            item["onnx_model_found"] = onnx_found;
+            item["json_meta_found"] = meta_found;
+            //item["train_succeeded"] = train_succeeded;
+            item["model_arch"] = vec_saved_sess[i].model_arch;
+            item["model_holdout_acc"] = vec_saved_sess[i].final_holdout_acc;
+            item["freq_left_hz"] = vec_saved_sess[i].freq_left_hz;
+            item["freq_right_hz"] = vec_saved_sess[i].freq_right_hz;
+            item["data_insufficiency"] = (vec_saved_sess[i].data_insuff.empty()) ? false : true; 
+            j["sessions"].push_back(std::move(item)); // append array items
+        }
+        j["num_saved_sessions_ok"] = ok;
+    }
+    write_json(res, j.dump());
 }
 
 // handle ui state transition events written by JS
@@ -212,7 +397,6 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     ev = UIStateEvent_UserPushesHardwareChecks;
                 } 
                 else if (action == "start_calib_from_options") {
-                    
                     // read form fields from JSON
                     std::string subj;
                     int epilepsy_i = static_cast<int>(EpilepsyRisk_Unknown);
@@ -239,6 +423,26 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                 }
                 else if (action == "pause") {
                     ev = UIStateEvent_UserPushesPause;
+                }
+                else if (action == "select_session") {
+                    // change idx based on payload (sess_idx)
+                    int idx = 0;
+                    if (!JSON::extract_json_int(body, "\"sess_idx\"", idx)) {
+                        write_json_error(res, 400, "missing_or_invalid_field", "sess_idx");
+                        return;
+                    }
+                    {
+                        std::lock_guard<std::mutex> savedsess_lock(stateStoreRef_.saved_sessions_mutex);
+                        // guard
+                        int n = static_cast<int>(stateStoreRef_.saved_sessions.size());
+                        if(idx < 1 || idx >= n) {
+                            write_json_error(res, 400, "missing_or_invalid_field", "sess_idx");
+                            return;
+                        }
+                        stateStoreRef_.currentSessionIdx.store(idx, std::memory_order_release);
+                    }
+
+                    ev = UIStateEvent_UserSelectsSession;
                 }
                 else if (action == "open_settings") {
                     ev = UIStateEvent_UserPushesSettings;
@@ -279,6 +483,14 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                         return;
                     }
                     stateStoreRef_.settings.waveform.store(static_cast<SettingWaveform_E>(waveform_i), std::memory_order_release);
+
+                    int hparam_i = static_cast<int>(HPARAM_OFF); // default
+                    if (!JSON::extract_json_int(body, "\"hparam\"", hparam_i)) {
+                        JSON::json_extract_fail("http_server", "hparam");
+                        write_json_error(res, 400, "missing_or_invalid_field", "hparam");
+                        return;
+                    }
+                    stateStoreRef_.settings.hparam_setting.store(static_cast<SettingHparam_E>(hparam_i), std::memory_order_release);
 
                     int total_cycles_i = 1;
                     if (!JSON::extract_json_int(body, "\"num_times_cycle_repeats\"", total_cycles_i)) {
@@ -535,6 +747,9 @@ bool HttpServer_C::http_start_server(){
 
     liveServerRef_->Get("/eeg",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_eeg(rq, rs); });
+
+    liveServerRef_->Get("/sessions",
+        [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_sessions(rq, rs); });
 
     liveServerRef_->Post("/event",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_post_event(rq, rs); });

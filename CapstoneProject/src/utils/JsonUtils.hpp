@@ -1,10 +1,24 @@
 #pragma once
 #include <string>
 #include "Logger.hpp"
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <filesystem>
+#include "json.hpp"
+#include <stdexcept>
 
 namespace JSON {
 
-bool extract_json_string(const std::string& body, const char* key, std::string& out) {
+// Read JSON file from path "p" into string "out"
+inline bool read_file_to_string(const std::filesystem::path& p, std::string& out) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return false;
+    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    return true;
+}
+
+inline bool extract_json_string(const std::string& body, const char* key, std::string& out) {
     auto p = body.find(key);
     if (p == std::string::npos) return false;
     p = body.find(':', p);
@@ -17,7 +31,7 @@ bool extract_json_string(const std::string& body, const char* key, std::string& 
     return true;
 }
 
-bool extract_json_int(const std::string& body, const char* key, int& out) {
+inline bool extract_json_int(const std::string& body, const char* key, int& out) {
     auto p = body.find(key);
     if (p == std::string::npos) return false;
     p = body.find(':', p);
@@ -39,17 +53,15 @@ bool extract_json_int(const std::string& body, const char* key, int& out) {
     return true;
 }
 
-void json_extract_fail(const char* context,
+inline void json_extract_fail(const char* context,
                               const char* field)
 {
     LOG_ALWAYS("[JSON] extract failed | context="
                << context << " field=" << field);
 }
 
-
-
 // Parse int array from JSON body for input like "selected_freqs_e":[1,2,3]
-bool extract_json_int_array_limited(const std::string& body,
+inline bool extract_json_int_array_limited(const std::string& body,
                                           const char* key_with_quotes,
                                           std::vector<int>& out,
                                           int max_elems)
@@ -106,6 +118,96 @@ bool extract_json_int_array_limited(const std::string& body,
     return true;
 }
 
+inline bool extract_json_bool(const std::string& body, const char* key, bool& out) {
+    auto p = body.find(key);
+    if (p == std::string::npos) return false;
+    p = body.find(':', p);
+    if (p == std::string::npos) return false;
+    ++p;
+    while (p < body.size() && body[p] == ' ') ++p;
 
+    if (body.compare(p, 4, "true") == 0)  { out = true;  return true; }
+    if (body.compare(p, 5, "false") == 0) { out = false; return true; }
+    return false;
+}
+
+inline bool extract_json_double(const std::string& body, const char* key, double& out) {
+    auto p = body.find(key);
+    if (p == std::string::npos) return false;
+    p = body.find(':', p);
+    if (p == std::string::npos) return false;
+    ++p;
+    while (p < body.size() && body[p] == ' ') ++p;
+
+    // parse a number like -12.34e-2
+    size_t end = p;
+    while (end < body.size()) {
+        char c = body[end];
+        if (!(std::isdigit((unsigned char)c) || c=='-' || c=='+' || c=='.' || c=='e' || c=='E')) break;
+        ++end;
+    }
+    if (end == p) return false;
+
+    try {
+        out = std::stod(body.substr(p, end - p));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+inline std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (unsigned char c : s) {
+        switch (c) {
+            case '\"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (c < 0x20) {
+                    // skip other control chars
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    return out;
+}
+
+inline void write_json_atomic(const std::filesystem::path& path, const nlohmann::json& j, int indent = 2) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(),ec);
+
+    auto tmp = path;
+    tmp += ".tmp"; //append tmp placeholder during write
+
+    {
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+        if (!ofs) throw std::runtime_error("Failed to open tmp file: " + tmp.string());
+        ofs << j.dump(indent);
+        ofs.flush();
+        if (!ofs) throw std::runtime_error("Failed to write tmp file: " + tmp.string());
+    }
+    std::filesystem::rename(tmp, path, ec); // rename tmp to path now
+    if (ec) {
+        // if rename fails, try cleanup tmp
+        std::error_code ec2;
+        std::filesystem::remove(tmp, ec2);
+        throw std::runtime_error("Failed to rename tmp->final: " + ec.message());
+    }
+}
+
+inline nlohmann::json read_json_if_exists(const std::filesystem::path& path){
+    std::ifstream ifs(path, std::ios::binary);
+    if(!ifs) return nlohmann::json(); // null
+    nlohmann::json j;
+    ifs >> j;
+    return j;
+}
 
 }

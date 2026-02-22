@@ -19,6 +19,8 @@ add_executable(CapstoneProject
   src/stimulus/StimulusController.cpp
   src/utils/SignalQualityAnalyzer.cpp
   src/utils/SessionPaths.cpp
+  src/classifier/ONNXClassifier.cpp
+  src/actuation/ServoDriver.cpp
 )
 
 # expose headers to IDEs (no compilation)
@@ -36,6 +38,8 @@ target_sources(CapstoneProject
       src/acq/FakeAcquisition.h
       src/acq/UnicornDriver.h
       src/utils/Filters.hpp
+      src/classifier/ONNXClassifier.hpp
+      src/actuation/ServoDriver.h
 )
 
 # ==================== UI UNIT TESTS ==========================
@@ -102,25 +106,27 @@ else()
           "$<TARGET_FILE_DIR:UnicornSelfTest>/Unicorn.dll")
 endif()
 
-# ==================== CALIB MODE SELECTION ==================
-if(CALIBRATION_MODE)
-  message(STATUS "Building for Calibration mode")
-  target_compile_definitions(CapstoneProject PRIVATE CALIB_MODE)
-else()
-  message(STATUS "Building for Run mode")
-  target_compile_definitions(CapstoneProject PRIVATE RUN_MODE)
-endif()
+# ================== ONNX Runtime paths ==================
+set(ORT_ROOT     "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime")
+set(ORT_INCLUDE  "${ORT_ROOT}/include")
+set(ORT_LIB_DIR  "${ORT_ROOT}/lib")
 
-target_include_directories(CapstoneProject PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
+# Imported ONNX Runtime library
+add_library(onnxruntime::onnxruntime SHARED IMPORTED)
+set_target_properties(onnxruntime::onnxruntime PROPERTIES
+  IMPORTED_IMPLIB             "${ORT_LIB_DIR}/onnxruntime.lib"
+  IMPORTED_LOCATION           "${ORT_LIB_DIR}/onnxruntime.dll"
+  INTERFACE_INCLUDE_DIRECTORIES "${ORT_INCLUDE}"
 )
 
-# Enforce C++20
-set_property(TARGET CapstoneProject PROPERTY CXX_STANDARD 20)
+# Link it
+target_link_libraries(CapstoneProject PRIVATE onnxruntime::onnxruntime)
 
-# Treat tpp as header-only
-set_source_files_properties(src/utils/RingBuffer.tpp
-  PROPERTIES LANGUAGE CXX HEADER_FILE_ONLY TRUE)
+# Copy onnxruntime.dll next to the built .exe
+add_custom_command(TARGET CapstoneProject POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${ORT_LIB_DIR}/onnxruntime.dll"
+          "$<TARGET_FILE_DIR:CapstoneProject>/onnxruntime.dll")
 
 # ======================= EEG FILTERS ===========================
 if(USE_EEG_FILTERS)
@@ -129,5 +135,20 @@ if(USE_EEG_FILTERS)
   target_sources(CapstoneProject PRIVATE
     src/utils/Filters.cpp
   )
+endif()
+
+# ======================= SKIP TRAINING (pretrained path) ===========================
+if(NOT "${SKIP_TRAINING}" STREQUAL "")
+  message(STATUS "Building with SKIP_TRAINING='${SKIP_TRAINING}'")
+
+  # flag for code paths
+  target_compile_definitions(CapstoneProject PRIVATE SKIP_TRAINING=1)
+
+  # expose the path as a *string literal* macro in all of C++ 
+  target_compile_definitions(CapstoneProject PRIVATE
+    SKIP_TRAINING_MODEL_PATH="${SKIP_TRAINING}"
+  )
+else()
+  target_compile_definitions(CapstoneProject PRIVATE SKIP_TRAINING=0)
 endif()
 

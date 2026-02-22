@@ -14,24 +14,6 @@ HTTP SERVER : READER
 #include "../utils/Logger.hpp"
 #include "../shared/StateStore.hpp"
 
-// LEARN HOW TO SSH INTO SERVER FROM VS CODE
-// then install apt install nginx (preferred web server)
-// should see var/www/html# --> root of site you're serving
-// https://www.youtube.com/watch?v=RzdM54i7buY
-
-/*
-Agreed upon JSON schema for GET /state:
-
-{
-  "seq": int,              // monotonic counter, increments when StimulusController publishes new state
-  "stim_window": int,      // cast of UIState_E (instructions, active, none, run_mode)
-  "block_id": int,         // current training block index (0 if none or not calibratio)
-  "freq_hz": int,          // stimulus frequency in Hz (e.g., 12)
-  "freq_hz_e": int         // cast of TestFreq_E (e.g., 0=7.5Hz,1=10Hz,...)
-}
-*/
-
-
 class HttpServer_C {
 public: // API
     explicit HttpServer_C(StateStore_s& stateStoreRef, int port=7777);
@@ -52,5 +34,6 @@ private:
     void handle_options_and_set(const httplib::Request& req, httplib::Response& res); // CORS preflight
     void handle_get_quality(const httplib::Request& req, httplib::Response& res);
     void handle_get_eeg(const httplib::Request& req, httplib::Response& res);
+    void handle_get_sessions(const httplib::Request& req, httplib::Response& res);
     void write_json(httplib::Response& res, std::string_view json_body) const;
 }; // HttpServer_C
