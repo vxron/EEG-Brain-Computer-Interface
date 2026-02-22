@@ -119,7 +119,8 @@ enum UIStateEvent_E {
 	UIStateEvent_UserSavesSettings, // 19
 	UIStateEvent_UserPushesPause, // 20
 	UIStateEvent_UserPushesResume, // 21
-	UIStateEvent_None, // 22
+	UIStateEvent_UserTogglesDemoMode, // 22
+	UIStateEvent_None, // 23
 };
 
 enum UIPopup_E {

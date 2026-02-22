@@ -6,6 +6,11 @@
 #include <cctype>
 #include "WindowConfigs.hpp"
 #include <cmath>
+#include "../utils/Logger.hpp"
+
+AcqStreamerFromDataset_C::AcqStreamerFromDataset_C(StateStore_s* stateStoreRef) 
+: stateStoreRef_(stateStoreRef)
+{}
 
 // --------------------------------- Helpers for json parsing ---------------------------------------
 static std::string toLower(std::string s) {
@@ -24,9 +29,21 @@ static std::string canonLabel(std::string s) {
     }
     return out;
 }
-// ------------------------------ End helpers -------------------------------------------
+// ------------------------------------ End helpers ------------------------------------------------------
 
-// ------------------------------------- unicorn_init func ------------------------------------
+
+// ---------------------------------------- Getters ----------------------------------------------
+void AcqStreamerFromDataset_C::getChannelLabels(std::vector<std::string>& out) const {
+    out = channel_labels_;
+}
+
+int AcqStreamerFromDataset_C::getNumChannels() const {
+    return n_channels_;
+}
+// -------------------------------------- End getters ------------------------------------------------
+
+
+// ------------------------------------ unicorn_init func --------------------------------------------
 
 bool AcqStreamerFromDataset_C::unicorn_init(){
     // Load/parse JSON meta
@@ -144,10 +161,6 @@ bool AcqStreamerFromDataset_C::unicorn_init(){
         return false;
     }
 
-    // 6) re-initialize runtime vars
-    run_order_.clear();
-    run_trial_idx_ = 0;
-    trial_sample_idx_ = 0;
     initialized_ = true;
     return true;
 }
@@ -207,6 +220,7 @@ bool AcqStreamerFromDataset_C::load_metadata(const std::string& json_path){
             trial.n_samples = tr.at("n_samples").get<std::size_t>();
             const std::size_t target_idx = tr.at("target_idx").get<int>();
             trial.target = target_freqs_[target_idx];
+            trial.block_idx = tr.at("block_idx").get<int>();
             trial.trial_idx = tr.at("trial_idx").get<int>();
             trial.start_float_idx = tr.at("start_float_index").get<std::size_t>();
             if(trial.trial_idx >= n_trials || trial.trial_idx < 0){
@@ -244,7 +258,7 @@ bool AcqStreamerFromDataset_C::open_bin(const std::string& bin_path){
 // ----------------------------------- unicorn_start_acq function ------------------------------------------------
 // Goal of this section: Prepare a run so that subsquent getData() calls can stream samples continuously with correct labels if needed.
 bool AcqStreamerFromDataset_C::unicorn_start_acq(bool testMode){
-    // (1) preconditions
+    // (1) preconditions & inits
     if (!initialized_) return false;
     if (!bin_.is_open()) return false;
     if (trials_.empty() || target_freqs_.empty()) return false;
@@ -267,21 +281,29 @@ bool AcqStreamerFromDataset_C::unicorn_start_acq(bool testMode){
 
     // (3) subsequent path dep on calib vs run mode
     if(testMode == 0){
-        // run mode
-        // can use g_freq_hz from stim controller OR make own scheduler here
-        // should probably make own scheduler because we have less no_ssvep
-        std::vector<int> allowed_targets_for_subject = {-1};
+        isCalibMode_ = false;
+        run_no_ssvep_trial_idx_ = 0;
+        run_target_left_trial_idx_ = 0;
+        run_target_right_trial_idx_ = 0;
+        // can use g_freq_hz from stim controller
+        std::vector<int> allowed_targets_for_subject = {};
+        int left_hz = -1, right_hz = -1;
         {
             std::lock_guard<std::mutex> lock_sess(stateStoreRef_->saved_sessions_mutex);
             int currSessIdx = stateStoreRef_->currentSessionIdx.load(std::memory_order_acquire);
-            allowed_targets_for_subject.push_back(stateStoreRef_->saved_sessions[currSessIdx].freq_left_hz);
-            allowed_targets_for_subject.push_back(stateStoreRef_->saved_sessions[currSessIdx].freq_right_hz);
+            left_hz  = stateStoreRef_->saved_sessions[currSessIdx].freq_left_hz;
+            right_hz = stateStoreRef_->saved_sessions[currSessIdx].freq_right_hz;
+            allowed_targets_for_subject.push_back(left_hz);
+            allowed_targets_for_subject.push_back(right_hz);
         }
-        // 
-        build_run_schedule(allowed_targets_for_subject, true);
+        run_target_left_idx_  = map_freq_hz_to_target(left_hz);
+        run_target_right_idx_ = map_freq_hz_to_target(right_hz);
+        build_run_schedule(allowed_targets_for_subject);
     }
+
     else {
         // calib mode
+        isCalibMode_ = true;
         trainingProto_S trainingProto{};
         {
             std::lock_guard<std::mutex> train_proto_lock(stateStoreRef_->mtx_streaming_request);
@@ -289,6 +311,8 @@ bool AcqStreamerFromDataset_C::unicorn_start_acq(bool testMode){
         }
         build_calib_schedule(trainingProto);
     }
+
+    start_float_offset_ = 0;
 
     return true;
 }
@@ -301,6 +325,7 @@ void AcqStreamerFromDataset_C::find_closest_targets(std::vector<int>& desired_ta
     for(const auto& freq : desired_targets) {
         // guard against -1 targets
         if(freq <= 0){
+            outer_idx++;
             continue;
         }
 
@@ -318,55 +343,355 @@ void AcqStreamerFromDataset_C::find_closest_targets(std::vector<int>& desired_ta
         currBestDiff = 10000;
         closestIdx = -1;
     }
+}
 
-    // pass to statestore final freqs we acc use
+int AcqStreamerFromDataset_C::map_freq_hz_to_target(double hz){
+    if(hz == -1){ return -1; }
+    float currBestDiff = 10000;
+    float currDiff = 0;
+    int bestIdx = -1;
+    for(const auto& target : target_freqs_){
+        currDiff = std::abs(hz - target.freq_hz);
+        if(currDiff < currBestDiff){
+            bestIdx = target.target_idx;
+            currBestDiff = currDiff;
+        }
+    }
+    return bestIdx;
+}
+
+void AcqStreamerFromDataset_C::build_calib_schedule(trainingProto_S trainingProto){
+    // 0) reset vectors + streaming cursors + flags
+    const int n_targets = (int)target_freqs_.size();
+    calib_per_target_deque_.assign(n_targets, {}); // resize to num targets
+    calib_idxs_.assign(calib_per_target_deque_.size(), 0);
+    cycling_trials_per_target_.assign(n_targets, false);
+    calib_no_ssvep_trials_.clear();
+    calib_no_ssvep_idx_ = 0;
+    cycling_trials_no_ssvep_ = false;
+
+    // 1) collect desired Hz list from trainingProto
+    std::vector<int> desired_freqs_for_calib;
+    desired_freqs_for_calib.reserve(trainingProto.freqsToTest.size());
+    for(const auto& freq_e : trainingProto.freqsToTest){
+        desired_freqs_for_calib.push_back(TestFreqEnumToInt(freq_e));
+    }
+    find_closest_targets(desired_freqs_for_calib); // now desired_freqs_for_calib holds target_idx values
+
+    // 2) avoid duplicates + invalid target indices in desired_freqs_for_calib
+    // schedule trials to cycle for each desired freq
+    // cannot reuse data in the same calib session because it would cheat model training (leakage) -> must guard against this
+    std::vector<int> unique_targets;
+    unique_targets.reserve(desired_freqs_for_calib.size());
+    std::unordered_set<int> seen;
+    for(int tg_Idx : desired_freqs_for_calib){
+        if(tg_Idx < 0 || tg_Idx >= n_targets) continue;
+        if(seen.insert(tg_Idx).second) unique_targets.push_back(tg_Idx); // if it gets inserted -> returns true (not a dupe)
+    }
+
+    // 3) fill per-target trial lists + shuffle
+    // eliminate blocks we don't want to use in calib
+    for(const int target_idx : unique_targets){
+        for(int trial_idx : trials_by_target_[target_idx]){
+            int block_idx = trials_[trial_idx].block_idx;
+            bool isBlockCalib = (std::find(AcqStreamerFromDataset::CALIB_BLOCKS.begin(), AcqStreamerFromDataset::CALIB_BLOCKS.end(), block_idx) != AcqStreamerFromDataset::CALIB_BLOCKS.end());
+            if (isBlockCalib) {
+                // only push back if it's a calib trial block
+                calib_per_target_deque_[target_idx].push_back(trial_idx);
+            }
+        }
+        if(!calib_per_target_deque_[target_idx].empty()){
+            std::shuffle(calib_per_target_deque_[target_idx].begin(), calib_per_target_deque_[target_idx].end(), rng_);
+        }
+    }
+
+    // 4) create no_ssvep deck
+    std::vector<int> all_trials;
+    for(int i = 0; i < calib_per_target_deque_.size(); i++){
+        for(int j = 0; j < calib_per_target_deque_[i].size(); j++){
+            all_trials.push_back(calib_per_target_deque_[i][j]);
+        }
+    }
+    calib_no_ssvep_trials_= std::move(all_trials); // all trials for all targets have the no stim segment
+    std::shuffle(calib_no_ssvep_trials_.begin(), calib_no_ssvep_trials_.end(), rng_);
+    calib_no_ssvep_idx_ = 0;
+
+    // 5) pass to statestore final freqs we acc use
     {
         std::lock_guard<std::mutex> lock_stream(stateStoreRef_->mtx_streamer_freqs);
         // clear any stale entries
         stateStoreRef_->acc_freqs_in_use_by_streamer.clear();
-        for(int i =0; i < desired_targets.size(); i++){
-            stateStoreRef_->acc_freqs_in_use_by_streamer.push_back(target_freqs_[desired_targets[i]].freq_hz);
+        for(int i =0; i < unique_targets.size(); i++){
+            stateStoreRef_->acc_freqs_in_use_by_streamer.push_back(target_freqs_[unique_targets[i]].freq_hz);
+        }
+    }
+    
+}
+
+void AcqStreamerFromDataset_C::build_run_schedule(const std::vector<int>& allowed_targets){
+    // 0) reset vectors + streaming cursors + flags
+    run_no_ssvep_per_target_order_.clear();
+    run_left_target_order_.clear();
+    run_right_target_order_.clear();
+    run_no_ssvep_trial_idx_ = 0; 
+    run_target_left_trial_idx_ = 0;
+    run_target_right_trial_idx_ = 0;
+    run_mode_cycling_trials_.assign(3, false);
+    const int n_targets = (int)target_freqs_.size();
+
+    std::vector<int> allowed_target_idx;
+    // 1) convert allowed_targets to target indices
+    for(const int tg_hz : allowed_targets){
+        int bestIdx = map_freq_hz_to_target(tg_hz);
+        if(bestIdx >= 0) allowed_target_idx.push_back(bestIdx);
+    }
+    if (allowed_target_idx.empty()) {
+        std::cerr << "[AcqStreamerFromDataset] build_run_schedule: no allowed targets\n";
+        return;
+    }
+
+    // 2) avoid duplicates + invalid target indices in allowed_target_idx
+    std::vector<int> unique_targets;
+    unique_targets.reserve(allowed_target_idx.size());
+    std::unordered_set<int> seen;
+    for(int tg_Idx : allowed_target_idx){
+        if(tg_Idx < 0 || tg_Idx >= n_targets) continue;
+        if(seen.insert(tg_Idx).second) unique_targets.push_back(tg_Idx); // if it gets inserted -> returns true (not a dupe)
+        else { 
+            LOG_ALWAYS("[AcqStreamerFromDataset] Error when building the run schedule: no unique targets available in the dataset for the desired frequency-pair \n");
+        }
+    }
+
+    // 3) fill per-target trial lists + shuffle
+    // eliminate blocks we don't want to use in run
+    for(const int target_idx : unique_targets){
+        for(int trial_idx : trials_by_target_[target_idx]){
+            int block_idx = trials_[trial_idx].block_idx;
+            bool isBlockRun = (std::find(AcqStreamerFromDataset::RUN_TEST_BLOCKS.begin(), AcqStreamerFromDataset::RUN_TEST_BLOCKS.end(), block_idx) != AcqStreamerFromDataset::RUN_TEST_BLOCKS.end());
+            if (isBlockRun) {
+                if(target_idx == run_target_left_idx_){
+                    run_left_target_order_.push_back(trial_idx);
+                } else if (target_idx == run_target_right_idx_) {
+                    run_right_target_order_.push_back(trial_idx);
+                } else {
+                    LOG_ALWAYS("[AcqStreamerFromDataset] Unrecognized target_idx found in build_run_schedule");
+                }
+            }
+        }
+    }
+    // Shuffle left/right once
+    if(!run_left_target_order_.empty()){
+        std::shuffle(run_left_target_order_.begin(), run_left_target_order_.end(), rng_);
+    }
+    if(!run_right_target_order_.empty()){
+        std::shuffle(run_right_target_order_.begin(), run_right_target_order_.end(), rng_);
+    }
+
+    // 4) build no_ssvep deck as union of all L/R trials
+    run_no_ssvep_per_target_order_.insert(run_no_ssvep_per_target_order_.end(), run_left_target_order_.begin(), run_left_target_order_.end());
+    run_no_ssvep_per_target_order_.insert(run_no_ssvep_per_target_order_.end(), run_right_target_order_.begin(), run_right_target_order_.end());
+    if(!run_no_ssvep_per_target_order_.empty()){
+        std::shuffle(run_no_ssvep_per_target_order_.begin(), run_no_ssvep_per_target_order_.end(), rng_);
+    }
+
+    // 5) pass to statestore final freqs we acc use
+    {
+        std::lock_guard<std::mutex> lock_stream(stateStoreRef_->mtx_streamer_freqs);
+        // clear any stale entries
+        stateStoreRef_->acc_freqs_in_use_by_streamer.clear();
+        for(int i =0; i < unique_targets.size(); i++){
+            stateStoreRef_->acc_freqs_in_use_by_streamer.push_back(target_freqs_[unique_targets[i]].freq_hz);
+        }
+    }
+    
+}
+
+int AcqStreamerFromDataset_C::pick_next_trial_for_target(int target_idx){
+    if(isCalibMode_){
+
+        if((target_idx < 0 && target_idx != -1)||target_idx >= (int)calib_per_target_deque_.size()) {
+            return -1; 
+        }
+
+        // no ssvep case
+        if(target_idx == -1){
+            if(calib_no_ssvep_trials_.empty()) return -1;
+            const int next = calib_no_ssvep_trials_[(std::size_t)calib_no_ssvep_idx_];
+            calib_no_ssvep_idx_++;
+            if(calib_no_ssvep_idx_ >= calib_no_ssvep_trials_.size()) {
+                // cycle (exhausted for no_ssvep)
+                cycling_trials_no_ssvep_ = true;
+                calib_no_ssvep_idx_ = 0;
+            }
+            return next;
+        }
+
+        if (calib_per_target_deque_[target_idx].empty()) return -1;
+        int nextTrial = calib_per_target_deque_[target_idx][calib_idxs_[target_idx]];
+        calib_idxs_[target_idx]++;
+        if(calib_idxs_[target_idx] >= calib_per_target_deque_[target_idx].size()){
+            // all data exhausted for this target
+            // cycle (wraparound)
+            calib_idxs_[target_idx] = 0;
+            cycling_trials_per_target_[target_idx] = true;
+        }
+
+        return nextTrial;
+    }
+
+    else {
+        // for run mode, target_idx must either be -1 (no_ssvep) or the target freq idx
+        if(target_idx == -1) {
+            // no ssvep
+            if(run_no_ssvep_trial_idx_ >= run_no_ssvep_per_target_order_.size()){
+                // exhausted no ssvep
+                run_mode_cycling_trials_[0] = true;
+                run_no_ssvep_trial_idx_ = 0;
+            }
+            int nextTrial = run_no_ssvep_per_target_order_[run_no_ssvep_trial_idx_];
+            run_no_ssvep_trial_idx_++;
+            return nextTrial;
+        } else if (target_idx ==  run_target_left_idx_){
+            if(run_target_left_trial_idx_ >= run_left_target_order_.size()){
+                // exhausted left
+                run_mode_cycling_trials_[1] = true;
+                run_target_left_trial_idx_ = 0;
+            }
+            int nextTrial = run_left_target_order_[run_target_left_trial_idx_];
+            run_target_left_trial_idx_++;
+            return nextTrial;
+        } else if (target_idx == run_target_right_idx_) {
+            if(run_target_right_trial_idx_ >= run_right_target_order_.size()){
+                // exhausted right
+                run_mode_cycling_trials_[2] = true;
+                run_target_right_trial_idx_ = 0;
+            }
+            int nextTrial = run_right_target_order_[run_target_right_trial_idx_];
+            run_target_right_trial_idx_++;
+            return nextTrial;
+        } else {
+            LOG_ALWAYS("[AcqStreamerFromDataset] Incorrect target_idx passed to pick_next_trial_for_target in run mode");
+            return -1;
         }
     }
 }
-
-void AcqStreamerFromDataset_C::build_calib_schedule(trainingProto_S trainingProto){
-    // we will rely on g_freq_hz in real time however we will set up order here 
-    // and only use g_freq_hz to determine transitions
-    // since the freqs may not match exactly 
-    std::vector<int> desired_freqs_for_calib;
-    for(const auto& freq_e : trainingProto.freqsToTest){
-        desired_freqs_for_calib.push_back(TestFreqEnumToInt(freq_e));
-    }
-    find_closest_targets(desired_freqs_for_calib);
-    // schedule trials to cycle for each desired freq
-    // cannot reuse data in the same calib session because it would cheat model training (leakage) -> must guard against this
-
-}
-
 // ----------------------------------- End everything for unicorn_start_acq function ----------------------------------
 
+// ----------------------------------- getData function ----------------------------------
+bool AcqStreamerFromDataset_C::getData(std::size_t const numberOfScans, float* dest) {
+    if (!initialized_ || !bin_.is_open() || dest == nullptr || numberOfScans == 0) return false;
+    if(n_channels_ != NUM_CH_CHUNK) return false;
+    // 1 scan = 8 measurements (all channels at 1 time point)
+    // check which mode we started in (calib or run)
+    int desired_floats_per_getData = numberOfScans * n_channels_; // 8 floats per scan
+    std::size_t out_floats_read = 0;
+    int guard_against_huge_loop = 100;
+    int guard = 0;
 
-/*
-bool getData(std::size_t const numberOfScans, float* dest) override; // return last amount of stream
+    // Helpers to segment parameters based on "target" (-1 => pre_stim, else stim_on)
+    auto seg_start_samples = [&](int target_idx) -> std::size_t {
+        return (target_idx == -1) ? (std::size_t)pre_start_ : (std::size_t)stim_start_;
+    };
+    auto seg_len_samples = [&](int target_idx) -> std::size_t {
+        return (target_idx == -1) ? (std::size_t)pre_len_ : (std::size_t)stim_len_;
+    };
 
+    // which target idx are we on
+    // check g_freq_hz from statestore
+    int desired_hz = stateStoreRef_->g_freq_hz.load(std::memory_order_acquire);
+    int target_idx = map_freq_hz_to_target(desired_hz);
 
+    // if target freq changed since last call, reset segment offset and force switch target freq trial vectors
+    if(target_idx != active_target_idx_) {
+        active_trial_idx_ = -1;
+        active_target_idx_ = target_idx;
+        start_float_offset_ = 0;
+    }
 
+    while(out_floats_read < desired_floats_per_getData){
+        if(guard > guard_against_huge_loop){
+            LOG_ALWAYS("[AcqStreamerFromDataset] Unknown crash in GetData loop");
+            break;
+        }
+        guard++;
 
+        // ensure we have a trial to read from in active idx, or pick new one
+        if(active_trial_idx_ < 0){
+            active_trial_idx_ = pick_next_trial_for_target(target_idx);
+            start_float_offset_ = 0;
+            if (active_trial_idx_ < 0) {
+                LOG_ALWAYS("[AcqStreamerFromDataset] no trial available for target_idx=" << target_idx);
+                return false;
+            }
+        }
 
-bool unicorn_start_acq(bool testMode) override; // reset stream pos + collect freqs and series and sequences for this run & start streaming
-    void setActiveStimulus(double fStimHz); // sets the active stim based on curr streaming freq
-    bool unicorn_stop_and_close() override; // close files
+        const AcqStreamerFromDataset::Trial_S& tr = trials_[(std::size_t)active_trial_idx_];
+        
+        // Compute segment base and bounds (in floats) for this trial
+        const std::size_t seg_base_float = tr.start_float_idx + seg_start_samples(target_idx)*(std::size_t)n_channels_; // samples = timepoints 
+        const std::size_t seg_len_float = seg_len_samples(target_idx)*(std::size_t)n_channels_;
 
-	bool dump_config_and_indices() override { return true; }; // nothing to dump
+        if(start_float_offset_ >= seg_len_float){
+            // segment exhausted -> move to next trial
+            active_trial_idx_ = -1;
+            start_float_offset_ = 0;
+            continue;
+        }
 
-	// channel metadata
-    int  getNumChannels() const override;
-    void getChannelLabels(std::vector<std::string>& out) const override;
+        std::size_t floats_needed = desired_floats_per_getData - out_floats_read;
+        std::size_t seg_left = seg_len_float - start_float_offset_;
+        std::size_t floats_to_read = std::min(seg_left, floats_needed); // take all that we have left to try and reach needed
 
-private:    
-    bool load_metadata(const std::string& json_path);
-    bool open_bin(const std::string& bin_path);
-    std::size_t read_floats_at(std::uint64_t start_float_index, float* dst, std::size_t n_floats);
-    void schedule_reset(bool reshuffle);
-    */
+        std::size_t floats_read = read_floats_at(
+            (seg_base_float + start_float_offset_), 
+            (dest + out_floats_read), 
+            (floats_to_read));
+
+        if (floats_read == 0) {
+            LOG_ALWAYS("[AcqStreamerFromDataset] read_floats_at returned 0");
+            return false;
+        }
+       
+        out_floats_read += floats_read;
+        start_float_offset_ += floats_read;
+
+        // if we finished the segment, force next iter to choose new trial
+        if(start_float_offset_ >= seg_len_float){
+            active_trial_idx_ = -1; 
+            start_float_offset_ = 0;
+        }
+    }
+
+    if (out_floats_read != (std::size_t)desired_floats_per_getData) {
+        LOG_ALWAYS("[AcqStreamerFromDataset] getData short read: got=" << out_floats_read
+            << " need=" << desired_floats_per_getData);
+        return false;
+    }
+    return true;
+}
+
+std::size_t AcqStreamerFromDataset_C::read_floats_at(std::uint64_t start_float_index, float* dest, std::size_t n_floats){
+    if(!bin_.is_open() || dest == nullptr || n_floats == 0){
+        return 0;
+    }
+    bin_.clear();
+    
+    // convert float index -> byte offset
+    const std::uint64_t byte_off = start_float_index*sizeof(float);
+
+    // seek to the right spot
+    bin_.seekg((std::streamoff)byte_off, std::ios::beg); // moves in bytes
+    if (!bin_) return 0;
+
+    // read raw bytes into dest
+    const std::size_t bytes_to_read = n_floats * sizeof(float);
+    bin_.read(reinterpret_cast<char*>(dest), (std::streamsize)bytes_to_read); // .read expects char* ptr & reaches EOF gracefully
+
+    // return number of floats read (will return less than desired n_flaots if we reached EOF)
+    const std::streamsize bytes_read = bin_.gcount(); // rtn type is std::streamsize (signed version of std::size_t)
+    if (bytes_read <= 0) { return 0 ;}
+    std::size_t floats_read = bytes_read/(std::streamsize)sizeof(float);
+
+    return floats_read;
+}
+// ----------------------------------- End everything for getData function ----------------------------------

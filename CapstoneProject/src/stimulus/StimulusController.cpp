@@ -542,6 +542,8 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
 
 std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     // the following are in order of priority 
+
+    // todo: add check for ui toggles sim mode event
     // (1) read UI event sent in by POST: consume event & write it's now None
     UIStateEvent_E currEvent = stateStoreRef_->g_ui_event.exchange(UIStateEvent_None, std::memory_order_acq_rel);
     if(currEvent != UIStateEvent_None){
