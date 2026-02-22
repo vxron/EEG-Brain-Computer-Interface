@@ -2,6 +2,7 @@
 #include <thread>
 #include "../utils/Logger.hpp"
 #include "../utils/SessionPaths.hpp"
+#include "utils/json.hpp"
 
 struct state_transition{
     UIState_E from;
@@ -45,10 +46,16 @@ static const state_transition state_transition_table[] = {
     // return states from state_paused must be specially handled in the detect_event function since they are dynamic
  
     {UIState_Run_Options,      UIStateEvent_UserPushesSessions,             UIState_Saved_Sessions},
-    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Active_Run},
-    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_NoSSVEP_Test},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsSession,             UIState_Home},
+    {UIState_Saved_Sessions,   UIStateEvent_UserSelectsNewSession,          UIState_Calib_Options},
     {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Saved_Sessions,   UIStateEvent_UserPushesSettings,             UIState_Settings},
     {UIState_Run_Options,      UIStateEvent_UserPushesStartDefault,         UIState_Active_Run},
+    {UIState_Run_Options,      UIStateEvent_UserPushesHardwareChecks,       UIState_Hardware_Checks},
+    {UIState_Run_Options,      UIStateEvent_UserPushesStartCalib,           UIState_Calib_Options},
+    {UIState_Run_Options,      UIStateEvent_UserPushesSettings,             UIState_Settings},
 
     // Non full screen pages where buttons remain visible (therefore transitions can happen)
     {UIState_Calib_Options,    UIStateEvent_UserPushesStartRun,             UIState_Run_Options},
@@ -136,13 +143,40 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
     stateStoreRef_->g_ui_seq.store(currSeq + 1, std::memory_order_release);
     switch (newState) {
         case UIState_Active_Run: {
+            // publish state first so consumer can enter reload block
             stateStoreRef_->g_ui_state.store(UIState_Active_Run, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
-            // TODO: make these per person based on saved sessions (see struct in types.h)
-            //stateStoreRef_->g_freq_left_hz.store(10, std::memory_order_release);
-            //stateStoreRef_->g_freq_right_hz.store(12, std::memory_order_release);
-            //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_10_Hz, std::memory_order_release);
-            //stateStoreRef_->g_freq_right_hz_e.store(TestFreq_12_Hz, std::memory_order_release);
+
+            // may take some time since onnx can be huge
+            guardAgainstInfLoopTimer_.start_timer(std::chrono::milliseconds{ 10000 });
+            stateStoreRef_->g_onnx_session_is_reloading.store(-1, std::memory_order_release);
+            while(!(stateStoreRef_->g_onnx_session_is_reloading.load(std::memory_order_acquire)==0)){
+                // wait for any reload to be done (0)
+                // timer guard to avoid inf loops
+                if(guardAgainstInfLoopTimer_.check_timer_expired()){
+                    LOG_ALWAYS("Timing Issue with g_onnx_session_is_reloading: Not being set to -1 deterministically from StimController, or not propagating to Consumer Thread.");
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{5}); // sleep-wait to save CPU, since ONNX load takes 100s of ms anyway
+            }
+            guardAgainstInfLoopTimer_.stop_timer();
+
+            // if it's in fake acq mode, we're gonna be publishing g_freq_hz for usage
+            // need to 1) collect frequency pool, 2) setup timer/first frequency
+            // nossvep (4s) -> ssvep1 
+#ifdef ACQ_BACKEND_FAKE
+            emulatedFreqsForFakeAcq_.push_back(-1); // -1 is no_ssvep
+            // grab current models' frequencies
+            {
+                std::lock_guard<std::mutex> mtx_lock(stateStoreRef_->saved_sessions_mutex);
+                int currIdx = stateStoreRef_->currentSessionIdx.load(std::memory_order_acquire);
+                emulatedFreqsForFakeAcq_.push_back(stateStoreRef_->saved_sessions[currIdx].freq_left_hz);
+                emulatedFreqsForFakeAcq_.push_back(stateStoreRef_->saved_sessions[currIdx].freq_right_hz);
+            }
+            // build sequence & startit
+            fakeAcq_buildSeqAndShuffle();
+            fakeAcq_advanceToNextSSVEP();
+#endif
             break;
         }
         
@@ -166,7 +200,25 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
             // reset any timers that got weird/paused/etc
             if(currentWindowTimer_.is_paused() || currentWindowTimer_.is_started()) { currentWindowTimer_.stop_timer(); }
 
+            if(prevState == UIState_None){
+                // STARTUP CONDITIONS
+                if (!stateStoreRef_->g_sessions_loaded_from_disk.exchange(true)){
+                    // load all sessions
+                    const bool ok = sesspaths::load_saved_sessions_from_disk(stateStoreRef_);
+                    if (!ok){
+                        LOG_ALWAYS("No saved sessions loaded");
+                    }
+                    else {
+                        stateStoreRef_->currentSessionInfo.g_isModelReady.store(true, std::memory_order_release); // we have a model ready
+                    }
+                }
+            }
             break;
+
+            if(prevState == UIState_Saved_Sessions){
+                // just switched sessions -> intrinsic guards mean the model must be ready.
+                stateStoreRef_->currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
+            }
         }
         
         case UIState_Active_Calib: {
@@ -312,6 +364,7 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
         }
 
         case UIState_Saved_Sessions: {
+            // TODO : LOAD ALL THE METAS FROM DISK (CAN DO FROM FRONTEND THO)
             stateStoreRef_->g_ui_state.store(UIState_Saved_Sessions, std::memory_order_release);
             stateStoreRef_->g_is_calib.store(false, std::memory_order_release);
             stateStoreRef_->g_block_id.store(0, std::memory_order_release);
@@ -369,16 +422,21 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
         case UIState_Instructions:
             if(ev != UIStateEvent_UserPushesPause){
                 currentWindowTimer_.stop_timer();
-            }
+                // clear g_freq_hz for fake acq
+#ifdef ACQ_BACKEND_FAKE
+                stateStoreRef_->g_freq_hz.store(-1, std::memory_order_release);
+#endif
+            } 
             if(ev == UIStateEvent_StimControllerTimeoutEndCalib){
                 // calib over... need to save csv in consumer thread (finalize training data)
                 {
-                    LOG_ALWAYS("reached inside final event");
+                    LOG_ALWAYS("SC: SETTING FINALIZE REQUESTED — state=" << (int)state_ 
+                    << " event=" << (int)ev);  
                     // scope for locking & changing bool flag (mtx unlocked again at end of scope)
                     std::lock_guard<std::mutex> lock(stateStoreRef_->mtx_finalize_request);
                     stateStoreRef_->finalize_requested = true;
                 }
-                stateStoreRef_->cv_finalize_request.notify_one();                
+                stateStoreRef_->cv_finalize_request.notify_one();          
             }
             if(ev == UIStateEvent_UserPushesExit) {
                 // calib incomplete... delete session (if still __IN_PROGRESS)
@@ -410,13 +468,19 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             break;
         }
 
-        case UIState_Active_Run:
-        // idk yet whether or not we want to be clearing here !
-            //stateStoreRef_->g_freq_left_hz_e.store(TestFreq_None, std::memory_order_release);
-            //stateStoreRef_->g_freq_left_hz.store(0, std::memory_order_release);
-            //stateStoreRef_->g_freq_right_hz.store(0, std::memory_order_release);
-            //stateStoreRef_->g_freq_right_hz_e.store(TestFreq_None, std::memory_order_release);
+        case UIState_Active_Run: {
+            // stop timer, clear g_freq_hz to no ssvep
+#ifdef ACQ_BACKEND_FAKE
+            if (ev != UIStateEvent_UserPushesPause){
+                stateStoreRef_->g_freq_hz.store(-1, std::memory_order_release);
+                fakeAcqRunModeTimer_.stop_timer();
+                emulatedFreqsForFakeAcq_.clear();
+                fakeAcqSeqIdx_ = 0;
+            }
+#endif
             break;
+        }
+        
         default:
             break;
 
@@ -431,6 +495,12 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
         prevState_ = UIState_Paused;
         // dont run onstateenter cuz we don't want the side effects; just publish state to ui
         stateStoreRef_->g_ui_state.store(state_, std::memory_order_release);
+
+        // if the state was previously run mode, need to tell cons that we've entered it for operational g_onnx_session_is_reloading pathway
+        // signal -1 from stim controller
+        if(state_ == UIState_Active_Run){
+            stateStoreRef_->g_onnx_session_is_reloading.store(-1, std::memory_order_release);
+        }
         return;
     }
 
@@ -658,6 +728,60 @@ bool StimulusController_C::has_divisor_6_to_20(int n) {
     return false;            // no divisors in that range
 }
 
+#ifdef ACQ_BACKEND_FAKE
+void StimulusController_C::fakeAcq_buildSeqAndShuffle() {
+    fakeAcqShuffledSeq_.clear();
+
+    // emulatedFreqsForFakeAcq_ = { -1(REST), leftHz, rightHz }
+    // gather all the freqs w appropriate reps
+    for(int i = 0; i<static_cast<int>(emulatedFreqsForFakeAcq_.size()); i++){
+        int hz = emulatedFreqsForFakeAcq_[i];
+        int reps = (hz == -1) ? FAKE_NO_SSVEP_REPS : FAKE_ACTIVE_REPS;
+        for(int r = 0; r < reps; r++){
+            fakeAcqShuffledSeq_.push_back(hz);
+        }
+    }
+    // Fisher-Yates shuffle
+    for(int i = static_cast<int>(fakeAcqShuffledSeq_.size() - 1); i>0; i--){
+        std::uniform_int_distribution<int> pick(0, i);
+        std::swap(fakeAcqShuffledSeq_[i], fakeAcqShuffledSeq_[pick(fakeAcqRng_)]);
+    }
+    // init idx
+    fakeAcqSeqIdx_ = 0;
+}
+
+void StimulusController_C::fakeAcq_advanceToNextSSVEP() {
+    // Reshuffle when pool exhausted
+    if(fakeAcqSeqIdx_ > (fakeAcqShuffledSeq_.size() - 1)) {
+        fakeAcq_buildSeqAndShuffle();
+    }
+
+    int nextHz = fakeAcqShuffledSeq_[fakeAcqSeqIdx_];
+    fakeAcqSeqIdx_++;
+    auto dur = fakeAcq_getDurationForHz(nextHz);
+
+    // publish
+    stateStoreRef_->g_freq_hz.store(nextHz, std::memory_order_release);
+    // reset timer for this iter
+    if(fakeAcqRunModeTimer_.is_started()){
+        fakeAcqRunModeTimer_.stop_timer();
+    }
+    fakeAcqRunModeTimer_.start_timer(dur);
+}
+
+std::chrono::milliseconds StimulusController_C::fakeAcq_getDurationForHz(int hz){
+    if(hz == -1){
+        // REST
+        std::uniform_int_distribution<int> d(FAKE_REST_MIN_MS, FAKE_REST_MAX_MS);
+        return std::chrono::milliseconds{ d(fakeAcqRng_) };
+    }
+    else {
+        // active (left or right)
+        std::uniform_int_distribution<int> d(FAKE_ACTIVE_MIN_MS, FAKE_ACTIVE_MAX_MS);
+        return std::chrono::milliseconds{ d(fakeAcqRng_) };
+    }
+}
+#endif
 
 void StimulusController_C::runUIStateMachine(){
     logger::tlabel = "StimulusController";
@@ -667,6 +791,17 @@ void StimulusController_C::runUIStateMachine(){
 
     // is_stopped_ lets us cleanly exit loop operation
     while(!is_stopped_){
+
+        // special processing for fake eeg emulator in run mode: need to sim random assortment of SSVEP freqs from active model (the two being used) + no ssvep states
+        // this gets published in g_freq_hz, which is what the emulator uses to create its ssvep responses
+#ifdef ACQ_BACKEND_FAKE
+        if(state_ == UIState_Active_Run){
+            if (fakeAcqRunModeTimer_.check_timer_expired()){
+                // move to next stim
+                fakeAcq_advanceToNextSSVEP();
+            }
+        }
+#endif
         // detect internal events that happened since last loop (polling)
         // external (browser) events will use event-based handling
         std::optional<UIStateEvent_E> ev = detectEvent();

@@ -5,14 +5,25 @@
 // unicorn sampling rate of 250 Hz means 1 scan is about 4ms (or, 32 scans per getData() call is about 128ms)
 inline constexpr std::size_t WINDOW_SCANS         = NUM_SCANS_CHUNK*20;     // 640 samples @250Hz (sampling period 4ms), this is 2.56s
 inline constexpr std::size_t WINDOW_HOP_SCANS     = 80;      // every 0.32s (87.5% overlap) 
+inline constexpr std::size_t TRIM_SCANS_EACH_SIDE = 40;
+inline constexpr std::size_t WINDOW_SCANS_RUN_MODE = WINDOW_SCANS - TRIM_SCANS_EACH_SIDE*2; // so that we match training tensor sizing
 
 struct sliding_window_t {
-    size_t const winLen = WINDOW_SCANS*NUM_CH_CHUNK;
-    size_t const winHop = WINDOW_HOP_SCANS*NUM_CH_CHUNK; // amount to jump for next window
+    size_t winLen = 0;
+    size_t winHop = WINDOW_HOP_SCANS*NUM_CH_CHUNK; // amount to jump for next window
+
+	RingBuffer_C<float> sliding_window; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
+
+	// constructor for run vs calib windows
+	explicit sliding_window_t(
+		bool isCalibMode
+	) : winLen(isCalibMode ? WINDOW_SCANS*NUM_CH_CHUNK : WINDOW_SCANS_RUN_MODE*NUM_CH_CHUNK),
+	    winHop(WINDOW_HOP_SCANS*NUM_CH_CHUNK),
+		sliding_window(winLen)
+	{}
     
 	std::size_t tick = 0; // contains number of bufferchunk samples in window
 	
-	RingBuffer_C<float> sliding_window{WINDOW_SCANS*NUM_CH_CHUNK}; // major interleaved samples ; take by iterating over buffer chunks in ring buffer
 	std::vector<float> trimmed_window;
 	bool isTrimmed = 0;
 
@@ -29,6 +40,5 @@ struct sliding_window_t {
 
 	// associated feature vector/classification output for run mode
 	SSVEPState_E decision = SSVEP_None;
-
 
 };

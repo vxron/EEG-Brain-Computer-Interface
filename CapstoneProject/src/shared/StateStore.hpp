@@ -38,10 +38,15 @@ struct StateStore_s{
     std::string pending_subject_name;
     EpilepsyRisk_E pending_epilepsy;
 
+    // backend msg strings (where applicable)
+    std::mutex train_fail_mtx; 
+    std::string train_fail_msg = ""; // used as final train fail msg
+    std::vector<TrainingIssue_s> train_fail_issues{};
+
     // ==================== Training Protocol Info (Used during CALIB ONLY) ========================================
     std::atomic<int> g_block_id{0}; // block index in protocol
-    std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None};
-    std::atomic<int> g_freq_hz{0};
+    std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None}; 
+    std::atomic<int> g_freq_hz{0}; // ************USED FOR FAKE ACQ DURING RUN MODE
 
     // ============ For displaying signal in real-time on UI (hardware checks page) ============
     std::atomic<bool> g_hasEegChunk{false};
@@ -105,13 +110,19 @@ struct StateStore_s{
 
     // ======================== LIST OF SAVED SESSIONS ================================
     // this is what we use IN RUNMODE (NOT CURRENTSESSIONINFO^, we use that for calib, args to pass Python script)
+    // TODO: add bool or flag that says whether savedsession is good or bad, automatically delete bad after displaying results to user
     struct SavedSession_s {
-        std::string id;          // unique ID (e.g. "veronica_2025-11-25T14-20")
-        std::string label;       // human label for UI list ("Nov 25, 14:20 (Veronica)")
-        std::string subject;     // subject_id
-        std::string session;     // session_id
-        std::string created_at;  // ISO time string
-        std::string model_dir;   // model dir/path to load from
+        std::string id;                  // unique ID (e.g. "veronica_2025-11-25T14-20")
+        std::string label;               // human label for UI list ("Nov 25, 14:20 (Veronica)")
+        std::string subject;             // subject_id
+        std::string session;             // session_id
+        std::string model_dir;           // model dir/path to load from
+        std::string model_arch;          // CNN vs SVM
+        std::vector<DataInsufficiency_s> data_insuff; // if there were missing windows/trials/batches etc
+        bool has_data_insuff = false;
+
+        double final_holdout_acc;
+        double final_train_acc;
         
         // run mode frequency pair to be sent to ui
         TestFreq_E freq_left_hz_e{TestFreq_None};
@@ -125,8 +136,12 @@ struct StateStore_s{
         .label = "Default",
         .subject = "",
         .session = "",
-        .created_at = "",
         .model_dir = "",
+        .model_arch = "",
+        .data_insuff = {},
+        .has_data_insuff = false,
+        .final_holdout_acc = 0.0,
+        .final_train_acc = 0.0,
         .freq_left_hz_e = TestFreq_None,
         .freq_right_hz_e = TestFreq_None,
         .freq_right_hz = 0,
@@ -145,9 +160,39 @@ struct StateStore_s{
         return saved_sessions;
     }
 
+    std::atomic<int> g_onnx_session_is_reloading{0}; 
+    // since it can be a very time-consuming process, let ui know
+    // -1: "waiting for onnx session status from consumer thread" (since it can take it some time to reach that part of the code)
+    // +1: consumer responds "yes i am reloading"
+    // 0: consumer responds "no reloading" or "done reloading"
+
+    // flag to tell consumer it should re-init onnx model -> notify on session change
+    // - whenever currentSessionIdx changes (e.g. from sessions page, from training manager when training finishes)
+    //std::atomic<bool> g_onnx_session_needs_reload{true}; // init true for first load
+    // TODO: make GENERAL to all things that should reload on new session (e.g. UI as well...)
+    // this can get set by stim controller when user selects a new or diff sess?
+
+    // mtx protecting global json meta containing session list on disk for loading at startup
+    std::mutex global_session_list_json_mtx; 
+
+    // flag for when sessions have been loaded from disk at startup
+    std::atomic<bool> g_sessions_loaded_from_disk{false};
+
+    // ======================== Actuation thread Sync ======================
+    // cv to notify thread when consumer makes non-neutral inference (either left or right ssvep)
+    std::mutex mtx_actuation_request;
+    std::condition_variable actuation_request;
+    bool actuation_requested = false;
+    SSVEPState_E actuation_direction = SSVEP_Unknown; // data that comes with req
+
+    // atomic to notify consumer when actuator is actuating (consumer should sleep during this brief period)
+    std::atomic<bool> g_is_currently_actuating{false}; // consumer should freeze during actuation
+    std::atomic<bool> g_consumer_ack_actuation_stop{true}; // force consumer to ack actuation stop (this gets set to false when actuating starts and must be set to true again by cons)
+
     // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success
     // conditional variable! 
+    // TODO: FINALIZE SHOULDNT HAPPEN ON UI TRANSITION BCUZ THERE COULD STILL BE THINGS TO PULL FROM RB, OR FLUSH FROM CSV
     std::mutex mtx_finalize_request;
     std::condition_variable cv_finalize_request;
     bool finalize_requested = false;
@@ -169,6 +214,7 @@ struct StateStore_s{
         std::atomic<SettingTrainArch_E> train_arch_setting{TrainArch_CNN};
         std::atomic<SettingStimMode_E> stim_mode{StimMode_Flicker};
         std::atomic<SettingWaveform_E> waveform{Waveform_Square};
+        std::atomic<SettingHparam_E> hparam_setting{HPARAM_OFF};
         // frequency pool: up to 6 (fixed size array)
         // these are the defaults:
         std::array<TestFreq_E, 6> selected_freqs_e{
