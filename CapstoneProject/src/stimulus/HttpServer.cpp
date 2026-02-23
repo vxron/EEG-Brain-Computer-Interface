@@ -131,6 +131,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int waveform_e  = stateStoreRef_.settings.waveform.load(std::memory_order_acquire);
     int hparam_e = stateStoreRef_.settings.hparam_setting.load(std::memory_order_acquire);
     bool demo_mode = stateStoreRef_.settings.demo_mode.load(std::memory_order_acquire);
+    bool debug_mode = stateStoreRef_.settings.debug_mode.load(std::memory_order_acquire);
     int sel_n = stateStoreRef_.settings.selected_freqs_n.load(std::memory_order_acquire);
     if (sel_n < 0) sel_n = 0;
     if (sel_n > 6) sel_n = 6;
@@ -138,6 +139,11 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int duration_active = stateStoreRef_.settings.duration_active_s.load(std::memory_order_acquire);
     int duration_rest = stateStoreRef_.settings.duration_rest_s.load(std::memory_order_acquire);
     int duration_none = stateStoreRef_.settings.duration_none_s.load(std::memory_order_acquire);
+#ifdef ACQ_BACKEND_FAKE
+static constexpr bool isFakeBackend = true;
+#else
+static constexpr bool isFakeBackend = false;
+#endif
 
     std::unique_lock<std::mutex> lock3(stateStoreRef_.settings.selected_freq_array_mtx);
     // 2) build json string manually
@@ -178,10 +184,11 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
         }
     oss << "]," 
         << "\"is_model_ready\":"              << (is_model_ready ? "true" : "false")      << ","
+        << "\"is_fake_acq\":"                 << (isFakeBackend ? "true" : "false")       << ","
         << "\"is_onnx_reloading\":"           << (onnx_sess_reloading ? "true" : "false") << ","
         << "\"popup\":"                       << popup                                    << ","
-        << "\"pending_subject_name\":\""      << pending_subject_name                     << "\","
-        << "\"active_subject_id\":\""         << active_subject_id                        << "\","
+        << "\"pending_subject_name\":\""      << JSON::json_escape(pending_subject_name)  << "\","
+        << "\"active_subject_id\":\""         << JSON::json_escape(active_subject_id)     << "\","
         << "\"settings\":{"     
             << "\"calib_data_setting\":"      << calib_data_setting_e                     << ","
             << "\"train_arch_setting\":"      << train_arch_e                             << ","
@@ -189,6 +196,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
             << "\"waveform\":"                << waveform_e                               << ","
             << "\"hparam\":"                  << hparam_e                                 << ","
             << "\"demo_mode\":"               << (demo_mode ? "true" : "false")           << ","
+            << "\"debug_mode\":"               << (debug_mode ? "true" : "false")         << ","
             << "\"num_times_cycle_repeats\":" << total_cycles                             << ","
             << "\"duration_active_s\":"       << duration_active                          << ","
             << "\"duration_rest_s\":"         << duration_rest                            << ","
@@ -502,6 +510,14 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                     }
                     stateStoreRef_.settings.demo_mode.store(demo_mode_i, std::memory_order_release);
 
+                    bool debug_mode_i = false;
+                    if (!JSON::extract_json_bool(body, "\"debug_mode\"", debug_mode_i)) {
+                        JSON::json_extract_fail("http_server", "debug_mode");
+                        write_json_error(res, 400, "missing_or_invalid_field", "debug_mode");
+                        return;
+                    }
+                    stateStoreRef_.settings.debug_mode.store(debug_mode_i, std::memory_order_release);
+
                     int total_cycles_i = 1;
                     if (!JSON::extract_json_int(body, "\"num_times_cycle_repeats\"", total_cycles_i)) {
                         total_cycles_i = 1;
@@ -707,6 +723,52 @@ void HttpServer_C::handle_get_eeg(const httplib::Request& req,
 }
 
 
+void HttpServer_C::handle_get_runtime_inference_snapshot(const httplib::Request& req, httplib::Response& res) {
+    // send out snapshot info to UI
+    logger::tlabel = "HTTP Server";
+    ONNXInferenceSnapshot_s snap;
+    
+    {
+        // Demo inference snapshot (always emit, JS ignores unless demo_mode true in settings)
+        std::lock_guard<std::mutex> inf_lock(stateStoreRef_.mtx_demo_inference);
+        snap = stateStoreRef_.OnnxInferenceSnapshot;
+    }
+
+    // build json
+    nlohmann::json j;
+    nlohmann::json itemA; // create onnx_inference items
+    nlohmann::json itemB; // create nested streamer if applicable
+    
+    // onnx_inference
+    j["onnx_inference"] = nlohmann::json::array();
+    itemA["final_class"] = snap.final_class;
+    itemA["predicted_state"] = snap.predicted_state;
+    itemA["is_artifactual"] = (snap.is_artifactual ? "true" : "false");
+    itemA["stable_count"] = snap.stable_count;
+    itemA["stable_target"] = snap.stable_target;
+    itemA["total_windows"] = snap.total_windows;
+    itemA["artifactual_windows"] = snap.artifactual_windows;
+    itemA["actuation_count"] = snap.actuation_count;
+    itemA["logits"]  = { snap.logits[0],  snap.logits[1],  snap.logits[2] };
+    itemA["softmax"] = { snap.softmax[0], snap.softmax[1], snap.softmax[2] };
+    j["onnx_inference"].push_back(std::move(itemA));
+
+    // nested streamer if applicable
+    bool isDemoModeOn = stateStoreRef_.settings.demo_mode.load(std::memory_order_acquire);
+    if(isDemoModeOn && snap.streamerRef != nullptr){
+        j["streamer"] = nlohmann::json::array();
+        itemB["active_target_hz"] = snap.streamerRef->active_target_hz;
+        itemB["active_target_idx"] = snap.streamerRef->active_target_idx;
+        itemB["active_trial_idx"] = snap.streamerRef->active_trial_idx;
+        itemB["block_idx"] = snap.streamerRef->block_idx;
+        itemB["is_cycling"] = snap.streamerRef->is_cycling;
+        j["streamer"].push_back(std::move(itemB));
+    }
+
+    write_json(res, j.dump());
+
+}
+
 // check ready and write monitor refresh rate from client response
 void HttpServer_C::handle_post_ready(const httplib::Request& req, httplib::Response& res){
     /* 
@@ -760,6 +822,9 @@ bool HttpServer_C::http_start_server(){
 
     liveServerRef_->Get("/sessions",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_sessions(rq, rs); });
+
+    liveServerRef_->Get("/runtime_inference_snapshot",
+        [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_runtime_inference_snapshot(rq, rs); });
 
     liveServerRef_->Post("/event",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_post_event(rq, rs); });

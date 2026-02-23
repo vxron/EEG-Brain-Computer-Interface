@@ -224,12 +224,13 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
                     }
                 }
             }
-            break;
 
             if(prevState == UIState_Saved_Sessions){
                 // just switched sessions -> intrinsic guards mean the model must be ready.
                 stateStoreRef_->currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
             }
+
+            break;
         }
         
         case UIState_Active_Calib: {
@@ -508,8 +509,8 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             if((prevCalib || prevRun) && isDemoModeOn){
                 std::lock_guard<std::mutex> lock_streamer(stateStoreRef_->mtx_streaming_request);
                 stateStoreRef_->streaming_requested = true;
-                if(prevRun) { stateStoreRef_->test_mode_arg == 0; }
-                else { stateStoreRef_->test_mode_arg == 1; }
+                if(prevRun) { stateStoreRef_->test_mode_arg = 0; }
+                else { stateStoreRef_->test_mode_arg = 1; }
                 stateStoreRef_->streaming_request.notify_one(); // notify producer
             }
 #endif

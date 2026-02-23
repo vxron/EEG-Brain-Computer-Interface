@@ -143,7 +143,7 @@ try {
             bool testmode = stateStoreRef.test_mode_arg;
             // start streaming if we woke up from cv
             if(!was_streaming){
-                acqDemoDriver.unicorn_start_acq(testMode);
+                acqDemoDriver.unicorn_start_acq(testmode);
                 was_streaming = true;
             }
         }
@@ -235,6 +235,10 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     int num_windows_stable_prediction = 0;
     int num_windows_unknown = 0;
     int bad_win_from_onnx_ct = 0;
+    // debug/demo mode trackers
+    int debug_total_windows   = 0;
+    int debug_artifact_windows = 0;
+    int debug_actuation_count  = 0;
     // new window every 0.32s -> means we'll have 3s/0.32s = 9.375 windows necessary for 2s
     int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10; // req users to look at stimulus for min 3s
     int NUM_ALLOWED_WRONG_WINDOWS_BEFORE_DEBOUNCE_RESET = 3; // TODO
@@ -811,6 +815,14 @@ try{
         if(prevState == UIState_Active_Run && currState != UIState_Active_Run){
             run_mode_onnx_ready = false;
             run_log_opened = false; // redo logging each run sess
+
+            // also reset counters for debug mode
+            debug_actuation_count = 0;
+            debug_artifact_windows = 0;
+            debug_actuation_count = 0;
+            // reset snapshot
+            std::lock_guard<std::mutex> lock_demo(stateStoreRef.mtx_demo_inference);
+            stateStoreRef.OnnxInferenceSnapshot = ONNXInferenceSnapshot_s{};
         }
 
         // save this as prev state to check after window is built to make sure UI state hasn't changed in between
@@ -1005,12 +1017,18 @@ try{
             int stim_hz = -1; // default for non-fake acq
 #ifdef ACQ_BACKEND_FAKE
             stim_hz = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+            bool demo_mode = stateStoreRef.settings.demo_mode.load(std::memory_order_acquire);
 #endif
+            bool debug_mode = stateStoreRef.settings.debug_mode.load(std::memory_order_acquire);
             if(windowPtr->isArtifactualWindow){
                 if(!run_mode_bad_window_timer.is_started()){
                     run_mode_bad_window_timer.start_timer(std::chrono::milliseconds{9000});
                 }
                 run_mode_bad_window_count++;
+                if(debug_mode){
+                    debug_artifact_windows++;
+                    debug_total_windows++;
+                }
                 // reset counter for debounce (TODO: DECIDE IF WANT TO KEEP OR REMOVE FOR MORE AGGRESSIVENESS IN PRED)
                 num_windows_stable_prediction = 0; // reset
                 last_win_prediction = SSVEP_Unknown;
@@ -1019,6 +1037,9 @@ try{
                 continue; // don't use this window
             } else {
                 // clean window
+                if (debug_mode) {
+                    debug_total_windows++;
+                }
                 if(run_mode_bad_window_timer.is_started()){
                     // add to within-timer clean window count for comparison
                     run_mode_clean_window_count++;
@@ -1062,6 +1083,9 @@ try{
                         stateStoreRef.actuation_requested = true;
                         stateStoreRef.actuation_direction = curr_win_prediction;
                         stateStoreRef.actuation_request.notify_one(); // notify actuator thread
+                        if(debug_mode){
+                            debug_actuation_count++; 
+                        }
                         // reset num_windows_stable_prediction
                         num_windows_stable_prediction = 0;
                     }
@@ -1069,7 +1093,34 @@ try{
                 
                 log_run_classifier_window(stim_hz, false, true, currResults, window_class, curr_win_prediction, 
                                    num_windows_stable_prediction, actuation_fired, act_dir);
-            } 
+            }
+            // publish snapshot if debug mode 
+            if(debug_mode){
+                ONNXInferenceSnapshot_s snap;
+                snap.logits              = { currResults.logits[0],
+                                              currResults.logits[1],
+                                              currResults.logits[2] };
+                snap.softmax             = { currResults.softmax[0],
+                                              currResults.softmax[1],
+                                              currResults.softmax[2] };
+                snap.final_class         = window_class;
+                snap.predicted_state     = static_cast<int>(curr_win_prediction);
+                snap.is_artifactual      = false; // not artifactual if we made it here
+                snap.stable_count        = num_windows_stable_prediction;
+                snap.stable_target       = NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION;
+                snap.total_windows       = debug_total_windows;
+                snap.artifactual_windows = debug_artifact_windows;
+                snap.actuation_count     = debug_actuation_count;
+#ifdef ACQ_BACKEND_FAKE
+                if (demo_mode){
+                    snap.streamerRef     = &acqDemoDriver.getStreamerSnapshot();
+                }
+#endif
+                {
+                    std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                    stateStoreRef.OnnxInferenceSnapshot = snap;
+                }
+            }
         }
 	}
     // exiting due to producer exiting means we need to close window rb

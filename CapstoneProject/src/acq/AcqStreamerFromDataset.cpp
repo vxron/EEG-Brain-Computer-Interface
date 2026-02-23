@@ -40,6 +40,28 @@ void AcqStreamerFromDataset_C::getChannelLabels(std::vector<std::string>& out) c
 int AcqStreamerFromDataset_C::getNumChannels() const {
     return n_channels_;
 }
+
+DemoStreamerSnapshot_s AcqStreamerFromDataset_C::getStreamerSnapshot() const {
+    DemoStreamerSnapshot_s s;
+    s.active_target_idx = active_target_idx_;
+    s.active_trial_idx = active_trial_idx_;
+    // block_idx from curr trial
+    if(active_trial_idx_ >= 0 && active_trial_idx_ < trials_.size()){
+         s.block_idx = trials_[active_trial_idx_].block_idx;
+    }
+    // cycling if any of the run_mode_cycling flags are set (for any one of the three categories...)
+    if(!run_mode_cycling_trials_.empty()){
+        for(bool c: run_mode_cycling_trials_) {
+            if (c==true){
+                s.is_cycling = true;
+                break;
+            }
+        }
+    }
+    // target_hz from target_idx
+    s.active_target_hz = target_freqs_[active_target_idx_].freq_hz;
+    return s;
+}
 // -------------------------------------- End getters ------------------------------------------------
 
 
@@ -318,9 +340,10 @@ bool AcqStreamerFromDataset_C::unicorn_start_acq(bool testMode){
     return true;
 }
 
-bool AcqStreamerFromDataset_C::unicorn_stop_acq(){
+bool AcqStreamerFromDataset_C::unicorn_demo_stop_acq(){
     stopped_ = true;
     started_ = false;
+    return true;
 }
 
 void AcqStreamerFromDataset_C::find_closest_targets(std::vector<int>& desired_targets) const {
