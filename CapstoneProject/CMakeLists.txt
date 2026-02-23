@@ -21,6 +21,7 @@ add_executable(CapstoneProject
   src/utils/SessionPaths.cpp
   src/classifier/ONNXClassifier.cpp
   src/actuation/ServoDriver.cpp
+  src/actuation/FakeActuation.cpp
 )
 
 # expose headers to IDEs (no compilation)
@@ -40,6 +41,7 @@ target_sources(CapstoneProject
       src/utils/Filters.hpp
       src/classifier/ONNXClassifier.hpp
       src/actuation/ServoDriver.h
+      src/actuation/FakeActuation.hpp
 )
 
 # ==================== UI UNIT TESTS ==========================
