@@ -29,12 +29,13 @@
 #include "utils/json.hpp"
 #include <unordered_set>
 
-#ifdef USE_EEG_FILTERS
+#ifdef USE_EEG_FILTERS 
 #include "utils/Filters.hpp"
 #endif
 
 #ifdef ACQ_BACKEND_FAKE
 #include "acq/FakeAcquisition.h"
+#include "acq/AcqStreamerFromDataset.h"
 #endif
 
 constexpr bool TEST_MODE = 0;
@@ -50,6 +51,8 @@ void handle_sigint(int) {
 void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStoreRef){
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
+    bool was_streaming = false; 
+
 try {
     LOG_ALWAYS("producer start");
 
@@ -64,6 +67,7 @@ try {
     // random artifacts, alpha and beta sources off for now
 
     FakeAcquisition_C acqDriver(fakeCfg);
+    AcqStreamerFromDataset_C acqDemoDriver(&stateStoreRef);
 
 #else
     LOG_ALWAYS("PATH=HARDWARE");
@@ -84,6 +88,11 @@ try {
         rb.close();
         return;
     };
+#ifdef ACQ_BACKEND_FAKE
+    if (acqDemoDriver.unicorn_init() == false){
+        LOG_ALWAYS("demo mode did not initialize successfully");
+    };
+#endif
 
     size_t tick_count = 0;
 
@@ -117,11 +126,40 @@ try {
         bufferChunk_S chunk{};
 
 #ifdef ACQ_BACKEND_FAKE
-	int currSimFreq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
-    acqDriver.setActiveStimulus(static_cast<double>(currSimFreq)); // if 0, backend won't produce sinusoid
-#endif
-        
+        bool isDemoModeOn = stateStoreRef.settings.demo_mode.load(std::memory_order_acquire);
+
+        // we want to start demo mode acq when user presses calib mode or run mode and demo is toggled on
+        // todo: all other buttons/controls should be greyed out
+        // todo: run mode toggled off until calib mode is ran
+        // if we're in demo mode & NOT streaming, block here until streaming turns on (or stop)
+        if (isDemoModeOn){    
+            std::unique_lock<std::mutex> streaming_lock(stateStoreRef.mtx_streaming_request);
+            stateStoreRef.streaming_request.wait(streaming_lock, [&]{
+                return g_stop.load(std::memory_order_relaxed) || stateStoreRef.streaming_requested;
+            });
+
+            if (g_stop.load(std::memory_order_relaxed)) break; // handle stop predicate
+
+            bool testmode = stateStoreRef.test_mode_arg;
+            // start streaming if we woke up from cv
+            if(!was_streaming){
+                acqDemoDriver.unicorn_start_acq(testMode);
+                was_streaming = true;
+            }
+        }
+
+	    int currSimFreq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+        acqDriver.setActiveStimulus(static_cast<double>(currSimFreq)); // if 0, backend won't produce sinusoid
+        if(isDemoModeOn){
+            acqDemoDriver.getData(NUM_SCANS_CHUNK, chunk.data.data());
+        } else {
+            // not demo mode
+            acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data());
+        }
+#else
         acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
+#endif
+
         tick_count++;
         chunk.tick = tick_count;
 
@@ -139,7 +177,27 @@ try {
             LOG_ALWAYS("RingBuffer closed while pushing; stopping producer");
             break;
         } 
+
+        // check if we've been asked to stop streaming
+#ifdef ACQ_BACKEND_FAKE
+        if(isDemoModeOn){
+            bool still_streaming = true;
+            {
+                // TODO: given we're doing it w/ this arch now -> do we still need to explicitly notify from stim controller for off requests??
+                std::lock_guard<std::mutex> lk(stateStoreRef.mtx_streaming_request);
+                still_streaming = stateStoreRef.streaming_requested;
+            }
+            if(!still_streaming){
+                // stop streaming
+                acqDemoDriver.unicorn_demo_stop_acq();
+                was_streaming = false;
+                continue; // loop back; next iteration will wait
+            }
+        }
+#endif
+        
     }
+
     // on thread shutdown, close queue to call release n unblock any consumer waiting for acquire
     LOG_ALWAYS("producer shutting down; stopping acquisition backend...");
     acqDriver.unicorn_stop_and_close();

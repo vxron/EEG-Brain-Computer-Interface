@@ -313,8 +313,14 @@ bool AcqStreamerFromDataset_C::unicorn_start_acq(bool testMode){
     }
 
     start_float_offset_ = 0;
+    stopped_ = false;
 
     return true;
+}
+
+bool AcqStreamerFromDataset_C::unicorn_stop_acq(){
+    stopped_ = true;
+    started_ = false;
 }
 
 void AcqStreamerFromDataset_C::find_closest_targets(std::vector<int>& desired_targets) const {

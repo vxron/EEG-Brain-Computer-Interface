@@ -130,6 +130,7 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     int stim_mode_e = stateStoreRef_.settings.stim_mode.load(std::memory_order_acquire);
     int waveform_e  = stateStoreRef_.settings.waveform.load(std::memory_order_acquire);
     int hparam_e = stateStoreRef_.settings.hparam_setting.load(std::memory_order_acquire);
+    bool demo_mode = stateStoreRef_.settings.demo_mode.load(std::memory_order_acquire);
     int sel_n = stateStoreRef_.settings.selected_freqs_n.load(std::memory_order_acquire);
     if (sel_n < 0) sel_n = 0;
     if (sel_n > 6) sel_n = 6;
@@ -187,7 +188,8 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
             << "\"stim_mode\":"               << stim_mode_e                              << ","
             << "\"waveform\":"                << waveform_e                               << ","
             << "\"hparam\":"                  << hparam_e                                 << ","
-            << "\"num_times_cycle_repeats\":" << total_cycles                        << ","
+            << "\"demo_mode\":"               << (demo_mode ? "true" : "false")           << ","
+            << "\"num_times_cycle_repeats\":" << total_cycles                             << ","
             << "\"duration_active_s\":"       << duration_active                          << ","
             << "\"duration_rest_s\":"         << duration_rest                            << ","
             << "\"duration_none_s\":"         << duration_none                            << ","
@@ -491,6 +493,14 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                         return;
                     }
                     stateStoreRef_.settings.hparam_setting.store(static_cast<SettingHparam_E>(hparam_i), std::memory_order_release);
+
+                    bool demo_mode_i = false;
+                    if (!JSON::extract_json_bool(body, "\"demo_mode\"", demo_mode_i)) {
+                        JSON::json_extract_fail("http_server", "demo_mode");
+                        write_json_error(res, 400, "missing_or_invalid_field", "demo_mode");
+                        return;
+                    }
+                    stateStoreRef_.settings.demo_mode.store(demo_mode_i, std::memory_order_release);
 
                     int total_cycles_i = 1;
                     if (!JSON::extract_json_int(body, "\"num_times_cycle_repeats\"", total_cycles_i)) {

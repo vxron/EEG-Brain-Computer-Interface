@@ -42,6 +42,7 @@ public:
     // Public Interface must implement IAcqProvider_S
     bool getData(std::size_t const numberOfScans, float* dest) override; // return last amount of stream
     bool unicorn_start_acq(bool testMode) override; // reset stream pos + collect freqs and series and sequences for this run & start streaming
+    bool unicorn_stop_acq(); // indep of parent class
     void setActiveStimulus(double fStimHz); // sets the active stim based on curr streaming freq
     bool unicorn_stop_and_close() override; // close files
 	bool unicorn_init() override; // open dataset + meta 
@@ -69,6 +70,8 @@ private:
     int stim_start_, stim_len_;
     std::vector<std::string> channel_labels_;
     bool initialized_ = false;
+    bool started_ = false;
+    bool stopped_ = true;
     std::mt19937 rng_{0xC0FFEEu};
     std::ifstream bin_;
 
@@ -86,7 +89,7 @@ private:
     // for getData streaming purposes
     int active_target_idx_ = -999;
     int active_trial_idx_ = -1;
-    std::size_t start_float_offset_ = 0;
+    std::size_t start_float_offset_ = 0; // how far into SEGMENT we are
 
     // run mode scheduler
     std::vector<int> run_no_ssvep_per_target_order_; 
