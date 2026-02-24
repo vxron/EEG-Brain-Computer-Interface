@@ -66,7 +66,6 @@ DemoStreamerSnapshot_s AcqStreamerFromDataset_C::getStreamerSnapshot() const {
 
 
 // ------------------------------------ unicorn_init func --------------------------------------------
-
 bool AcqStreamerFromDataset_C::unicorn_init(){
     // Load/parse JSON meta
     if(initialized_ == true){
@@ -603,6 +602,15 @@ int AcqStreamerFromDataset_C::pick_next_trial_for_target(int target_idx){
             return -1;
         }
     }
+}
+
+bool AcqStreamerFromDataset_C::unicorn_stop_and_close() {
+    stopped_ = true;
+    started_ = false;
+    if (bin_.is_open()) {
+        bin_.close();
+    }
+    return true;
 }
 // ----------------------------------- End everything for unicorn_start_acq function ----------------------------------
 

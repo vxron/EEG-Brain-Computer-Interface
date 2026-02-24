@@ -501,11 +501,11 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
             if(currentWindowTimer_.is_paused()){
                 currentWindowTimer_.unpause_timer();
             }
-
+            
             // TODO: not sure if this is needed, may be handled fine in onstateenter for run/calib modes
 #ifdef ACQ_BACKEND_FAKE
-            bool prevCalib = (prevState_ == (UIState_Active_Calib || prevState_ == UIState_Instructions || prevState_ == UIState_NoSSVEP_Test));
-            bool prevRun = prevState_ == UIState_Active_Run;
+            bool prevCalib = (pausedFromState_ == UIState_Active_Calib || pausedFromState_ == UIState_Instructions || pausedFromState_ == UIState_NoSSVEP_Test);
+            bool prevRun = pausedFromState_ == UIState_Active_Run;
             if((prevCalib || prevRun) && isDemoModeOn){
                 std::lock_guard<std::mutex> lock_streamer(stateStoreRef_->mtx_streaming_request);
                 stateStoreRef_->streaming_requested = true;

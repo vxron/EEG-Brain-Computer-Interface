@@ -457,7 +457,7 @@ struct ONNXInferenceSnapshot_s {
 	int artifactual_windows = 0;
 	int actuation_count = 0;
 	// Streamer info (only if meaningful in demo mode)
-	DemoStreamerSnapshot_s* streamerRef = nullptr;
+	std::shared_ptr<const DemoStreamerSnapshot_s> streamerRef = nullptr;
 };
 
 /* END STRUCTS */

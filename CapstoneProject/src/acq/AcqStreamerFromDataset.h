@@ -43,7 +43,6 @@ public:
     bool getData(std::size_t const numberOfScans, float* dest) override; // return last amount of stream
     bool unicorn_start_acq(bool testMode) override; // reset stream pos + collect freqs and series and sequences for this run & start streaming
     bool unicorn_demo_stop_acq(); // indep of parent class
-    void setActiveStimulus(double fStimHz); // sets the active stim based on curr streaming freq
     bool unicorn_stop_and_close() override; // close files
 	bool unicorn_init() override; // open dataset + meta 
 	bool dump_config_and_indices() override { return true; }; // nothing to dump

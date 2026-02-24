@@ -196,7 +196,7 @@ static constexpr bool isFakeBackend = false;
             << "\"waveform\":"                << waveform_e                               << ","
             << "\"hparam\":"                  << hparam_e                                 << ","
             << "\"demo_mode\":"               << (demo_mode ? "true" : "false")           << ","
-            << "\"debug_mode\":"               << (debug_mode ? "true" : "false")         << ","
+            << "\"debug_mode\":"              << (debug_mode ? "true" : "false")          << ","
             << "\"num_times_cycle_repeats\":" << total_cycles                             << ","
             << "\"duration_active_s\":"       << duration_active                          << ","
             << "\"duration_rest_s\":"         << duration_rest                            << ","
@@ -516,6 +516,9 @@ void HttpServer_C::handle_post_event(const httplib::Request& req, httplib::Respo
                         write_json_error(res, 400, "missing_or_invalid_field", "debug_mode");
                         return;
                     }
+                    if (demo_mode_i && !debug_mode_i){
+                        debug_mode_i = true; // enforce consistency (demo_mode requires debug_mode)
+                    }
                     stateStoreRef_.settings.debug_mode.store(debug_mode_i, std::memory_order_release);
 
                     int total_cycles_i = 1;
@@ -740,10 +743,9 @@ void HttpServer_C::handle_get_runtime_inference_snapshot(const httplib::Request&
     nlohmann::json itemB; // create nested streamer if applicable
     
     // onnx_inference
-    j["onnx_inference"] = nlohmann::json::array();
     itemA["final_class"] = snap.final_class;
     itemA["predicted_state"] = snap.predicted_state;
-    itemA["is_artifactual"] = (snap.is_artifactual ? "true" : "false");
+    itemA["is_artifactual"] = snap.is_artifactual;
     itemA["stable_count"] = snap.stable_count;
     itemA["stable_target"] = snap.stable_target;
     itemA["total_windows"] = snap.total_windows;
@@ -751,18 +753,19 @@ void HttpServer_C::handle_get_runtime_inference_snapshot(const httplib::Request&
     itemA["actuation_count"] = snap.actuation_count;
     itemA["logits"]  = { snap.logits[0],  snap.logits[1],  snap.logits[2] };
     itemA["softmax"] = { snap.softmax[0], snap.softmax[1], snap.softmax[2] };
-    j["onnx_inference"].push_back(std::move(itemA));
+    j["onnx_inference"] = itemA;
 
     // nested streamer if applicable
     bool isDemoModeOn = stateStoreRef_.settings.demo_mode.load(std::memory_order_acquire);
     if(isDemoModeOn && snap.streamerRef != nullptr){
-        j["streamer"] = nlohmann::json::array();
         itemB["active_target_hz"] = snap.streamerRef->active_target_hz;
         itemB["active_target_idx"] = snap.streamerRef->active_target_idx;
         itemB["active_trial_idx"] = snap.streamerRef->active_trial_idx;
         itemB["block_idx"] = snap.streamerRef->block_idx;
         itemB["is_cycling"] = snap.streamerRef->is_cycling;
-        j["streamer"].push_back(std::move(itemB));
+        j["streamer"] = itemB;
+    } else {
+        j["streamer"] = nullptr; // explicit null so JS can do `data.streamer ?? {}`
     }
 
     write_json(res, j.dump());

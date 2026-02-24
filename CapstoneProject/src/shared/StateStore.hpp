@@ -62,6 +62,9 @@ struct StateStore_s{
     // Reading demo/debug mode snapshots with mutex protection
     std::mutex mtx_demo_inference;
     ONNXInferenceSnapshot_s OnnxInferenceSnapshot{}; // Contains ref to DemoStreamerSnapshot_s if applicable 
+    // Demo streamer snapshot (producer writes, consumer reads)
+    std::mutex mtx_demo_streamer_snapshot;
+    DemoStreamerSnapshot_s DemoStreamerSnapshot{};
     
     // ============ For displaying signal in real-time on UI (hardware checks page) ============
     std::atomic<bool> g_hasEegChunk{false};

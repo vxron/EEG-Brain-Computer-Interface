@@ -173,6 +173,9 @@ const FREQ_MAX_SELECT = 6;
 let currentWaveform = "square"; // "square" | "sine"
 let currentModulation = "flicker"; // "flicker" | "grow"
 let currentHparam = 0; // 0=Off, 2=Quick, 1=Full (match backend Types.h)
+let currentDemoMode = false;
+let currentDebugMode = false;
+let InferenceSnapLoadInFlight = false;
 let settingsInitiallyUpdated = false;
 // Slider elements
 const elDurActive = document.getElementById("set-duration-active");
@@ -210,6 +213,23 @@ const elPauseOverlay = document.getElementById("pause-overlay");
 const btnResume = document.getElementById("btn-resume");
 const btnPauseExit = document.getElementById("btn-pause-exit");
 
+// Demo & Debug Mode DOM elements
+const viewDemoRun = document.getElementById("view-demo-run");
+const elDebugHwBadge = document.getElementById("debug-hw-badge");
+const elDebugFakeBadge = document.getElementById("debug-fake-badge");
+const elDemoDisabledOverlay = document.getElementById("demo-disabled-overlay");
+const elDemoModeToggle = document.getElementById("toggle-demo-mode");
+const elOnnxOverlayToggle = document.getElementById("toggle-onnx-overlay");
+const elDemoModeStatusBadge = document.getElementById("demo-mode-status-badge");
+const elOnnxOverlayStatusBadge = document.getElementById(
+  "onnx-overlay-status-badge",
+);
+const elDemoSessionLabel = document.getElementById("demo-session-label");
+let consumedDemoMode = false;
+let consumedDebugMode = false;
+let inferenceSnapInterval = null;
+let lastStateData = null; // needed for get/inference snap argument
+
 let currIdx = 0;
 let prevIdx = 0;
 let prevTrainFailMsg = "";
@@ -245,6 +265,7 @@ function showView(name) {
     viewCalibOptions,
     viewSettings,
     viewNoSSVEP,
+    viewDemoRun,
   ];
 
   for (const v of allViews) {
@@ -281,6 +302,9 @@ function showView(name) {
       break;
     case "no_ssvep":
       viewNoSSVEP.classList.remove("hidden");
+      break;
+    case "demo_run":
+      viewDemoRun.classList.remove("hidden");
       break;
     default:
       viewHome.classList.remove("hidden");
@@ -406,6 +430,8 @@ function updateSettingsFromState(data) {
   const stim_mode_i = data.settings.stim_mode; // 0=flicker, 1=grow
   const waveform_i = data.settings.waveform; // 0=square, 1=sine
   const hparam_i = data.settings.hparam;
+  const debug_mode_i = data.settings.debug_mode;
+  const demo_mode_i = data.settings.demo_mode;
   const duractive_i = Number(data.settings.duration_active_s);
   const durnone_i = Number(data.settings.duration_none_s);
   const durrest_i = Number(data.settings.duration_rest_s);
@@ -420,6 +446,20 @@ function updateSettingsFromState(data) {
   currentModulation = selModulation?.value ?? "flicker";
   const trainArchNow = Number(selTrainArch?.value ?? arch ?? 0);
   renderHparamUI(hparam_i ?? 0, trainArchNow); // dep on train arch...
+  currentDemoMode = demo_mode_i === true;
+  currentDebugMode = debug_mode_i === true;
+  if (elDemoModeToggle) elDemoModeToggle.checked = currentDemoMode;
+  if (elOnnxOverlayToggle) elOnnxOverlayToggle.checked = currentDebugMode;
+  if (elDemoModeStatusBadge) {
+    elDemoModeStatusBadge.textContent = currentDemoMode ? "ON" : "OFF";
+    elDemoModeStatusBadge.classList.toggle("on", currentDemoMode);
+    elDemoModeStatusBadge.classList.toggle("off", !currentDemoMode);
+  }
+  if (elOnnxOverlayStatusBadge) {
+    elOnnxOverlayStatusBadge.textContent = currentDebugMode ? "ON" : "OFF";
+    elOnnxOverlayStatusBadge.classList.toggle("on", currentDebugMode);
+    elOnnxOverlayStatusBadge.classList.toggle("off", !currentDebugMode);
+  }
 
   if (elDurActive && !Number.isNaN(duractive_i))
     elDurActive.value = String(duractive_i);
@@ -890,7 +930,7 @@ function renderTrainingResult(state) {
   }
 }
 
-// toggle home "welcome" containers visibility
+// (12) toggle home "welcome" containers visibility
 function setHomeWelcomeVisible(visible) {
   const welcomeElements = [
     document.querySelector("#view-home > h2"),
@@ -1103,13 +1143,13 @@ function testFreqEnumToHz(e) {
     case 1:
       return 8;
     case 2:
-      return 10;
-    case 3:
-      return 11;
-    case 4:
-      return 12;
-    case 5:
       return 9;
+    case 3:
+      return 10;
+    case 4:
+      return 11;
+    case 5:
+      return 12;
     case 6:
       return 13;
     case 7:
@@ -1249,12 +1289,29 @@ function updateUiFromState(data) {
     setHomeWelcomeVisible(true); // Show welcome content instead of training status
   }
 
+  // detect when leaving run mode
+  if (prevStimState == 0 && stimState != 0) {
+    stopInferenceSnapPolling();
+    consumedDemoMode = false;
+  }
+
   const pauseVisible =
     stimState === 0 || // Active_Run
     stimState === 1 || // Active_Calib
     stimState === 2 || // Instructions
     stimState === 10; // NoSSVEP_Test
   setPauseButtonVisible(pauseVisible);
+
+  {
+    // checking compile time flag
+    const isFake = data.is_fake_acq === true; // backend sends string "true"/"false"
+    if (elDebugHwBadge) elDebugHwBadge.classList.toggle("hidden", isFake);
+    if (elDebugFakeBadge) elDebugFakeBadge.classList.toggle("hidden", !isFake);
+    // Only allow demo mode toggle in FAKE builds
+    if (elDemoModeToggle) elDemoModeToggle.disabled = !isFake;
+    if (elDemoDisabledOverlay)
+      elDemoDisabledOverlay.classList.toggle("hidden", isFake);
+  }
 
   // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = no_ssvep, 11 = paused, 12 = None
   if (stimState === 3 /* Home */ || stimState === 12 /* None */) {
@@ -1321,12 +1378,31 @@ function updateUiFromState(data) {
       startCalibFlicker(calibFreqHz); // keep it running
     }
   } else if (stimState === 0 /* Active_Run */) {
-    applyBodyMode({ fullscreen: true, targets: true, run: true });
-    showView("active_run");
-    // default to freq_hz if undef right/left
-    const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
-    const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
-    startRunFlicker(runLeftHz, runRightHz);
+    const isDemoMode = data.settings.demo_mode === true;
+    if (isDemoMode) {
+      // show inference dashboard instead of arrows
+      applyBodyMode({ fullscreen: true, targets: false, run: false });
+      stopAllStimuli();
+      showView("demo_run");
+      if (!consumedDemoMode) {
+        startInferenceSnapPolling();
+        if (elDemoSessionLabel) {
+          const subj = data.active_subject_id || "unknown";
+          const sess = data.active_session_id || "";
+          elDemoSessionLabel.textContent = sess
+            ? `${subj} · ${sess.slice(0, 16)}`
+            : `${subj} · live dataset stream`;
+        }
+        consumedDemoMode = true; // rising edge complete
+      }
+    } else {
+      stopInferenceSnapPolling();
+      applyBodyMode({ fullscreen: true, targets: true, run: true });
+      showView("active_run");
+      const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
+      const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
+      startRunFlicker(runLeftHz, runRightHz);
+    }
   } else if (stimState === 4 /* Saved Sessions */) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
@@ -1358,6 +1434,7 @@ function updateUiFromState(data) {
   } else if (stimState == 8) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
+    showView("home");
   } else if (stimState == 9) {
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     if (!settingsInitiallyUpdated) {
@@ -1410,6 +1487,8 @@ function updateUiFromState(data) {
   if (popupEnumIdx !== 0 && popupAckInFlight) {
     // keep modal hidden
     prevStimState = stimState;
+    prevIdx = currIdx;
+    prevTrainFailMsg = currTrainFailMsg;
     return;
   }
 
@@ -1488,6 +1567,7 @@ async function pollStateOnce() {
 
     // 5.3.) parse json & update dom
     const data = await res.json();
+    lastStateData = data;
     updateUiFromState(data);
     console.log("STATE:", data);
   } catch (err) {
@@ -2022,7 +2102,240 @@ async function selectSession(sessIdx, cardEl) {
   }
 }
 
-// ================ 12) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
+// ==================== 12) DEMO MODE RUNTIME BUILDER ==========================================================
+// Main fetch + render function for entering the saved sessions page
+async function fetchAndRenderInferenceSnap(state) {
+  if (
+    typeof InferenceSnapLoadInFlight != "undefined" &&
+    InferenceSnapLoadInFlight == true
+  )
+    return; // don't render again if we're already trying to render
+  InferenceSnapLoadInFlight = true;
+
+  try {
+    const freq_left_hz = state.freq_left_hz;
+    const freq_right_hz = state.freq_right_hz;
+
+    const res = await fetch(`${API_BASE}/runtime_inference_snapshot`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = await res.json();
+
+    updateDemoRunView(data, freq_left_hz, freq_right_hz);
+  } catch (err) {
+    console.log("GET /runtime_inference_snapshot error:", err);
+  } finally {
+    InferenceSnapLoadInFlight = false; // always reset before exiting this func...
+  }
+}
+
+// demo mode view for dataset streamer
+// state = get/state
+// data = get/runtime_inference_snapshot
+function updateDemoRunView(data, freq_left_hz, freq_right_hz) {
+  const d = data.onnx_inference;
+  if (!d) return;
+
+  // 1) Prediction panel
+  const predEl = document.getElementById("demo-pred-state");
+  const predIcon = document.getElementById("demo-pred-icon");
+  const predLabel = document.getElementById("demo-pred-label");
+  const predSub = document.getElementById("demo-pred-sub");
+  const artBadge = document.getElementById("demo-artifact-badge");
+  const actFlash = document.getElementById("demo-actuation-flash");
+
+  // Remove all state classes
+  if (predEl)
+    predEl.classList.remove("left", "right", "none", "unknown", "artifact");
+
+  if (d.is_artifactual) {
+    if (predEl) predEl.classList.add("artifact");
+    if (predIcon) predIcon.textContent = "⚡";
+    if (predLabel) predLabel.textContent = "ARTIFACT";
+    if (predSub) predSub.textContent = "Window rejected — signal quality check";
+    if (artBadge) artBadge.classList.remove("hidden");
+  } else {
+    if (artBadge) artBadge.classList.add("hidden");
+    const ps = d.predicted_state; // 0=L 1=R 2=None 3=Unknown
+    const stateMap = {
+      0: { cls: "left", icon: "←", lbl: "LEFT", sub: "Looking left detected" },
+      1: {
+        cls: "right",
+        icon: "→",
+        lbl: "RIGHT",
+        sub: "Looking right detected",
+      },
+      2: { cls: "none", icon: "·", lbl: "NONE", sub: "No SSVEP detected" },
+      3: {
+        cls: "unknown",
+        icon: "?",
+        lbl: "UNKNOWN",
+        sub: "Classifier returned unknown",
+      },
+    };
+    const info = stateMap[ps] ?? stateMap[3];
+    if (predEl) predEl.classList.add(info.cls);
+    if (predIcon) predIcon.textContent = info.icon;
+    if (predLabel) predLabel.textContent = info.lbl;
+    if (predSub) predSub.textContent = info.sub;
+  }
+
+  // 2) Debounce bar
+  const sc = d.stable_count ?? 0;
+  const st = d.stable_target ?? 10;
+  const pct = st > 0 ? Math.min(100, Math.round((sc / st) * 100)) : 0;
+  const debounceBar = document.getElementById("demo-debounce-bar");
+  const debounceFrac = document.getElementById("demo-debounce-fraction");
+  if (debounceBar) debounceBar.style.width = pct + "%";
+  if (debounceFrac) debounceFrac.textContent = `${sc} / ${st}`;
+
+  // Actuation flash: show briefly when actuation_count increments
+  if (actFlash) {
+    if (!actFlash._lastCount) actFlash._lastCount = 0;
+    if (d.actuation_count > actFlash._lastCount) {
+      actFlash._lastCount = d.actuation_count;
+      actFlash.classList.remove("hidden");
+      clearTimeout(actFlash._timer);
+      actFlash._timer = setTimeout(
+        () => actFlash.classList.add("hidden"),
+        1200,
+      );
+    }
+  }
+
+  // 3) Softmax confidence bars
+  const sm = Array.isArray(d.softmax) ? d.softmax : [0.333, 0.333, 0.334];
+  const pcts = sm.map((v) => Math.round(v * 100));
+  ["left", "right", "none"].forEach((side, i) => {
+    const bar = document.getElementById(`demo-bar-${side}`);
+    const pctEl = document.getElementById(`demo-pct-${side}`);
+    if (bar) bar.style.width = pcts[i] + "%";
+    if (pctEl) pctEl.textContent = pcts[i] + "%";
+  });
+
+  // 4) Raw logits
+  const lg = Array.isArray(d.logits) ? d.logits : [0, 0, 0];
+  ["left", "right", "none"].forEach((side, i) => {
+    const el = document.getElementById(`demo-logit-${side}`);
+    if (el) el.textContent = typeof lg[i] === "number" ? lg[i].toFixed(3) : "—";
+  });
+
+  // 5) Streamer panel
+  const str = data.streamer ?? {};
+  const gtHzEl = document.getElementById("demo-gt-hz");
+  const gtLblEl = document.getElementById("demo-gt-label");
+  const tgtIdxEl = document.getElementById("demo-target-idx");
+  const trialIdxEl = document.getElementById("demo-trial-idx");
+  const blockIdxEl = document.getElementById("demo-block-idx");
+  const cyclingEl = document.getElementById("demo-cycling-badge");
+
+  const hz = str.active_target_hz ?? 0;
+  if (gtHzEl) gtHzEl.textContent = hz > 0 ? `${hz} Hz` : "—";
+
+  // Map hz → LEFT/RIGHT/NONE using session's freq pair
+  let gtLabel = "NO SSVEP";
+  if (hz > 0) {
+    const leftHz = freq_left_hz ?? -1;
+    const rightHz = freq_right_hz ?? -1;
+    if (Math.abs(hz - leftHz) < 0.5) gtLabel = "LEFT";
+    else if (Math.abs(hz - rightHz) < 0.5) gtLabel = "RIGHT";
+    else gtLabel = `OTHER (${hz} Hz)`;
+  }
+  if (gtLblEl) gtLblEl.textContent = gtLabel;
+
+  if (tgtIdxEl)
+    tgtIdxEl.textContent =
+      str.active_target_idx >= 0 ? str.active_target_idx : "—";
+  if (trialIdxEl)
+    trialIdxEl.textContent =
+      str.active_trial_idx >= 0 ? str.active_trial_idx : "—";
+  if (blockIdxEl)
+    blockIdxEl.textContent = str.block_idx >= 0 ? str.block_idx : "—";
+  if (cyclingEl) cyclingEl.classList.toggle("hidden", !str.is_cycling);
+
+  // 6) Verdict
+  const verdictEl = document.getElementById("demo-verdict");
+  const verdictIcon = document.getElementById("demo-verdict-icon");
+  const verdictLabel = document.getElementById("demo-verdict-label");
+  const verdictSub = document.getElementById("demo-verdict-sub");
+
+  if (verdictEl)
+    verdictEl.classList.remove(
+      "verdict-correct",
+      "verdict-incorrect",
+      "verdict-unknown",
+    );
+
+  if (d.is_artifactual) {
+    if (verdictEl) verdictEl.classList.add("verdict-unknown");
+    if (verdictIcon) verdictIcon.textContent = "—";
+    if (verdictLabel) verdictLabel.textContent = "N/A";
+    if (verdictSub) verdictSub.textContent = "Artifact window";
+  } else {
+    // Map predicted_state (int) to direction string
+    const predDir =
+      d.predicted_state === 0
+        ? "LEFT"
+        : d.predicted_state === 1
+          ? "RIGHT"
+          : d.predicted_state === 2
+            ? "NONE"
+            : "UNKNOWN";
+
+    if (gtLabel === "LEFT" || gtLabel === "RIGHT" || gtLabel === "NO SSVEP") {
+      const gtDir = gtLabel === "NO SSVEP" ? "NONE" : gtLabel;
+      if (predDir === "UNKNOWN") {
+        if (verdictEl) verdictEl.classList.add("verdict-unknown");
+        if (verdictIcon) verdictIcon.textContent = "?";
+        if (verdictLabel) verdictLabel.textContent = "UNKNOWN";
+        if (verdictSub) verdictSub.textContent = `GT: ${gtDir}`;
+      } else if (predDir === gtDir) {
+        if (verdictEl) verdictEl.classList.add("verdict-correct");
+        if (verdictIcon) verdictIcon.textContent = "✓";
+        if (verdictLabel) verdictLabel.textContent = "CORRECT";
+        if (verdictSub) verdictSub.textContent = `${predDir} = ${gtDir}`;
+      } else {
+        if (verdictEl) verdictEl.classList.add("verdict-incorrect");
+        if (verdictIcon) verdictIcon.textContent = "✗";
+        if (verdictLabel) verdictLabel.textContent = "INCORRECT";
+        if (verdictSub)
+          verdictSub.textContent = `Got ${predDir}, expected ${gtDir}`;
+      }
+    } else {
+      if (verdictEl) verdictEl.classList.add("verdict-unknown");
+      if (verdictIcon) verdictIcon.textContent = "—";
+      if (verdictLabel) verdictLabel.textContent = "UNKNOWN";
+      if (verdictSub) verdictSub.textContent = "GT not determined";
+    }
+  }
+
+  // 7) Window counters
+  const winCount = document.getElementById("demo-win-count");
+  const artCount = document.getElementById("demo-art-count");
+  const actCount = document.getElementById("demo-act-count");
+  if (winCount) winCount.textContent = d.total_windows ?? 0;
+  if (artCount) artCount.textContent = d.artifactual_windows ?? 0;
+  if (actCount) actCount.textContent = d.actuation_count ?? 0;
+}
+
+// separate timer and polling function just for inference snapshots (demo/debug modes), independent of state poll
+function startInferenceSnapPolling() {
+  if (inferenceSnapInterval) return;
+  inferenceSnapInterval = setInterval(() => {
+    if (!InferenceSnapLoadInFlight && lastStateData)
+      fetchAndRenderInferenceSnap(lastStateData);
+  }, 100);
+}
+function stopInferenceSnapPolling() {
+  if (inferenceSnapInterval) {
+    clearInterval(inferenceSnapInterval);
+    if (elDemoSessionLabel)
+      elDemoSessionLabel.textContent = "Live inference · dataset stream";
+    inferenceSnapInterval = null;
+  }
+}
+
+// ================ 13) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
 // MAIN LOOP
 async function hardwareLoop() {
   // if user left hw mode, do nothing
@@ -2251,7 +2564,6 @@ function initHardwareCharts(nChannels, labels, fs, units) {
   }
 }
 
-// ============================== 13) HW HEALTH HELPERS ! =============================
 function pct(x) {
   if (x == null || Number.isNaN(x)) return "—";
   return (x * 100).toFixed(1) + "%";
@@ -2414,6 +2726,8 @@ async function sendSettingsAndSave() {
     stim_mode: stimModeToInt(modStr),
     waveform: waveformToInt(waveformStr),
     hparam: trainArch === 0 ? currentHparam : 0, // force off for SVM
+    demo_mode: currentDemoMode,
+    debug_mode: currentDebugMode,
     duration_active_s: Number(elDurActive?.value ?? 11), // otherwise default
     duration_none_s: Number(elDurNone?.value ?? 10),
     duration_rest_s: Number(elDurRest?.value ?? 8),
@@ -2632,6 +2946,50 @@ async function init() {
       popupAckInFlight = true;
       // If canceling overwrite, tell backend to clear popup + stay put
       sendSessionEvent("cancel_popup");
+    });
+  }
+
+  if (elDemoModeToggle) {
+    elDemoModeToggle.addEventListener("change", () => {
+      currentDemoMode = elDemoModeToggle.checked;
+      // Constraint: demo mode requires debug mode
+      if (currentDemoMode) {
+        currentDebugMode = true;
+        if (elOnnxOverlayToggle) elOnnxOverlayToggle.checked = true;
+        if (elOnnxOverlayStatusBadge) {
+          elOnnxOverlayStatusBadge.textContent = "ON";
+          elOnnxOverlayStatusBadge.classList.add("on");
+          elOnnxOverlayStatusBadge.classList.remove("off");
+        }
+      }
+      // Update demo badge
+      if (elDemoModeStatusBadge) {
+        elDemoModeStatusBadge.textContent = currentDemoMode ? "ON" : "OFF";
+        elDemoModeStatusBadge.classList.toggle("on", currentDemoMode);
+        elDemoModeStatusBadge.classList.toggle("off", !currentDemoMode);
+      }
+    });
+  }
+
+  if (elOnnxOverlayToggle) {
+    elOnnxOverlayToggle.addEventListener("change", () => {
+      currentDebugMode = elOnnxOverlayToggle.checked;
+      // Constraint: turning off debug mode must also turn off demo mode
+      if (!currentDebugMode && currentDemoMode) {
+        currentDemoMode = false;
+        if (elDemoModeToggle) elDemoModeToggle.checked = false;
+        if (elDemoModeStatusBadge) {
+          elDemoModeStatusBadge.textContent = "OFF";
+          elDemoModeStatusBadge.classList.remove("on");
+          elDemoModeStatusBadge.classList.add("off");
+        }
+      }
+      // Update debug badge
+      if (elOnnxOverlayStatusBadge) {
+        elOnnxOverlayStatusBadge.textContent = currentDebugMode ? "ON" : "OFF";
+        elOnnxOverlayStatusBadge.classList.toggle("on", currentDebugMode);
+        elOnnxOverlayStatusBadge.classList.toggle("off", !currentDebugMode);
+      }
     });
   }
 }

@@ -141,10 +141,19 @@ try {
             if (g_stop.load(std::memory_order_relaxed)) break; // handle stop predicate
 
             bool testmode = stateStoreRef.test_mode_arg;
+            bool still_requested = stateStoreRef.streaming_requested;
+            streaming_lock.unlock(); // RELEASE BEFORE CALLING INTO DRIVER
             // start streaming if we woke up from cv
-            if(!was_streaming){
+            if(!was_streaming && still_requested){
                 acqDemoDriver.unicorn_start_acq(testmode);
                 was_streaming = true;
+            }
+
+            // only publish from prod -> cons if we're currently streaming
+            if(stateStoreRef.streaming_requested) {
+                DemoStreamerSnapshot_s streamerSnap = acqDemoDriver.getStreamerSnapshot();
+                std::lock_guard<std::mutex> lk(stateStoreRef.mtx_demo_streamer_snapshot);
+                stateStoreRef.DemoStreamerSnapshot = streamerSnap;
             }
         }
 
@@ -1020,6 +1029,7 @@ try{
             bool demo_mode = stateStoreRef.settings.demo_mode.load(std::memory_order_acquire);
 #endif
             bool debug_mode = stateStoreRef.settings.debug_mode.load(std::memory_order_acquire);
+            ONNXInferenceSnapshot_s snap;
             if(windowPtr->isArtifactualWindow){
                 if(!run_mode_bad_window_timer.is_started()){
                     run_mode_bad_window_timer.start_timer(std::chrono::milliseconds{9000});
@@ -1034,6 +1044,7 @@ try{
                 last_win_prediction = SSVEP_Unknown;
                 ClassifyResult_s dummy_clf{};
                 log_run_classifier_window(stim_hz, true, false, dummy_clf, -1, SSVEP_Unknown, 0, false, SSVEP_Unknown);
+                snap.is_artifactual = true;
                 continue; // don't use this window
             } else {
                 // clean window
@@ -1096,7 +1107,6 @@ try{
             }
             // publish snapshot if debug mode 
             if(debug_mode){
-                ONNXInferenceSnapshot_s snap;
                 snap.logits              = { currResults.logits[0],
                                               currResults.logits[1],
                                               currResults.logits[2] };
@@ -1113,7 +1123,12 @@ try{
                 snap.actuation_count     = debug_actuation_count;
 #ifdef ACQ_BACKEND_FAKE
                 if (demo_mode){
-                    snap.streamerRef     = &acqDemoDriver.getStreamerSnapshot();
+                    DemoStreamerSnapshot_s streamerSnap;
+                    {
+                        std::lock_guard<std::mutex> lk(stateStoreRef.mtx_demo_streamer_snapshot);
+                        streamerSnap = stateStoreRef.DemoStreamerSnapshot;
+                    }
+                    snap.streamerRef = std::make_shared<DemoStreamerSnapshot_s>(streamerSnap);
                 }
 #endif
                 {
