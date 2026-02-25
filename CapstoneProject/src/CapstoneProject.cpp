@@ -29,12 +29,13 @@
 #include "utils/json.hpp"
 #include <unordered_set>
 
-#ifdef USE_EEG_FILTERS
+#ifdef USE_EEG_FILTERS 
 #include "utils/Filters.hpp"
 #endif
 
 #ifdef ACQ_BACKEND_FAKE
 #include "acq/FakeAcquisition.h"
+#include "acq/AcqStreamerFromDataset.h"
 #endif
 
 constexpr bool TEST_MODE = 0;
@@ -50,6 +51,8 @@ void handle_sigint(int) {
 void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStoreRef){
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
+    bool was_streaming = false; 
+
 try {
     LOG_ALWAYS("producer start");
 
@@ -64,6 +67,7 @@ try {
     // random artifacts, alpha and beta sources off for now
 
     FakeAcquisition_C acqDriver(fakeCfg);
+    AcqStreamerFromDataset_C acqDemoDriver(&stateStoreRef);
 
 #else
     LOG_ALWAYS("PATH=HARDWARE");
@@ -84,6 +88,11 @@ try {
         rb.close();
         return;
     };
+#ifdef ACQ_BACKEND_FAKE
+    if (acqDemoDriver.unicorn_init() == false){
+        LOG_ALWAYS("demo mode did not initialize successfully");
+    };
+#endif
 
     size_t tick_count = 0;
 
@@ -117,11 +126,49 @@ try {
         bufferChunk_S chunk{};
 
 #ifdef ACQ_BACKEND_FAKE
-	int currSimFreq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
-    acqDriver.setActiveStimulus(static_cast<double>(currSimFreq)); // if 0, backend won't produce sinusoid
-#endif
-        
+        bool isDemoModeOn = stateStoreRef.settings.demo_mode.load(std::memory_order_acquire);
+
+        // we want to start demo mode acq when user presses calib mode or run mode and demo is toggled on
+        // todo: all other buttons/controls should be greyed out
+        // todo: run mode toggled off until calib mode is ran
+        // if we're in demo mode & NOT streaming, block here until streaming turns on (or stop)
+        if (isDemoModeOn){    
+            std::unique_lock<std::mutex> streaming_lock(stateStoreRef.mtx_streaming_request);
+            stateStoreRef.streaming_request.wait(streaming_lock, [&]{
+                return g_stop.load(std::memory_order_relaxed) || stateStoreRef.streaming_requested;
+            });
+
+            if (g_stop.load(std::memory_order_relaxed)) break; // handle stop predicate
+
+            bool testmode = stateStoreRef.test_mode_arg;
+            bool still_requested = stateStoreRef.streaming_requested;
+            streaming_lock.unlock(); // RELEASE BEFORE CALLING INTO DRIVER
+            // start streaming if we woke up from cv
+            if(!was_streaming && still_requested){
+                acqDemoDriver.unicorn_start_acq(testmode);
+                was_streaming = true;
+            }
+
+            // only publish from prod -> cons if we're currently streaming
+            if(stateStoreRef.streaming_requested) {
+                DemoStreamerSnapshot_s streamerSnap = acqDemoDriver.getStreamerSnapshot();
+                std::lock_guard<std::mutex> lk(stateStoreRef.mtx_demo_streamer_snapshot);
+                stateStoreRef.DemoStreamerSnapshot = streamerSnap;
+            }
+        }
+
+	    int currSimFreq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+        acqDriver.setActiveStimulus(static_cast<double>(currSimFreq)); // if 0, backend won't produce sinusoid
+        if(isDemoModeOn){
+            acqDemoDriver.getData(NUM_SCANS_CHUNK, chunk.data.data());
+        } else {
+            // not demo mode
+            acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data());
+        }
+#else
         acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
+#endif
+
         tick_count++;
         chunk.tick = tick_count;
 
@@ -139,7 +186,27 @@ try {
             LOG_ALWAYS("RingBuffer closed while pushing; stopping producer");
             break;
         } 
+
+        // check if we've been asked to stop streaming
+#ifdef ACQ_BACKEND_FAKE
+        if(isDemoModeOn){
+            bool still_streaming = true;
+            {
+                // TODO: given we're doing it w/ this arch now -> do we still need to explicitly notify from stim controller for off requests??
+                std::lock_guard<std::mutex> lk(stateStoreRef.mtx_streaming_request);
+                still_streaming = stateStoreRef.streaming_requested;
+            }
+            if(!still_streaming){
+                // stop streaming
+                acqDemoDriver.unicorn_demo_stop_acq();
+                was_streaming = false;
+                continue; // loop back; next iteration will wait
+            }
+        }
+#endif
+        
     }
+
     // on thread shutdown, close queue to call release n unblock any consumer waiting for acquire
     LOG_ALWAYS("producer shutting down; stopping acquisition backend...");
     acqDriver.unicorn_stop_and_close();
@@ -177,6 +244,10 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     int num_windows_stable_prediction = 0;
     int num_windows_unknown = 0;
     int bad_win_from_onnx_ct = 0;
+    // debug/demo mode trackers
+    int debug_total_windows   = 0;
+    int debug_artifact_windows = 0;
+    int debug_actuation_count  = 0;
     // new window every 0.32s -> means we'll have 3s/0.32s = 9.375 windows necessary for 2s
     int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10; // req users to look at stimulus for min 3s
     int NUM_ALLOWED_WRONG_WINDOWS_BEFORE_DEBOUNCE_RESET = 3; // TODO
@@ -753,6 +824,14 @@ try{
         if(prevState == UIState_Active_Run && currState != UIState_Active_Run){
             run_mode_onnx_ready = false;
             run_log_opened = false; // redo logging each run sess
+
+            // also reset counters for debug mode
+            debug_actuation_count = 0;
+            debug_artifact_windows = 0;
+            debug_actuation_count = 0;
+            // reset snapshot
+            std::lock_guard<std::mutex> lock_demo(stateStoreRef.mtx_demo_inference);
+            stateStoreRef.OnnxInferenceSnapshot = ONNXInferenceSnapshot_s{};
         }
 
         // save this as prev state to check after window is built to make sure UI state hasn't changed in between
@@ -947,20 +1026,31 @@ try{
             int stim_hz = -1; // default for non-fake acq
 #ifdef ACQ_BACKEND_FAKE
             stim_hz = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+            bool demo_mode = stateStoreRef.settings.demo_mode.load(std::memory_order_acquire);
 #endif
+            bool debug_mode = stateStoreRef.settings.debug_mode.load(std::memory_order_acquire);
+            ONNXInferenceSnapshot_s snap;
             if(windowPtr->isArtifactualWindow){
                 if(!run_mode_bad_window_timer.is_started()){
                     run_mode_bad_window_timer.start_timer(std::chrono::milliseconds{9000});
                 }
                 run_mode_bad_window_count++;
+                if(debug_mode){
+                    debug_artifact_windows++;
+                    debug_total_windows++;
+                }
                 // reset counter for debounce (TODO: DECIDE IF WANT TO KEEP OR REMOVE FOR MORE AGGRESSIVENESS IN PRED)
                 num_windows_stable_prediction = 0; // reset
                 last_win_prediction = SSVEP_Unknown;
                 ClassifyResult_s dummy_clf{};
                 log_run_classifier_window(stim_hz, true, false, dummy_clf, -1, SSVEP_Unknown, 0, false, SSVEP_Unknown);
+                snap.is_artifactual = true;
                 continue; // don't use this window
             } else {
                 // clean window
+                if (debug_mode) {
+                    debug_total_windows++;
+                }
                 if(run_mode_bad_window_timer.is_started()){
                     // add to within-timer clean window count for comparison
                     run_mode_clean_window_count++;
@@ -1004,6 +1094,9 @@ try{
                         stateStoreRef.actuation_requested = true;
                         stateStoreRef.actuation_direction = curr_win_prediction;
                         stateStoreRef.actuation_request.notify_one(); // notify actuator thread
+                        if(debug_mode){
+                            debug_actuation_count++; 
+                        }
                         // reset num_windows_stable_prediction
                         num_windows_stable_prediction = 0;
                     }
@@ -1011,7 +1104,38 @@ try{
                 
                 log_run_classifier_window(stim_hz, false, true, currResults, window_class, curr_win_prediction, 
                                    num_windows_stable_prediction, actuation_fired, act_dir);
-            } 
+            }
+            // publish snapshot if debug mode 
+            if(debug_mode){
+                snap.logits              = { currResults.logits[0],
+                                              currResults.logits[1],
+                                              currResults.logits[2] };
+                snap.softmax             = { currResults.softmax[0],
+                                              currResults.softmax[1],
+                                              currResults.softmax[2] };
+                snap.final_class         = window_class;
+                snap.predicted_state     = static_cast<int>(curr_win_prediction);
+                snap.is_artifactual      = false; // not artifactual if we made it here
+                snap.stable_count        = num_windows_stable_prediction;
+                snap.stable_target       = NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION;
+                snap.total_windows       = debug_total_windows;
+                snap.artifactual_windows = debug_artifact_windows;
+                snap.actuation_count     = debug_actuation_count;
+#ifdef ACQ_BACKEND_FAKE
+                if (demo_mode){
+                    DemoStreamerSnapshot_s streamerSnap;
+                    {
+                        std::lock_guard<std::mutex> lk(stateStoreRef.mtx_demo_streamer_snapshot);
+                        streamerSnap = stateStoreRef.DemoStreamerSnapshot;
+                    }
+                    snap.streamerRef = std::make_shared<DemoStreamerSnapshot_s>(streamerSnap);
+                }
+#endif
+                {
+                    std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                    stateStoreRef.OnnxInferenceSnapshot = snap;
+                }
+            }
         }
 	}
     // exiting due to producer exiting means we need to close window rb

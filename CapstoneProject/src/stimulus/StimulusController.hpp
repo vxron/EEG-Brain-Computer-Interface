@@ -70,6 +70,8 @@ private:
     int checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int desiredTestFreq);
     static bool has_divisor_6_to_20(int n);
 
+    bool sim_demo_mode_ = false; // toggle to use backend dataset instead of unicorn headset
+
 #ifdef ACQ_BACKEND_FAKE
     void fakeAcq_buildSeqAndShuffle();
     void fakeAcq_advanceToNextSSVEP();

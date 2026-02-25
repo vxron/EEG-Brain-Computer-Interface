@@ -119,7 +119,8 @@ enum UIStateEvent_E {
 	UIStateEvent_UserSavesSettings, // 19
 	UIStateEvent_UserPushesPause, // 20
 	UIStateEvent_UserPushesResume, // 21
-	UIStateEvent_None, // 22
+	UIStateEvent_UserTogglesDemoMode, // 22
+	UIStateEvent_None, // 23
 };
 
 enum UIPopup_E {
@@ -428,6 +429,35 @@ struct ClassifyResult_s {
 	std::array<float,3> logits = {};  
 	std::array<float,3> softmax = {};
 	bool ran_inference = false; // false if verify_requirements failed
+};
+
+/* Data groups for demo & debug modes */
+// 1) Status snapshot from AcqStreamerDataset, to be displayed on UI in demo mode
+struct DemoStreamerSnapshot_s {
+	float active_target_hz = 0.0f;
+	int active_target_idx = -1;
+	int active_trial_idx = -1;
+	int block_idx = -1;
+	bool is_cycling = false; // true if we've looped the dataset deck
+};
+
+// 2) Full snapshot written by consumer after each ONNX classification, to be displayed on UI in debug mode
+struct ONNXInferenceSnapshot_s {
+	// ONNX outputs
+	std::array<float, 3> logits = {0,0,0};
+	std::array<float, 3> softmax = {0,0,0};
+	int final_class = -1; // 0=L, 1=R, 2=None, 3=Unknown
+	int predicted_state = 3; // SSVEPState_E int
+	// Debounce
+	int stable_count = 0;
+	int stable_target = 10; // default (will populate actual thresh from consumer)
+	// Window bookkeeping
+	bool is_artifactual = false;
+	int total_windows = 0;
+	int artifactual_windows = 0;
+	int actuation_count = 0;
+	// Streamer info (only if meaningful in demo mode)
+	std::shared_ptr<const DemoStreamerSnapshot_s> streamerRef = nullptr;
 };
 
 /* END STRUCTS */

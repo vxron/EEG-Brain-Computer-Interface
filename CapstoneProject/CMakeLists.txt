@@ -40,6 +40,7 @@ target_sources(CapstoneProject
       src/utils/Filters.hpp
       src/classifier/ONNXClassifier.hpp
       src/actuation/ServoDriver.h
+      src/acq/AcqStreamerFromDataset.h
 )
 
 # ==================== UI UNIT TESTS ==========================
@@ -73,6 +74,7 @@ if(USE_FAKE_ACQ)
   target_compile_definitions(CapstoneProject PRIVATE ACQ_BACKEND_FAKE)
   target_sources(CapstoneProject PRIVATE
     src/acq/FakeAcquisition.cpp
+    src/acq/AcqStreamerFromDataset.cpp
   )
 
 else()

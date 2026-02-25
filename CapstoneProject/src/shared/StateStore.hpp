@@ -43,11 +43,29 @@ struct StateStore_s{
     std::string train_fail_msg = ""; // used as final train fail msg
     std::vector<TrainingIssue_s> train_fail_issues{};
 
-    // ==================== Training Protocol Info (Used during CALIB ONLY) ========================================
+    // ==================== Training Protocol Info & Fake Acq ========================================
     std::atomic<int> g_block_id{0}; // block index in protocol
     std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None}; 
     std::atomic<int> g_freq_hz{0}; // ************USED FOR FAKE ACQ DURING RUN MODE
+    trainingProto_S training_proto; // ***********USED FOR FAKE ACQ STREAMER DURING CALIB
 
+    // ======================== For AcqStreamerFromDataset class (demo mode) =============================================
+    // cv from stim controller -> producer for notifying producer when its time to start calib/run mode dataset streaming
+    // i.e. producer will then call unicorn_start_acq w appropriate settings
+    std::mutex mtx_streaming_request;
+    std::condition_variable streaming_request;
+    bool streaming_requested = false;
+    bool test_mode_arg = 0; // 1 for calib, 0 for run
+    std::mutex mtx_streamer_freqs;
+    std::vector<int> acc_freqs_in_use_by_streamer;
+
+    // Reading demo/debug mode snapshots with mutex protection
+    std::mutex mtx_demo_inference;
+    ONNXInferenceSnapshot_s OnnxInferenceSnapshot{}; // Contains ref to DemoStreamerSnapshot_s if applicable 
+    // Demo streamer snapshot (producer writes, consumer reads)
+    std::mutex mtx_demo_streamer_snapshot;
+    DemoStreamerSnapshot_s DemoStreamerSnapshot{};
+    
     // ============ For displaying signal in real-time on UI (hardware checks page) ============
     std::atomic<bool> g_hasEegChunk{false};
     // custom types require mutex protection
@@ -215,6 +233,8 @@ struct StateStore_s{
         std::atomic<SettingStimMode_E> stim_mode{StimMode_Flicker};
         std::atomic<SettingWaveform_E> waveform{Waveform_Square};
         std::atomic<SettingHparam_E> hparam_setting{HPARAM_OFF};
+        std::atomic<bool> demo_mode{false}; // full demo mode
+        std::atomic<bool> debug_mode{false}; // show onnx overlay during runtime
         // frequency pool: up to 6 (fixed size array)
         // these are the defaults:
         std::array<TestFreq_E, 6> selected_freqs_e{
