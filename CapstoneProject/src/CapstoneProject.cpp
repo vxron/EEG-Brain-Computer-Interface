@@ -37,6 +37,8 @@
 #include "acq/FakeAcquisition.h"
 #endif
 
+#include "actuation/FakeActuation.hpp"
+
 constexpr bool TEST_MODE = 0;
 
 // Global "please stop" flag set by Ctrl+C (SIGINT) to shut down cleanly
@@ -1460,26 +1462,58 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
 }
 
 void actuation_controller_thread_fn(StateStore_s& stateStoreRef){
-    // TODO: turn their Python code into C++ here
     // implement cv to notify from consumer when ssvep signal is detected
-    // send torque commands as needed 
     // do this by implementing custom driver for servos that exposes api to turn one way or the other
     // ^^w guards
     // OR could call their python script directly w the appropriate 'turn_left' or 'turn_right' args...,
     // but this would introduce a lot of latency overheads & is def not optimal soln
-    ServoDriver_C ServoDriver;
+    ServoDriver_C ServoDriver("COM3", 9600);
+    if(!ServoDriver.isConnected()){
+        std::cerr << "[ActuationThread] Failed to connect to Arduino. Thread exiting.\n";
+        return;
+    }
 
     while(!g_stop.load(std::memory_order_acquire)){
         // (1) continuously wait for cv request from consumer thread -> then wake up
         std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request); // acquire lock momentarily
-        stateStoreRef.actuation_request.wait(actuation_lock, [&]{return stateStoreRef.actuation_requested;}); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
-        SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
+        stateStoreRef.actuation_request.wait(actuation_lock, [&]{
+            return stateStoreRef.actuation_requested
+            || g_stop.load(std::memory_order_acquire);
+        }); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
         
-        // (2) Implement requested_direction cycle using ServoDriver API
+        if(g_stop.load(std::memory_order_acquire)){
+            actuation_lock.unlock();
+            break;
+        }
 
-        // sleep (fixed rate frequency)
+        SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
+        stateStoreRef.actuation_requested = false; //reset
+        actuation_lock.unlock(); //unlock mutex before long operation of turning
+
+        // (2) Drop if Arduino is still busy
+        if(ServoDriver.isBusy()){
+            std::cout << "[ActuationThread] Arduino busy - command dropped ("
+                      << (requested_direction == SSVEPState_E::SSVEP_Left ? "LEFT" :
+                          requested_direction == SSVEPState_E::SSVEP_Right ? "RIGHT" : "UNKNOWN")
+                      << ")\n";
+            continue;
+        }
+        // (3) Send command, returns in microseconds
+        switch (requested_direction){
+            case SSVEPState_E::SSVEP_Left:
+                ServoDriver.flipForward();
+                break;
+            case SSVEPState_E::SSVEP_Right:
+                ServoDriver.flipBackward();
+                break;
+            case SSVEPState_E::SSVEP_Unknown:
+                break;
+        }
     }
-
+    // Shut down
+    if (ServoDriver.isConnected()){
+        ServoDriver.zeroPosition();
+    }
 }
 
 int main() {
@@ -1509,6 +1543,28 @@ int main() {
     std::thread train(training_manager_thread_fn, std::ref(stateStore));
     std::thread actuate(actuation_controller_thread_fn, std::ref(stateStore));
 
+    // Simulate a few fake left/right page turns
+    #include <random>
+    std::thread simulate([&stateStore](){
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<int> dist(0, 1); // 0 = LEFT, 1 = RIGHT
+
+        while(!g_stop.load(std::memory_order_acquire)){
+            std::this_thread::sleep_for(std::chrono::seconds(2 + dist(gen))); // 2–3s random
+
+            SSVEPState_E random_direction = dist(gen) == 0 ? SSVEPState_E::SSVEP_Left
+                                                        : SSVEPState_E::SSVEP_Right;
+
+            {
+                std::lock_guard<std::mutex> lock(stateStore.mtx_actuation_request);
+                stateStore.actuation_requested = true;
+                stateStore.actuation_direction = random_direction;
+            }
+            stateStore.actuation_request.notify_one();
+        }
+    });
+
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
     while(g_stop.load(std::memory_order_acquire) == 0){
         std::this_thread::sleep_for(std::chrono::milliseconds{30});
@@ -1529,5 +1585,6 @@ int main() {
     stim.join();
     train.join();
     actuate.join();
+    simulate.join();
     return 0; 
 }
