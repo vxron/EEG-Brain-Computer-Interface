@@ -1290,6 +1290,7 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
         std::unordered_set<std::string> seen;
         std::vector<TrainingIssue_s> issues{};
         try {
+            std::cout << "Path to training results: " << path_to_train_res << std::endl;
             JSON::read_file_to_string(path_to_train_res, body);
             JSON::extract_json_int(body,    "best_freq_left_hz",   best_freq_left_hz);
             JSON::extract_json_int(body,    "best_freq_right_hz",  best_freq_right_hz);
@@ -1543,27 +1544,27 @@ int main() {
     std::thread train(training_manager_thread_fn, std::ref(stateStore));
     std::thread actuate(actuation_controller_thread_fn, std::ref(stateStore));
 
-    // Simulate a few fake left/right page turns
-    #include <random>
-    std::thread simulate([&stateStore](){
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<int> dist(0, 1); // 0 = LEFT, 1 = RIGHT
+    // // Simulate a few fake left/right page turns
+    // #include <random>
+    // std::thread simulate([&stateStore](){
+    //     std::random_device rd;
+    //     std::mt19937 gen(rd());
+    //     std::uniform_int_distribution<int> dist(0, 1); // 0 = LEFT, 1 = RIGHT
 
-        while(!g_stop.load(std::memory_order_acquire)){
-            std::this_thread::sleep_for(std::chrono::seconds(2 + dist(gen))); // 2–3s random
+    //     while(!g_stop.load(std::memory_order_acquire)){
+    //         std::this_thread::sleep_for(std::chrono::seconds(2 + dist(gen))); // 2–3s random
 
-            SSVEPState_E random_direction = dist(gen) == 0 ? SSVEPState_E::SSVEP_Left
-                                                        : SSVEPState_E::SSVEP_Right;
+    //         SSVEPState_E random_direction = dist(gen) == 0 ? SSVEPState_E::SSVEP_Left
+    //                                                     : SSVEPState_E::SSVEP_Right;
 
-            {
-                std::lock_guard<std::mutex> lock(stateStore.mtx_actuation_request);
-                stateStore.actuation_requested = true;
-                stateStore.actuation_direction = random_direction;
-            }
-            stateStore.actuation_request.notify_one();
-        }
-    });
+    //         {
+    //             std::lock_guard<std::mutex> lock(stateStore.mtx_actuation_request);
+    //             stateStore.actuation_requested = true;
+    //             stateStore.actuation_direction = random_direction;
+    //         }
+    //         stateStore.actuation_request.notify_one();
+    //     }
+    // });
 
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
     while(g_stop.load(std::memory_order_acquire) == 0){
@@ -1585,6 +1586,6 @@ int main() {
     stim.join();
     train.join();
     actuate.join();
-    simulate.join();
+   // simulate.join();
     return 0; 
 }

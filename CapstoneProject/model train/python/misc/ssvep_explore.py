@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import welch
 
 # ===================== CONFIG =====================
-CSV_PATH = "eeg_windows_2.csv"   # change if needed
+CSV_PATH = r"C:\Users\abujazah\Documents\capstone\data\long_test\2026-03-18_10-56-13\eeg_test_long.csv"   # change if needed
 FS = 250.0                     # sampling rate
 EEG_CHANNELS = [f"eeg{i}" for i in range(1, 9)]
 TARGET_FREQS = [10, 12]        # <-- put your SSVEP freqs here
