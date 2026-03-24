@@ -775,6 +775,8 @@ try{
     bool firstCalibWindowBuilt = false;
     bool firstRunWindowBuilt = false;
     bool* firstWinCheckPtr = &firstRunWindowBuilt;
+    bool actuation_lockout = false;
+    SSVEPState_E lockout_direction = SSVEP_Unknown; // direction that triggered lockout
 
     while(!g_stop.load(std::memory_order_relaxed)){
         // if currently actuating -> skip everything
@@ -829,6 +831,8 @@ try{
             debug_actuation_count = 0;
             debug_artifact_windows = 0;
             debug_actuation_count = 0;
+            actuation_lockout = false;       
+            lockout_direction = SSVEP_Unknown;
             // reset snapshot
             std::lock_guard<std::mutex> lock_demo(stateStoreRef.mtx_demo_inference);
             stateStoreRef.OnnxInferenceSnapshot = ONNXInferenceSnapshot_s{};
@@ -1057,6 +1061,19 @@ try{
                 }
                 currResults = ONNX_RT.classify_window(*windowPtr);
                 window_class = currResults.final_class;
+
+#ifdef ACQ_BACKEND_FAKE
+                // demo mode: model rarely predicts NONE because Tsinghua dataset has
+                // little REST data relative to real calibration.
+                // so we force it to NONE for demo only (override onnx prediction which would always be L/R due to excessive L/R data from dataset)
+                if(demo_mode){
+                    int curr_freq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+                    if(curr_freq == -1){
+                        window_class = 2;
+                    }
+                }
+#endif
+
                 if (window_class == -1) {
                     bad_win_from_onnx_ct++;
                 }
@@ -1088,18 +1105,28 @@ try{
                     // passed debounce
                     // request actuation if it's an actuating state
                     if(curr_win_prediction == SSVEP_Left || curr_win_prediction == SSVEP_Right){
-                        actuation_fired = true;
-                        act_dir = curr_win_prediction;
-                        std::lock_guard<std::mutex> lock_actuation(stateStoreRef.mtx_actuation_request);
-                        stateStoreRef.actuation_requested = true;
-                        stateStoreRef.actuation_direction = curr_win_prediction;
-                        stateStoreRef.actuation_request.notify_one(); // notify actuator thread
-                        if(debug_mode){
-                            debug_actuation_count++; 
+                        if(!actuation_lockout){
+                            actuation_fired = true;
+                            act_dir = curr_win_prediction;
+                            actuation_lockout = true;          // engage lockout
+                            lockout_direction = curr_win_prediction;
+                            std::lock_guard<std::mutex> lock_actuation(stateStoreRef.mtx_actuation_request);
+                            stateStoreRef.actuation_requested = true;
+                            stateStoreRef.actuation_direction = curr_win_prediction;
+                            stateStoreRef.actuation_request.notify_one(); // notify actuator thread
+                            if(debug_mode){
+                                debug_actuation_count++; 
+                            }
+                            // reset num_windows_stable_prediction
+                            num_windows_stable_prediction = 0;
                         }
-                        // reset num_windows_stable_prediction
-                        num_windows_stable_prediction = 0;
                     }
+                }
+
+                // release lockout when user looks away from the locked-out direction
+                if(actuation_lockout && curr_win_prediction != lockout_direction){
+                    actuation_lockout = false;
+                    lockout_direction = SSVEP_Unknown;
                 }
                 
                 log_run_classifier_window(stim_hz, false, true, currResults, window_class, curr_win_prediction, 
@@ -1584,27 +1611,60 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
 }
 
 void actuation_controller_thread_fn(StateStore_s& stateStoreRef){
-    // TODO: turn their Python code into C++ here
     // implement cv to notify from consumer when ssvep signal is detected
-    // send torque commands as needed 
     // do this by implementing custom driver for servos that exposes api to turn one way or the other
     // ^^w guards
     // OR could call their python script directly w the appropriate 'turn_left' or 'turn_right' args...,
     // but this would introduce a lot of latency overheads & is def not optimal soln
-    ServoDriver_C ServoDriver;
+    ServoDriver_C ServoDriver("COM3", 9600);
+    if(!ServoDriver.isConnected()){
+        std::cerr << "[ActuationThread] Failed to connect to Arduino. Thread exiting.\n";
+        return;
+    }
 
     while(!g_stop.load(std::memory_order_acquire)){
         // (1) continuously wait for cv request from consumer thread -> then wake up
         std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request); // acquire lock momentarily
-        stateStoreRef.actuation_request.wait(actuation_lock, [&]{return stateStoreRef.actuation_requested;}); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
-        SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
+        stateStoreRef.actuation_request.wait(actuation_lock, [&]{
+            return stateStoreRef.actuation_requested
+            || g_stop.load(std::memory_order_acquire);
+        }); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
         
-        // (2) Implement requested_direction cycle using ServoDriver API
+        if(g_stop.load(std::memory_order_acquire)){
+            actuation_lock.unlock();
+            break;
+        }
 
-        // sleep (fixed rate frequency)
+        SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
+        stateStoreRef.actuation_requested = false; //reset
+        actuation_lock.unlock(); //unlock mutex before long operation of turning
+
+        // (2) Drop if Arduino is still busy
+        if(ServoDriver.isBusy()){
+            std::cout << "[ActuationThread] Arduino busy - command dropped ("
+                      << (requested_direction == SSVEPState_E::SSVEP_Left ? "LEFT" :
+                          requested_direction == SSVEPState_E::SSVEP_Right ? "RIGHT" : "UNKNOWN")
+                      << ")\n";
+            continue;
+        }
+        // (3) Send command, returns in microseconds
+        switch (requested_direction){
+            case SSVEPState_E::SSVEP_Left:
+                ServoDriver.flipForward();
+                break;
+            case SSVEPState_E::SSVEP_Right:
+                ServoDriver.flipBackward();
+                break;
+            case SSVEPState_E::SSVEP_Unknown:
+                break;
+        }
     }
-
+    // Shut down
+    if (ServoDriver.isConnected()){
+        ServoDriver.zeroPosition();
+    }
 }
+
 
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");

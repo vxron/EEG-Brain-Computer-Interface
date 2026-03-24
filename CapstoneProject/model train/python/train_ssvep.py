@@ -1427,7 +1427,7 @@ def select_best_pair(
     pair_issues: list[utils.TrainIssue] = [] # error catching
     cand_freqs = shortlist_freqs(
         y_hz,
-        pick_top_k=6,
+        pick_top_k=5,
     )
     pairs = [(cand_freqs[i], cand_freqs[j]) for i in range(len(cand_freqs)) for j in range(i + 1, len(cand_freqs))]
     rejected_pairs = []

@@ -30,8 +30,8 @@ struct Trial_S{
 };
 
 // Leakage prevention
-inline const std::vector<int> CALIB_BLOCKS = {0, 1, 2, 3, 4};
-inline const std::vector<int> RUN_TEST_BLOCKS = {5};
+inline const std::vector<int> CALIB_BLOCKS = {0, 1, 2, 3};
+inline const std::vector<int> RUN_TEST_BLOCKS = {3, 4, 5};
 }
 
 

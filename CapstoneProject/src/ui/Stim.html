@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-13" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-14" />
   </head>
   <body>
     <div class="app-shell">
@@ -370,6 +370,25 @@
                   </div>
                 </div>
               </div>
+            </div>
+            <!-- ONNX prediction sparkle traces (debug_mode on, non-demo run mode) -->
+            <div id="act-trace-left" class="act-trace act-trace-left"></div>
+            <div id="act-trace-right" class="act-trace act-trace-right"></div>
+
+            <!-- Actuation debug flash (debug_mode on, non-demo run mode) -->
+            <div
+              id="actuation-debug-overlay"
+              class="demo-actuation-flash hidden"
+              style="
+                position: absolute;
+                top: 1.2rem;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 50;
+              "
+            >
+              <span class="daf-icon">⚡</span>
+              <span id="act-dbg-dir">ACTUATED LEFT</span>
             </div>
           </section>
 
@@ -1551,6 +1570,6 @@
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-21"></script>
+    <script src="Stim.js?v=20251119-22"></script>
   </body>
 </html>

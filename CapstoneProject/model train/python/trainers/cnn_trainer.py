@@ -59,9 +59,9 @@ def eval_pred_stats(model, loader, *, device) -> dict[str, Any]:
 @dataclass(frozen=True)
 class CNNTrainConfig:
     # Optimization & Convergence Stability
-    MAX_EPOCHS: int = 400            # number of epochs for final model training
-    MAX_EPOCHS_CV: int = 300         # number of epochs while running all the pairwise models for comparison
-    MAX_EPOCHS_HTUNING: int = 250    # number of epochs while running all the candidate grids for hparam tuning
+    MAX_EPOCHS: int = 300            # number of epochs for final model training
+    MAX_EPOCHS_CV: int = 100         # number of epochs while running all the pairwise models for comparison
+    MAX_EPOCHS_HTUNING: int = 200    # number of epochs while running all the candidate grids for hparam tuning
     batch_size: int = 18             # how many (mostly indep, non-overlapping due to batching strategy) training windows the CNN sees at once before updating its weights (1 optimizer step) -> keep batches small for overlapping EEG windows
     learning_rate: float = 1e-3      # magnitude of gradient descent steps. smaller batches require smaller LR. (1e-3 is adam optimizer default)
     weight_decay: float = 1e-5       # regularization constant in Adam that penalizes large model weights to reduce overfitting

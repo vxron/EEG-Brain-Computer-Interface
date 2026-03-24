@@ -238,7 +238,7 @@ struct StateStore_s{
         // frequency pool: up to 6 (fixed size array)
         // these are the defaults:
         std::array<TestFreq_E, 6> selected_freqs_e{
-            TestFreq_8_Hz, TestFreq_11_Hz, TestFreq_14_Hz,
+            TestFreq_9_Hz, TestFreq_14_Hz,
             TestFreq_17_Hz, TestFreq_20_Hz, TestFreq_None
         };
         // array mutation requires mtx protection

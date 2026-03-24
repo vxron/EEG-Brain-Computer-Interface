@@ -173,20 +173,20 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
                 stateStoreRef_->test_mode_arg = 0; // run mode
                 stateStoreRef_->streaming_request.notify_one(); // notifies producer
             }
-            else {
-                emulatedFreqsForFakeAcq_.push_back(-1); // -1 is no_ssvep
-                // grab current models' frequencies
-                {
-                    std::lock_guard<std::mutex> mtx_lock(stateStoreRef_->saved_sessions_mutex);
-                    int currIdx = stateStoreRef_->currentSessionIdx.load(std::memory_order_acquire);
-                    emulatedFreqsForFakeAcq_.push_back(stateStoreRef_->saved_sessions[currIdx].freq_left_hz);
-                    emulatedFreqsForFakeAcq_.push_back(stateStoreRef_->saved_sessions[currIdx].freq_right_hz);
-                }
-                // build sequence & startit
-                fakeAcq_buildSeqAndShuffle();
-                fakeAcq_advanceToNextSSVEP();
+
+            // always build freq sequence for run mode (demo or not)
+            emulatedFreqsForFakeAcq_.clear();
+            emulatedFreqsForFakeAcq_.push_back(-1); // -1 is no_ssvep
+            // grab current models' frequencies
+            {
+                std::lock_guard<std::mutex> mtx_lock(stateStoreRef_->saved_sessions_mutex);
+                int currIdx = stateStoreRef_->currentSessionIdx.load(std::memory_order_acquire);
+                emulatedFreqsForFakeAcq_.push_back(stateStoreRef_->saved_sessions[currIdx].freq_left_hz);
+                emulatedFreqsForFakeAcq_.push_back(stateStoreRef_->saved_sessions[currIdx].freq_right_hz);
             }
-           
+            // build sequence & startit
+            fakeAcq_buildSeqAndShuffle();
+            fakeAcq_advanceToNextSSVEP();
 #endif
             break;
         }
@@ -855,7 +855,6 @@ void StimulusController_C::runUIStateMachine(){
 #ifdef ACQ_BACKEND_FAKE
         if(state_ == UIState_Active_Run){
             if (fakeAcqRunModeTimer_.check_timer_expired()){
-                // move to next stim
                 fakeAcq_advanceToNextSSVEP();
             }
         }

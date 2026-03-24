@@ -228,7 +228,17 @@ const elDemoSessionLabel = document.getElementById("demo-session-label");
 let consumedDemoMode = false;
 let consumedDebugMode = false;
 let inferenceSnapInterval = null;
+let demoFirstDataReceived = false;
 let lastStateData = null; // needed for get/inference snap argument
+// DEBUG
+const elActTraceLeft = document.getElementById("act-trace-left");
+const elActTraceRight = document.getElementById("act-trace-right");
+// Actuation debug flash (non-demo run mode)
+const elActuationDebugOverlay = document.getElementById(
+  "actuation-debug-overlay",
+);
+const elActDbgDir = document.getElementById("act-dbg-dir");
+let actDbgLastActuationCount = undefined;
 
 let currIdx = 0;
 let prevIdx = 0;
@@ -398,6 +408,11 @@ function showTrainingOverlay(show) {
 // (5b) paused overlay helper
 function setPauseButtonVisible(visible) {
   if (!btnPause) return;
+  // In demo mode the pause button lives in the demo-header; keep original hidden
+  if (document.body.classList.contains("demo-run-active")) {
+    btnPause.classList.add("hidden");
+    return;
+  }
   btnPause.classList.toggle("hidden", !visible);
 }
 
@@ -949,6 +964,51 @@ function setHomeWelcomeVisible(visible) {
   });
 }
 
+// (13) DEMO MODE STUFF
+// (13a) ON ENTRY: track whether we've received first real inference payload (as dataset is loading)
+// so we can show skeleton loading ui while loading :)
+function setDemoPanelsLoading(isLoading) {
+  const panels = document.querySelectorAll("#view-demo-run .demo-panel");
+  panels.forEach((p) => p.classList.toggle("is-loading", isLoading));
+}
+// (13b) move header buttons in demo mode bcuz they don't fit how they usually would in run view
+function injectDemoHeaderButtons() {
+  const header = document.querySelector("#view-demo-run .demo-header");
+  if (!header || header.querySelector(".demo-header-actions")) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "demo-header-actions";
+
+  const pauseBtn = document.createElement("button");
+  pauseBtn.type = "button";
+  pauseBtn.className = "btn ghost btn-pause-demo";
+  pauseBtn.textContent = "Pause";
+  pauseBtn.addEventListener("click", () => sendSessionEvent("pause"));
+
+  const exitBtn = document.createElement("button");
+  exitBtn.type = "button";
+  exitBtn.className = "btn btn-exit-demo";
+  exitBtn.textContent = "Exit Session";
+  exitBtn.addEventListener("click", () => sendSessionEvent("exit"));
+
+  wrap.appendChild(pauseBtn);
+  wrap.appendChild(exitBtn);
+  header.appendChild(wrap);
+
+  // Tell CSS to hide the original fixed-position buttons
+  document.body.classList.add("demo-run-active");
+}
+
+// (13c) ON EXIT: reset everything & move buttons black in place
+function removeDemoHeaderButtons() {
+  const wrap = document.querySelector("#view-demo-run .demo-header-actions");
+  if (wrap) wrap.remove();
+  document.body.classList.remove("demo-run-active");
+  // Reset skeleton for next entry
+  demoFirstDataReceived = false;
+  setDemoPanelsLoading(false);
+}
+
 // ==================== 4) CONNECTION STATUS HELPER =====================
 // UI should show red/green based on C++ server connection status
 function setConnectionStatus(ok) {
@@ -1293,6 +1353,11 @@ function updateUiFromState(data) {
   if (prevStimState == 0 && stimState != 0) {
     stopInferenceSnapPolling();
     consumedDemoMode = false;
+    consumedDebugMode = false; // <-- add this
+    removeDemoHeaderButtons();
+    actDbgLastActuationCount = undefined;
+    if (elActTraceLeft) elActTraceLeft.innerHTML = "";
+    if (elActTraceRight) elActTraceRight.innerHTML = "";
   }
 
   const pauseVisible =
@@ -1393,15 +1458,31 @@ function updateUiFromState(data) {
             ? `${subj} · ${sess.slice(0, 16)}`
             : `${subj} · live dataset stream`;
         }
+        injectDemoHeaderButtons(); // make inline buttons (specific to demo mode)
+        demoFirstDataReceived = false; // reset skeleton flag
+        setDemoPanelsLoading(true); // show skeleton
         consumedDemoMode = true; // rising edge complete
       }
     } else {
-      stopInferenceSnapPolling();
+      const isDebugMode = data.settings.debug_mode === true;
+      if (elActTraceLeft)
+        elActTraceLeft.style.display = isDebugMode ? "" : "none";
+      if (elActTraceRight)
+        elActTraceRight.style.display = isDebugMode ? "" : "none";
+      if (!isDebugMode) stopInferenceSnapPolling();
       applyBodyMode({ fullscreen: true, targets: true, run: true });
       showView("active_run");
       const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
       const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
       startRunFlicker(runLeftHz, runRightHz);
+
+      if (elActuationDebugOverlay)
+        elActuationDebugOverlay.classList.toggle("hidden", !isDebugMode);
+      if (isDebugMode && !consumedDebugMode) {
+        // <-- changed from consumedDemoMode
+        startInferenceSnapPolling();
+        consumedDebugMode = true; // <-- changed from consumedDemoMode
+      }
     }
   } else if (stimState === 4 /* Saved Sessions */) {
     stopAllStimuli();
@@ -2122,6 +2203,7 @@ async function fetchAndRenderInferenceSnap(state) {
     const data = await res.json();
 
     updateDemoRunView(data, freq_left_hz, freq_right_hz);
+    updateActuationDebugOverlay(data);
   } catch (err) {
     console.log("GET /runtime_inference_snapshot error:", err);
   } finally {
@@ -2135,6 +2217,12 @@ async function fetchAndRenderInferenceSnap(state) {
 function updateDemoRunView(data, freq_left_hz, freq_right_hz) {
   const d = data.onnx_inference;
   if (!d) return;
+
+  // clear skeleton on first real payload
+  if (!demoFirstDataReceived && d.total_windows > 0) {
+    demoFirstDataReceived = true;
+    setDemoPanelsLoading(false);
+  }
 
   // 1) Prediction panel
   const predEl = document.getElementById("demo-pred-state");
@@ -2189,9 +2277,29 @@ function updateDemoRunView(data, freq_left_hz, freq_right_hz) {
   if (debounceBar) debounceBar.style.width = pct + "%";
   if (debounceFrac) debounceFrac.textContent = `${sc} / ${st}`;
 
+  // only show a climbing debounce for L/R predictions, not none/unkonwn bcuz backend doesn't use debounce for these (makes no sense)
+  const isActionablePred =
+    !d.is_artifactual && (d.predicted_state === 0 || d.predicted_state === 1);
+  if (isActionablePred) {
+    const pct = st > 0 ? Math.min(100, Math.round((sc / st) * 100)) : 0;
+    if (debounceBar) {
+      debounceBar.style.width = pct + "%";
+      debounceBar.classList.remove("is-none-pred");
+    }
+    if (debounceFrac) debounceFrac.textContent = `${sc} / ${st}`;
+  } else {
+    // NONE / UNKNOWN / artifact: reset bar to zero
+    if (debounceBar) {
+      debounceBar.style.width = "0%";
+      debounceBar.classList.add("is-none-pred");
+    }
+    if (debounceFrac) debounceFrac.textContent = `0 / ${st}`;
+  }
+
   // Actuation flash: show briefly when actuation_count increments
   if (actFlash) {
-    if (!actFlash._lastCount) actFlash._lastCount = 0;
+    // seed _lastcount from curr value so we flash on NEW actuations only, not stale ones from prev sessions
+    if (!actFlash._lastCount) actFlash._lastCount = d.actuation_count ?? 0;
     if (d.actuation_count > actFlash._lastCount) {
       actFlash._lastCount = d.actuation_count;
       actFlash.classList.remove("hidden");
@@ -2230,11 +2338,13 @@ function updateDemoRunView(data, freq_left_hz, freq_right_hz) {
   const cyclingEl = document.getElementById("demo-cycling-badge");
 
   const hz = str.active_target_hz ?? 0;
-  if (gtHzEl) gtHzEl.textContent = hz > 0 ? `${hz} Hz` : "—";
+  const targetIdx = str.active_target_idx ?? -1;
+  if (gtHzEl)
+    gtHzEl.textContent = targetIdx === -1 || hz <= 0 ? "—" : `${hz} Hz`;
 
   // Map hz → LEFT/RIGHT/NONE using session's freq pair
   let gtLabel = "NO SSVEP";
-  if (hz > 0) {
+  if (targetIdx !== -1 && hz > 0) {
     const leftHz = freq_left_hz ?? -1;
     const rightHz = freq_right_hz ?? -1;
     if (Math.abs(hz - leftHz) < 0.5) gtLabel = "LEFT";
@@ -2332,6 +2442,57 @@ function stopInferenceSnapPolling() {
     if (elDemoSessionLabel)
       elDemoSessionLabel.textContent = "Live inference · dataset stream";
     inferenceSnapInterval = null;
+  }
+  const actFlash = document.getElementById("demo-actuation-flash");
+  if (actFlash) actFlash._lastCount = undefined; // reset last count back to 0 for next session (since it's a monotonic counter in backend)
+  // reset skeleton for next entry
+  demoFirstDataReceived = false;
+  setDemoPanelsLoading(false);
+}
+
+function updateActuationDebugOverlay(data) {
+  const d = data.onnx_inference;
+  if (!d || !elActuationDebugOverlay) return;
+
+  // --- sparkle trace: fire a dot on every new L/R prediction window ---
+  if (
+    !d.is_artifactual &&
+    (d.predicted_state === 0 || d.predicted_state === 1)
+  ) {
+    const container =
+      d.predicted_state === 0 ? elActTraceLeft : elActTraceRight;
+    if (container) {
+      const dot = document.createElement("div");
+      dot.className = "act-trace-dot";
+      container.appendChild(dot);
+      // remove dot from DOM after animation completes to avoid unbounded growth
+      dot.addEventListener("animationend", () => dot.remove(), { once: true });
+    }
+  }
+
+  // --- actuation flash: rising edge on actuation_count only ---
+  if (actDbgLastActuationCount === undefined) {
+    actDbgLastActuationCount = d.actuation_count ?? 0;
+    return;
+  }
+
+  if ((d.actuation_count ?? 0) > actDbgLastActuationCount) {
+    actDbgLastActuationCount = d.actuation_count;
+
+    const isLeft = d.predicted_state === 0;
+    if (elActDbgDir)
+      elActDbgDir.textContent = isLeft ? "ACTUATED ←" : "ACTUATED →";
+
+    elActuationDebugOverlay.classList.remove("hidden");
+    elActuationDebugOverlay.style.animation = "none";
+    elActuationDebugOverlay.offsetHeight;
+    elActuationDebugOverlay.style.animation = "";
+
+    clearTimeout(elActuationDebugOverlay._timer);
+    elActuationDebugOverlay._timer = setTimeout(
+      () => elActuationDebugOverlay.classList.add("hidden"),
+      1200,
+    );
   }
 }
 

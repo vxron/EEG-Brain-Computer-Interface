@@ -374,7 +374,7 @@ void AcqStreamerFromDataset_C::find_closest_targets(std::vector<int>& desired_ta
 }
 
 int AcqStreamerFromDataset_C::map_freq_hz_to_target(double hz){
-    if(hz == -1){ return -1; }
+    if(hz <= 0){ return -1; }
     float currBestDiff = 10000;
     float currDiff = 0;
     int bestIdx = -1;

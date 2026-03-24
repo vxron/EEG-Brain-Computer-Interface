@@ -1188,6 +1188,62 @@ body:not(.fullscreen-mode) {
   }
 }
 
+/* ===== ONNX PREDICTION SPARKLE TRACE ===== */
+.act-trace {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 32px;
+  pointer-events: none;
+  z-index: 40;
+  display: flex;
+  flex-direction: column-reverse; /* newest dot at bottom */
+  align-items: center;
+  justify-content: flex-start;
+  padding: 12px 0;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.act-trace-left {
+  left: 10px;
+}
+.act-trace-right {
+  right: 10px;
+}
+
+.act-trace-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  animation: trace-dot-fade 1.8s ease-out forwards;
+}
+
+.act-trace-left .act-trace-dot {
+  background: #93c5fd;
+  box-shadow: 0 0 6px rgba(147, 197, 253, 0.55);
+}
+.act-trace-right .act-trace-dot {
+  background: #c4b5fd;
+  box-shadow: 0 0 6px rgba(196, 181, 253, 0.55);
+}
+
+@keyframes trace-dot-fade {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  40% {
+    opacity: 0.6;
+    transform: scale(0.85);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+
 /* HARDWARE CHECKS PAGE & PLOTTING */
 
 /* Container for the hardware view */
@@ -3114,6 +3170,21 @@ body:not(.fullscreen-mode) {
   transition: width 150ms ease;
 }
 
+.demo-debounce-bar.is-none-pred {
+  width: 0% !important;
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.2),
+    rgba(148, 163, 184, 0.35)
+  );
+  transition: width 200ms ease;
+}
+
+body.demo-run-active #btn-exit,
+body.demo-run-active #btn-pause {
+  display: none !important;
+}
+
 /* Actuation flash */
 .demo-actuation-flash {
   display: flex;
@@ -3426,6 +3497,110 @@ body:not(.fullscreen-mode) {
   border: 1px solid rgba(250, 204, 21, 0.22);
   flex: 0 0 auto;
   align-self: center;
+}
+
+@keyframes demo-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.demo-panel.is-loading {
+  position: relative;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Shimmer sweep — identical treatment to sessions page skeleton */
+.demo-panel.is-loading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(148, 163, 184, 0.07) 50%,
+    transparent 100%
+  );
+  animation: demo-shimmer 1.4s ease-in-out infinite;
+  z-index: 10;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* Fade + blur real content during skeleton state */
+.demo-panel.is-loading > * {
+  opacity: 0.06;
+  filter: blur(3px);
+  pointer-events: none;
+  transition:
+    opacity 400ms ease,
+    filter 400ms ease;
+}
+
+/* Smooth reveal when skeleton clears */
+.demo-panel:not(.is-loading) > * {
+  opacity: 1;
+  filter: none;
+  transition:
+    opacity 400ms ease,
+    filter 400ms ease;
+}
+
+/* Container that lives inside .demo-header */
+.demo-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.demo-header-actions .btn {
+  flex: 0 0 auto !important;
+  padding: 7px 16px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.demo-header-actions .btn-exit-demo {
+  background: linear-gradient(135deg, #f973b7, #8b5cf6);
+  border: none;
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  transition:
+    transform 0.12s ease,
+    filter 0.12s ease;
+}
+.demo-header-actions .btn-exit-demo:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.07);
+}
+
+.demo-header-actions .btn-pause-demo {
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: rgba(226, 232, 240, 0.95);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease;
+}
+.demo-header-actions .btn-pause-demo:hover {
+  transform: translateY(-1px);
+  border-color: rgba(99, 102, 241, 0.75);
+}
+
+/* Hide the original fixed-position Exit/Pause while demo is active */
+body.demo-run-active > #btn-exit,
+body.demo-run-active > #btn-pause {
+  display: none !important;
 }
 
 /* NoSSVEP / Neutral Runtime Mimic */
