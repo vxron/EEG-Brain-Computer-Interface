@@ -196,17 +196,6 @@ struct StateStore_s{
     // flag for when sessions have been loaded from disk at startup
     std::atomic<bool> g_sessions_loaded_from_disk{false};
 
-    // ======================== Actuation thread Sync ======================
-    // cv to notify thread when consumer makes non-neutral inference (either left or right ssvep)
-    std::mutex mtx_actuation_request;
-    std::condition_variable actuation_request;
-    bool actuation_requested = false;
-    SSVEPState_E actuation_direction = SSVEP_Unknown; // data that comes with req
-
-    // atomic to notify consumer when actuator is actuating (consumer should sleep during this brief period)
-    std::atomic<bool> g_is_currently_actuating{false}; // consumer should freeze during actuation
-    std::atomic<bool> g_consumer_ack_actuation_stop{true}; // force consumer to ack actuation stop (this gets set to false when actuating starts and must be set to true again by cons)
-
     // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success
     // conditional variable! 

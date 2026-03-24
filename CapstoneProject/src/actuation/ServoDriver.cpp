@@ -1,6 +1,7 @@
 #include "ServoDriver.h"
 #include <iostream> 
 #include <chrono>
+#include "../utils/Logger.hpp"
 
 // ---------- Constructor/Destructor ----------
 ServoDriver_C::ServoDriver_C(const std::string& portName, unsigned int baudRate){
@@ -9,14 +10,16 @@ ServoDriver_C::ServoDriver_C(const std::string& portName, unsigned int baudRate)
     log("MOCK MODE - no COM port opened. Commands logged, busy auto-clears.");
 #else 
     if (!openPort(portName, baudRate)){
-        throw std::runtime_error("[ServoDriver] Failed to open COM port: " + portName);
+        LOG_ALWAYS("ServoDriver: failed to open " << portName << ", running without servo");
+        // connected stays false, all sendChar calls will early-return
+        return;
     }
     log("Connected to "+portName+" @ "+std::to_string(baudRate)+"baud.");
 
     // start background reader thread
     stopReader.store(false);
     readerThread = std::thread(&ServoDriver_C::readerThreadFn, this);
-    log("Reader thread started.")
+    log("Reader thread started.");
 #endif
 }
 
@@ -42,10 +45,15 @@ void ServoDriver_C::log(const std::string& msg) const{
 }
 
 // ---------- Public Commands ----------
+// Each command sets the real estimate BEFORE calling sendChar,
+// so the timer starts with the right duration
+
 void ServoDriver_C::flipForward(){
     log("flipForward() -> 'F'");
 #ifdef MOCK_HARDWARE
     mockBusyUntil = Clock::now() + std::chrono::milliseconds(MOCK_BUSY_FLIP_FWD_MS);
+#else
+    realBusyEstimate_ms_ = REAL_BUSY_FLIP_FWD_MS;
 #endif
     sendChar('F');
 }
@@ -54,6 +62,8 @@ void ServoDriver_C::flipBackward(){
     log("flipBackward() -> 'B'");
 #ifdef MOCK_HARDWARE
     mockBusyUntil = Clock::now() + std::chrono::milliseconds(MOCK_BUSY_FLIP_BWD_MS);
+#else
+    realBusyEstimate_ms_ = REAL_BUSY_FLIP_BWD_MS;
 #endif
     sendChar('B');
 }
@@ -62,17 +72,20 @@ void ServoDriver_C::openClips(){
     log("openClips() -> 'O'");
 #ifdef MOCK_HARDWARE
     mockBusyUntil = Clock::now() + std::chrono::milliseconds(MOCK_BUSY_OPEN_CLIPS_MS);
+#else
+    realBusyEstimate_ms_ = REAL_BUSY_OPEN_CLIPS_MS;
 #endif
     sendChar('O');
 }
 
 void ServoDriver_C::zeroPosition(){
-        log("zeroPosition() -> 'C'");
+    log("zeroPosition() -> 'C'");
 #ifdef MOCK_HARDWARE
     mockBusyUntil = Clock::now() + std::chrono::milliseconds(MOCK_BUSY_ZERO_MS);
+#else
+    realBusyEstimate_ms_ = REAL_BUSY_ZERO_MS;
 #endif
     sendChar('C');
-
 }
 
 // ---------- States ----------
@@ -92,15 +105,14 @@ bool ServoDriver_C::isConnected() const{
 bool ServoDriver_C::sendChar(char cmd){
 #ifdef MOCK_HARDWARE
     std::cout << "[" << sd_timestamp() << "] [ServoDriver] [MOCK TX]" << cmd << "\n";
-    busy.store(true, std::memory_order_release);
     return true;
 #else
     std::lock_guard<std::mutex> lock(writeMutex); // grab the mutex
-    if(!connected.load() || hSerial == nullptr){  // if port isnt open, dont try to write 
+    if(!connected.load() || m_hSerial == nullptr){  // if port isnt open, dont try to write 
         log("sendChar called but port is not open.");
         return false;
     }
-    HANDLE h = static_cast<HANDLE>(hSerial);
+    HANDLE h = static_cast<HANDLE>(m_hSerial);
     DWORD bytesWritten = 0;
     // WriteFile is the Windows function that sends the byte down the COM port 
     //      Arguments:
@@ -114,7 +126,9 @@ bool ServoDriver_C::sendChar(char cmd){
         log(std::string("WriteFile failed for cmd '") + cmd + "'.");
         return false;
     }
-    busy.store(true, std::memory_order_release); // set to busy only after we confirm the send worked
+    // Send confirmed — start estimate timer and set busy
+    realBusyEstimateTimer_.start_timer(std::chrono::milliseconds{realBusyEstimate_ms_});
+    busy.store(true, std::memory_order_release);
     return true;
 #endif
 }
@@ -122,15 +136,15 @@ bool ServoDriver_C::sendChar(char cmd){
 // ---------- readerThreadFn (bg thread that reads serial for DONE) ----------
 void ServoDriver_C::readerThreadFn(){
 #ifdef MOCK_HARDWARE
-    return;
+    return; // no reader thread needed, isBusy() uses mockBusyUntil
 #else
     std::string lineBuffer;
     while (!stopReader.load(std::memory_order_acquire)){
-        if(!connected.load() || hSerial == nullptr){
+        if(!connected.load() || m_hSerial == nullptr){
             std::this_thread::sleep_for(std::chrono::milliseconds(10));        
             continue;
         }
-        HANDLE h = static_cast<HANDLE>(hSerial);
+        HANDLE h = static_cast<HANDLE>(m_hSerial);
         char byte = 0;
         DWORD bytesRead = 0;
         // ReadFile reads 1 byte from COM port into byte
@@ -158,7 +172,7 @@ void ServoDriver_C::readerThreadFn(){
             lineBuffer += byte;
         }
     }
-    log("Reader thread stopped.")
+    log("Reader thread stopped.");
 #endif
 }
 
@@ -204,7 +218,8 @@ bool ServoDriver_C::openPort(const std::string& portName, unsigned int baudRate)
     if (!SetCommTimeouts(h, &timeouts)) { CloseHandle(h); return false; }
  
     m_hSerial = static_cast<void*>(h);
-    m_connected.store(true);
+    connected.store(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // let Arduino boot
     return true;
 #endif
 }
@@ -214,9 +229,26 @@ void ServoDriver_C::closePort() {
     if (m_hSerial != nullptr) {
         CloseHandle(static_cast<HANDLE>(m_hSerial));
         m_hSerial = nullptr;
-        m_connected.store(false);
+        connected.store(false);
     }
 #endif
 }
 
+std::chrono::milliseconds ServoDriver_C::estimatedBusyRemaining() const {
+#ifdef MOCK_HARDWARE
+    auto now = Clock::now();
+    if(now >= mockBusyUntil) return std::chrono::milliseconds{0};
+    return std::chrono::duration_cast<std::chrono::milliseconds>(mockBusyUntil - now);
+#else
+    // If Arduino already sent DONE, busy is false
+    if(!busy.load(std::memory_order_acquire)) return std::chrono::milliseconds{0};
 
+    if(!realBusyEstimateTimer_.is_started()) return std::chrono::milliseconds{0};
+
+    // Remaining = estimate_ms - elapsed
+    auto elapsed = realBusyEstimateTimer_.get_timer_value_ms();
+    auto total   = std::chrono::milliseconds{realBusyEstimate_ms_};
+    if(elapsed >= total) return std::chrono::milliseconds{0};
+    return total - elapsed;
+#endif
+}

@@ -24,8 +24,11 @@
 #include <string>
 #include <atomic>
 #include <thread>
-
-#define MOCK_HARDWARE
+#include "../utils/SWTimer.hpp"
+#ifndef MOCK_HARDWARE
+  #define WIN32_LEAN_AND_MEAN   // strips rarely-used Windows headers, keeps compile fast
+  #include <windows.h>
+#endif
 
 // // Map motor IDs exposed by Servo API to enum so we can easily assign cmds to apropriate motor
 // enum MotorId_E {
@@ -79,6 +82,12 @@ public:
     bool isConnected() const; // True if COM port opened successfully
     bool isBusy() const; // True while Arduino is executing command
 
+    // Returns how long we expect the current command to still be running.
+    // Mock: exact (based on mockBusyUntil).
+    // Real: estimate based on per-command constant, counts down from send time.
+    //       Returns 0 once Arduino sends DONE (busy cleared) or estimate expires (from consumer sanity check).
+    std::chrono::milliseconds estimatedBusyRemaining() const;
+
 private:
  
     // Send one byte char, set busy flag
@@ -99,22 +108,30 @@ private:
     // background thread that watches for DONE from arduino
     std::thread readerThread;
     // protects WriteFile() so only one thread can write to serial port at a time
-    mutable std::mutex writeMutex;
+    std::mutex writeMutex;
 
     // handle pointer
     #ifndef MOCK_HARDWARE
         void* m_hSerial = nullptr;
     #endif
 
-    // FOR MOCK ACTUATION
-    // timeout estimation
+    // FOR MOCK ACTUATION, timeout estimation
     using Clock = std::chrono::steady_clock;
     using TimePoint = std::chrono::time_point<Clock>;
     TimePoint mockBusyUntil {};
-
-    static constexpr int MOCK_BUSY_FLIP_FWD_MS   = 5500;
-    static constexpr int MOCK_BUSY_FLIP_BWD_MS  = 6500;
+    static constexpr int MOCK_BUSY_FLIP_FWD_MS   = 3500;
+    static constexpr int MOCK_BUSY_FLIP_BWD_MS  = 3500;
     static constexpr int MOCK_BUSY_OPEN_CLIPS_MS =  500;
     static constexpr int MOCK_BUSY_ZERO_MS       = 1000;
 
+    // time estimates for handling actuator timeout
+    // conservative upper bounds (actual DONE should arrive earlier)
+    // consumer deadline will be these nums + a small buffer (~ms)
+    static constexpr int REAL_BUSY_FLIP_FWD_MS   = 7000; // TODO: measure once hardware is ready
+    static constexpr int REAL_BUSY_FLIP_BWD_MS   = 7000;
+    static constexpr int REAL_BUSY_OPEN_CLIPS_MS =  800;
+    static constexpr int REAL_BUSY_ZERO_MS       = 1500;
+    // Tracks estimated duration for current real-hardware command (started in sendChar(), expires at the estimate)
+    SW_Timer_C realBusyEstimateTimer_;
+    int realBusyEstimate_ms_ = 0; // set per command before starting timer
 };

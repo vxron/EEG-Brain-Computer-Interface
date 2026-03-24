@@ -249,12 +249,19 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     int debug_artifact_windows = 0;
     int debug_actuation_count  = 0;
     // new window every 0.32s -> means we'll have 3s/0.32s = 9.375 windows necessary for 2s
-    int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10; // req users to look at stimulus for min 3s
+    int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10;
     int NUM_ALLOWED_WRONG_WINDOWS_BEFORE_DEBOUNCE_RESET = 3; // TODO
     ClassifyResult_s currResults{};
     
     // single instance of onnx env
     ONNX_RT_C ONNX_RT;
+    // single instance of Servo Driver env
+    // Construct without throwing — just sets connected=false on failure
+    ServoDriver_C servoDriver("COM3", 9600);
+    bool servo_available = servoDriver.isConnected();
+    if(!servo_available){
+        LOG_ALWAYS("consumer: servo unavailable, actuation disabled");
+    }
 
     // actually don't require concurrent actuation... since it should occur right after consumer requests it, and consumer shouldn't do anything else while actuating
     // actually ACTUALLY haha we do want actuation on its own thread because we need to run it at a fixed frequency (control loop)
@@ -779,10 +786,6 @@ try{
     SSVEPState_E lockout_direction = SSVEP_Unknown; // direction that triggered lockout
 
     while(!g_stop.load(std::memory_order_relaxed)){
-        // if currently actuating -> skip everything
-        if(stateStoreRef.g_is_currently_actuating.load(std::memory_order_acquire)){
-            continue;
-        }
         
         // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============ 
         // check if we need to stop writing calib data and start training thread
@@ -971,11 +974,6 @@ try{
         }
         
         else if(currState == UIState_Active_Run){
-            // if actuation stop must be acked -> ack and reset all counters/preds to be safe
-            if(!stateStoreRef.g_consumer_ack_actuation_stop.load(std::memory_order_acquire)){
-                stateStoreRef.g_consumer_ack_actuation_stop.store(true, std::memory_order_release);
-                // resets
-            }
 
             // if we have a new sess, we need the onnx models to be reloaded
             // check our curr model path from statestore
@@ -1067,6 +1065,7 @@ try{
                 // little REST data relative to real calibration.
                 // so we force it to NONE for demo only (override onnx prediction which would always be L/R due to excessive L/R data from dataset)
                 if(demo_mode){
+                    NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 5; // let it move faster so we dont wait too long since we dont have that much data
                     int curr_freq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
                     if(curr_freq == -1){
                         window_class = 2;
@@ -1110,20 +1109,60 @@ try{
                             act_dir = curr_win_prediction;
                             actuation_lockout = true;          // engage lockout
                             lockout_direction = curr_win_prediction;
-                            std::lock_guard<std::mutex> lock_actuation(stateStoreRef.mtx_actuation_request);
-                            stateStoreRef.actuation_requested = true;
-                            stateStoreRef.actuation_direction = curr_win_prediction;
-                            stateStoreRef.actuation_request.notify_one(); // notify actuator thread
+                            
+                            // Perform actuation inline - consumer blocks here until done 
+                            // no windows need to be classified during actuation
+                            if(servo_available && !servoDriver.isBusy()){
+                                switch(curr_win_prediction){
+                                        case SSVEP_Left: servoDriver.flipForward(); break;
+                                        case SSVEP_Right: servoDriver.flipBackward(); break;
+                                        default: break;
+                                }
+                                // block until servo signals done
+                                // Deadline = estimate + 1s buffer (in case DONE arrives a bit late)
+                                auto est = servoDriver.estimatedBusyRemaining();
+                                auto actuation_deadline = std::chrono::steady_clock::now() + est + std::chrono::seconds{1};
+                                while(servoDriver.isBusy() && std::chrono::steady_clock::now() < actuation_deadline){
+                                    // publish actuation state to snapshot so UI can show countdown
+                                    if(debug_mode){
+                                        auto remaining_ms = servoDriver.estimatedBusyRemaining().count();
+                                        std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                                        stateStoreRef.OnnxInferenceSnapshot.is_actuating = true;
+                                        stateStoreRef.OnnxInferenceSnapshot.actuating_direction = static_cast<int>(act_dir);
+                                        stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 
+                                            std::max(0LL, remaining_ms);
+                                    }
+                                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+                                }
+
+                                // JUST ACTUATED :)
+                                // drain stale EEG that accumulated during actuation so we dont classify data from 3.5s ago as if it's current
+                                {
+                                    std::vector<bufferChunk_S> stale(rb.get_count()); //temp to drain into
+                                    rb.drain(stale.data());
+                                }
+
+                                // also reset the window meta stuff so we dont use prior stale windows as valid "prevs"
+                                num_windows_stable_prediction = 0;
+                                last_win_prediction = SSVEP_Unknown;
+                                windowPtr->stash_len = 0;
+
+                                if(debug_mode){
+                                    // clear actuation state
+                                    std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                                    stateStoreRef.OnnxInferenceSnapshot.is_actuating = false;
+                                    stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 0;
+                                }
+                            }
                             if(debug_mode){
                                 debug_actuation_count++; 
                             }
-                            // reset num_windows_stable_prediction
-                            num_windows_stable_prediction = 0;
                         }
+                        // Lockout releases only when prediction direction changes
                     }
                 }
 
-                // release lockout when user looks away from the locked-out direction
+                // release lockout when user looks away from the locked-out direction (prevents double triggering same direction page-turn without first looking away!!!)
                 if(actuation_lockout && curr_win_prediction != lockout_direction){
                     actuation_lockout = false;
                     lockout_direction = SSVEP_Unknown;
@@ -1610,61 +1649,6 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
     }
 }
 
-void actuation_controller_thread_fn(StateStore_s& stateStoreRef){
-    // implement cv to notify from consumer when ssvep signal is detected
-    // do this by implementing custom driver for servos that exposes api to turn one way or the other
-    // ^^w guards
-    // OR could call their python script directly w the appropriate 'turn_left' or 'turn_right' args...,
-    // but this would introduce a lot of latency overheads & is def not optimal soln
-    ServoDriver_C ServoDriver("COM3", 9600);
-    if(!ServoDriver.isConnected()){
-        std::cerr << "[ActuationThread] Failed to connect to Arduino. Thread exiting.\n";
-        return;
-    }
-
-    while(!g_stop.load(std::memory_order_acquire)){
-        // (1) continuously wait for cv request from consumer thread -> then wake up
-        std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request); // acquire lock momentarily
-        stateStoreRef.actuation_request.wait(actuation_lock, [&]{
-            return stateStoreRef.actuation_requested
-            || g_stop.load(std::memory_order_acquire);
-        }); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
-        
-        if(g_stop.load(std::memory_order_acquire)){
-            actuation_lock.unlock();
-            break;
-        }
-
-        SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
-        stateStoreRef.actuation_requested = false; //reset
-        actuation_lock.unlock(); //unlock mutex before long operation of turning
-
-        // (2) Drop if Arduino is still busy
-        if(ServoDriver.isBusy()){
-            std::cout << "[ActuationThread] Arduino busy - command dropped ("
-                      << (requested_direction == SSVEPState_E::SSVEP_Left ? "LEFT" :
-                          requested_direction == SSVEPState_E::SSVEP_Right ? "RIGHT" : "UNKNOWN")
-                      << ")\n";
-            continue;
-        }
-        // (3) Send command, returns in microseconds
-        switch (requested_direction){
-            case SSVEPState_E::SSVEP_Left:
-                ServoDriver.flipForward();
-                break;
-            case SSVEPState_E::SSVEP_Right:
-                ServoDriver.flipBackward();
-                break;
-            case SSVEPState_E::SSVEP_Unknown:
-                break;
-        }
-    }
-    // Shut down
-    if (ServoDriver.isConnected()){
-        ServoDriver.zeroPosition();
-    }
-}
-
 
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");
@@ -1691,7 +1675,6 @@ int main() {
     std::thread http(http_thread_fn, std::ref(server));
     std::thread stim(stimulus_thread_fn, std::ref(stateStore));
     std::thread train(training_manager_thread_fn, std::ref(stateStore));
-    std::thread actuate(actuation_controller_thread_fn, std::ref(stateStore));
 
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
     while(g_stop.load(std::memory_order_acquire) == 0){
@@ -1712,6 +1695,5 @@ int main() {
     http.join();
     stim.join();
     train.join();
-    actuate.join();
     return 0; 
 }

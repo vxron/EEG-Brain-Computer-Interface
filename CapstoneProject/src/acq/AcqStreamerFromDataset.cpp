@@ -531,6 +531,11 @@ void AcqStreamerFromDataset_C::build_run_schedule(const std::vector<int>& allowe
             stateStoreRef_->acc_freqs_in_use_by_streamer.push_back(target_freqs_[unique_targets[i]].freq_hz);
         }
     }
+
+    LOG_ALWAYS("RUN: run_target_left_idx_=" << run_target_left_idx_ 
+    << " (" << target_freqs_[run_target_left_idx_].freq_hz << "Hz)"
+    << " run_target_right_idx_=" << run_target_right_idx_
+    << " (" << target_freqs_[run_target_right_idx_].freq_hz << "Hz)");
     
 }
 

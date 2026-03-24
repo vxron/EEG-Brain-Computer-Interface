@@ -229,6 +229,8 @@ let consumedDemoMode = false;
 let consumedDebugMode = false;
 let inferenceSnapInterval = null;
 let demoFirstDataReceived = false;
+// Frequencies available in the Tsinghua SSVEP dataset (integer Hz only, indices 0-7)
+const TSINGHUA_VALID_HZ = new Set([8, 9, 10, 11, 12, 13, 14, 15]);
 let lastStateData = null; // needed for get/inference snap argument
 // DEBUG
 const elActTraceLeft = document.getElementById("act-trace-left");
@@ -239,6 +241,7 @@ const elActuationDebugOverlay = document.getElementById(
 );
 const elActDbgDir = document.getElementById("act-dbg-dir");
 let actDbgLastActuationCount = undefined;
+const actuatingBanner = document.getElementById("actuating-banner");
 
 let currIdx = 0;
 let prevIdx = 0;
@@ -505,6 +508,7 @@ function updateSettingsFromState(data) {
 
   updateFreqCounterUI();
   updateFreqCompatibilityIndicators();
+  updateTsinghuaFreqOverlay();
 
   settingsInitiallyUpdated = true; // rising edge
   if (elSettingsStatus) elSettingsStatus.textContent = "";
@@ -1358,6 +1362,7 @@ function updateUiFromState(data) {
     actDbgLastActuationCount = undefined;
     if (elActTraceLeft) elActTraceLeft.innerHTML = "";
     if (elActTraceRight) elActTraceRight.innerHTML = "";
+    if (actuatingBanner) actuatingBanner.classList.add("hidden");
   }
 
   const pauseVisible =
@@ -2454,7 +2459,42 @@ function updateActuationDebugOverlay(data) {
   const d = data.onnx_inference;
   if (!d || !elActuationDebugOverlay) return;
 
+  // --- actuation banner (debug + demo modes) ---
+  const isActuating = d.is_actuating === true;
+  const actDir = d.actuating_direction;
+  const msRemaining = d.actuation_busy_ms_remaining ?? 0;
+  const secRemaining = (msRemaining / 1000).toFixed(1);
+  const actuatingBanner = document.getElementById("actuating-banner");
+  if (actuatingBanner) {
+    if (isActuating) {
+      const dirLabel = actDir === 0 ? "← LEFT" : "→ RIGHT";
+      actuatingBanner.textContent = `Actuating ${dirLabel}  ·  ${secRemaining}s`;
+      actuatingBanner.classList.remove("hidden");
+    } else {
+      actuatingBanner.classList.add("hidden");
+    }
+  }
+
+  // --- run mode debug confidence strip ---
+  const rdcPanel = document.getElementById("run-debug-conf");
+  if (rdcPanel) {
+    const inDemoMode = lastStateData?.settings?.demo_mode === true;
+    const inDebugMode = lastStateData?.settings?.debug_mode === true;
+    const showRdc = inDebugMode && !inDemoMode;
+    rdcPanel.classList.toggle("hidden", !showRdc);
+    if (showRdc && Array.isArray(d.softmax)) {
+      ["left", "right", "none"].forEach((side, i) => {
+        const pct = Math.round((d.softmax[i] ?? 0) * 100);
+        const bar = document.getElementById(`rdc-bar-${side}`);
+        const lbl = document.getElementById(`rdc-pct-${side}`);
+        if (bar) bar.style.width = pct + "%";
+        if (lbl) lbl.textContent = pct + "%";
+      });
+    }
+  }
+
   // --- sparkle trace: fire a dot on every new L/R prediction window ---
+  // (only meaningful in non-demo debug mode — demo has no arrows to trace against)
   if (
     !d.is_artifactual &&
     (d.predicted_state === 0 || d.predicted_state === 1)
@@ -2465,7 +2505,6 @@ function updateActuationDebugOverlay(data) {
       const dot = document.createElement("div");
       dot.className = "act-trace-dot";
       container.appendChild(dot);
-      // remove dot from DOM after animation completes to avoid unbounded growth
       dot.addEventListener("animationend", () => dot.remove(), { once: true });
     }
   }
@@ -2494,6 +2533,29 @@ function updateActuationDebugOverlay(data) {
       1200,
     );
   }
+}
+
+// DATASET ONLY HAS CERTAIN FREQS SO WE SHOULDNT TRAIN OR TRY TO TRAIN EVEN ON ONES IT DOESNT HAVE (pointless hehe) -> so grey them out
+function updateTsinghuaFreqOverlay() {
+  if (!currentDemoMode) {
+    // remove any tsinghua overlays if demo mode is off
+    freqInputs.forEach((inp) => {
+      const checkbox = inp.closest(".freq-checkbox");
+      checkbox.classList.remove("freq-tsinghua-invalid");
+    });
+    return;
+  }
+  freqInputs.forEach((inp) => {
+    const hz = Number(inp.dataset.hz);
+    const checkbox = inp.closest(".freq-checkbox");
+    const isValid = TSINGHUA_VALID_HZ.has(hz);
+    checkbox.classList.toggle("freq-tsinghua-invalid", !isValid);
+    // uncheck invalid freqs if selected
+    if (!isValid && inp.checked) {
+      inp.checked = false;
+      updateFreqCounterUI();
+    }
+  });
 }
 
 // ================ 13) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
@@ -3129,6 +3191,7 @@ async function init() {
         elDemoModeStatusBadge.classList.toggle("on", currentDemoMode);
         elDemoModeStatusBadge.classList.toggle("off", !currentDemoMode);
       }
+      updateTsinghuaFreqOverlay();
     });
   }
 

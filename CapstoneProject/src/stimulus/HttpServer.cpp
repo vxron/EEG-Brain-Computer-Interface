@@ -753,6 +753,9 @@ void HttpServer_C::handle_get_runtime_inference_snapshot(const httplib::Request&
     itemA["actuation_count"] = snap.actuation_count;
     itemA["logits"]  = { snap.logits[0],  snap.logits[1],  snap.logits[2] };
     itemA["softmax"] = { snap.softmax[0], snap.softmax[1], snap.softmax[2] };
+    itemA["is_actuating"] = snap.is_actuating;
+    itemA["actuating_direction"] = snap.actuating_direction;
+    itemA["actuation_busy_ms_remaining"] = snap.actuation_busy_ms_remaining;
     j["onnx_inference"] = itemA;
 
     // nested streamer if applicable

@@ -360,6 +360,30 @@
                 </div>
               </div>
 
+              <div id="run-debug-conf" class="run-debug-conf hidden">
+                <div class="rdc-row">
+                  <span class="rdc-lbl">L</span>
+                  <div class="rdc-track">
+                    <div class="rdc-fill rdc-left" id="rdc-bar-left"></div>
+                  </div>
+                  <span class="rdc-pct" id="rdc-pct-left">—</span>
+                </div>
+                <div class="rdc-row">
+                  <span class="rdc-lbl">R</span>
+                  <div class="rdc-track">
+                    <div class="rdc-fill rdc-right" id="rdc-bar-right"></div>
+                  </div>
+                  <span class="rdc-pct" id="rdc-pct-right">—</span>
+                </div>
+                <div class="rdc-row">
+                  <span class="rdc-lbl">N</span>
+                  <div class="rdc-track">
+                    <div class="rdc-fill rdc-none" id="rdc-bar-none"></div>
+                  </div>
+                  <span class="rdc-pct" id="rdc-pct-none">—</span>
+                </div>
+              </div>
+
               <!-- RIGHT -->
               <div class="target-col">
                 <div class="target-action-label">Turn page forward</div>
@@ -1561,6 +1585,13 @@
           <h3>Event Log</h3>
           <div id="log" class="log-body"></div>
         </section>
+
+        <!-- ACTUATION BANNER (debug + demo modes) -->
+        <div
+          id="actuating-banner"
+          class="actuating-banner hidden"
+          aria-live="polite"
+        ></div>
       </main>
     </div>
 

@@ -87,6 +87,9 @@ else()
   target_include_directories(UnicornSelfTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
+  target_include_directories(CapstoneProject PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
   message(STATUS "Building with REAL Unicorn acquisition backend")
   target_compile_definitions(CapstoneProject PRIVATE ACQ_BACKEND_UNICORN)
   target_sources(CapstoneProject PRIVATE
@@ -152,5 +155,11 @@ if(NOT "${SKIP_TRAINING}" STREQUAL "")
   )
 else()
   target_compile_definitions(CapstoneProject PRIVATE SKIP_TRAINING=0)
+endif()
+
+# ======================= MOCK ACTUATION ===========================
+if(MOCK_SERVO)
+  message(STATUS "Building with MOCK servo hardware")
+  target_compile_definitions(CapstoneProject PRIVATE MOCK_HARDWARE)
 endif()
 

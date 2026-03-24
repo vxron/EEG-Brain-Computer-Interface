@@ -1896,6 +1896,29 @@ body:not(.fullscreen-mode) {
   color: rgba(250, 204, 21, 0.95);
 }
 
+/* In demo mode: grey out frequencies not in the Tsinghua dataset */
+.freq-checkbox.freq-tsinghua-invalid {
+  opacity: 0.28;
+  cursor: not-allowed;
+  pointer-events: none;
+  position: relative;
+}
+
+.freq-checkbox.freq-tsinghua-invalid::after {
+  content: "✕";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 0.65rem;
+  color: rgba(248, 113, 113, 0.7);
+}
+
+.freq-checkbox.freq-tsinghua-invalid:has(input:checked) {
+  border-color: rgba(30, 41, 59, 0.9);
+  background: rgba(15, 23, 42, 0.6);
+  box-shadow: none;
+}
+
 .freq-label {
   display: flex;
   flex-direction: column;
@@ -5086,4 +5109,136 @@ body.fullscreen-mode.targets-mode #view-neutral .targets-stage.triple {
 }
 #view-transition.hidden {
   display: none;
+}
+
+/* ACTUATION BANNER */
+.actuating-banner {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 18px;
+  border-radius: 999px;
+
+  font-size: 0.82rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+
+  color: rgba(253, 224, 71, 0.95);
+  background: rgba(2, 6, 23, 0.88);
+  border: 1px solid rgba(250, 204, 21, 0.45);
+  box-shadow:
+    0 0 0 4px rgba(250, 204, 21, 0.06),
+    0 14px 36px rgba(0, 0, 0, 0.55);
+
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
+  animation: actuating-banner-in 0.18s ease-out;
+  pointer-events: none;
+}
+
+.actuating-banner::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.95);
+  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.18);
+  flex: 0 0 auto;
+  animation: actuating-dot-pulse 0.6s ease-in-out infinite;
+}
+
+@keyframes actuating-banner-in {
+  from {
+    transform: translateX(-50%) translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes actuating-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.18);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 5px rgba(250, 204, 21, 0.05);
+  }
+}
+
+/*... and other random debug shit*/
+/* Run mode debug confidence overlay — center strip, debug only */
+.run-debug-conf {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;
+  min-width: 130px;
+  flex: 0 0 auto; /* don't stretch */
+  align-self: center;
+}
+
+.rdc-row {
+  display: grid;
+  grid-template-columns: 12px 1fr 32px;
+  align-items: center;
+  gap: 6px;
+}
+
+.rdc-lbl {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: rgba(148, 163, 184, 0.55);
+}
+
+.rdc-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.rdc-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 120ms ease;
+  width: 0%;
+}
+
+.rdc-left {
+  background: rgba(96, 165, 250, 0.8);
+}
+.rdc-right {
+  background: rgba(167, 139, 250, 0.8);
+}
+.rdc-none {
+  background: rgba(148, 163, 184, 0.4);
+}
+
+.rdc-pct {
+  font-size: 0.66rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: rgba(203, 213, 225, 0.75);
+  text-align: right;
 }

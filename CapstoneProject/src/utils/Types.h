@@ -455,9 +455,13 @@ struct ONNXInferenceSnapshot_s {
 	bool is_artifactual = false;
 	int total_windows = 0;
 	int artifactual_windows = 0;
-	int actuation_count = 0;
 	// Streamer info (only if meaningful in demo mode)
 	std::shared_ptr<const DemoStreamerSnapshot_s> streamerRef = nullptr;
+	// actuation info!!
+	int actuation_count = 0;
+	bool is_actuating = false;
+	int actuating_direction = -1;
+	int actuation_busy_ms_remaining = 0; // for UI countdown
 };
 
 /* END STRUCTS */
