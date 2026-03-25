@@ -15,11 +15,14 @@ ServoDriver_C::ServoDriver_C(const std::string& portName, unsigned int baudRate)
         return;
     }
     log("Connected to "+portName+" @ "+std::to_string(baudRate)+"baud.");
-
+    // In constructor, after openPort:
+    if (!handshakeOk_) {
+        log("WARN: running without confirmed handshake");
+    }
     // start background reader thread
     stopReader.store(false);
     readerThread = std::thread(&ServoDriver_C::readerThreadFn, this);
-    log("Reader thread started.");
+    log("Actuation reader thread started.");
 #endif
 }
 
@@ -206,22 +209,56 @@ bool ServoDriver_C::openPort(const std::string& portName, unsigned int baudRate)
  
     if (!SetCommState(h, &dcb)) { CloseHandle(h); return false; }
  
-    // Read timeout: return immediately if no data (reader thread polls at 1ms)
-    // Write timeout: 2 seconds
-    COMMTIMEOUTS timeouts             = {};
-    timeouts.ReadIntervalTimeout      = MAXDWORD;
-    timeouts.ReadTotalTimeoutConstant = 0;
-    timeouts.ReadTotalTimeoutMultiplier = 0;
-    timeouts.WriteTotalTimeoutConstant  = 2000;
-    timeouts.WriteTotalTimeoutMultiplier = 0;
- 
-    if (!SetCommTimeouts(h, &timeouts)) { CloseHandle(h); return false; }
- 
     m_hSerial = static_cast<void*>(h);
     connected.store(true);
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // let Arduino boot
+    // handshake phase; needs blocking reads
+    setBlockingTimeouts(true);
+    PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
+    std::this_thread::sleep_for(std::chrono::milliseconds{1500});
+    handshakeOk_ = waitForReady(std::chrono::milliseconds{6000});
+
+    // reader thread phase; needs non-blocking polls
+    setBlockingTimeouts(false);
+    if (!handshakeOk_) {
+        log("WARN: no READY from Arduino within 5s — port open but Arduino state unknown");
+    } else {
+        log("Handshake OK — Arduino confirmed ready");
+    }
     return true;
-#endif
+    #endif
+}
+
+bool ServoDriver_C::waitForReady(std::chrono::milliseconds timeout) {
+    auto deadline = Clock::now() + timeout;
+    std::string lineBuf;
+    HANDLE h = static_cast<HANDLE>(m_hSerial);
+    log("waitForReady: listening...");
+    while (Clock::now() < deadline) {
+        char byte = 0;
+        DWORD bytesRead = 0;
+        BOOL ok = ReadFile(h, &byte, 1, &bytesRead, nullptr);
+        if (!ok || bytesRead == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+            continue;
+        }
+        if (byte == '\n') {
+            if (!lineBuf.empty() && lineBuf.back() == '\r') lineBuf.pop_back();
+            log("Arduino says: [" + lineBuf + "]");
+            if (lineBuf == "READY") {
+                // send PING to break Arduino out of its loop
+                DWORD written = 0;
+                char ping = 'P';
+                WriteFile(h, &ping, 1, &written, nullptr);
+                log("Handshake complete.");
+                return true;
+            }
+            lineBuf.clear();
+        } else {
+            lineBuf += byte;
+        }
+    }
+    log("waitForReady: timed out");
+    return false;
 }
 
 void ServoDriver_C::closePort() {
@@ -251,4 +288,21 @@ std::chrono::milliseconds ServoDriver_C::estimatedBusyRemaining() const {
     if(elapsed >= total) return std::chrono::milliseconds{0};
     return total - elapsed;
 #endif
+}
+
+void ServoDriver_C::setBlockingTimeouts(bool blocking) {
+    HANDLE h = static_cast<HANDLE>(m_hSerial);
+    COMMTIMEOUTS t = {};
+    if (blocking) {
+        t.ReadIntervalTimeout         = 0;
+        t.ReadTotalTimeoutMultiplier  = 0;
+        t.ReadTotalTimeoutConstant    = 100;   // block up to 100ms per ReadFile
+        t.WriteTotalTimeoutConstant   = 2000;
+    } else {
+        t.ReadIntervalTimeout         = MAXDWORD; // return immediately if no data
+        t.ReadTotalTimeoutMultiplier  = 0;
+        t.ReadTotalTimeoutConstant    = 0;
+        t.WriteTotalTimeoutConstant   = 2000;
+    }
+    SetCommTimeouts(h, &t);
 }

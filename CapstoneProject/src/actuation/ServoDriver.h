@@ -134,4 +134,10 @@ private:
     // Tracks estimated duration for current real-hardware command (started in sendChar(), expires at the estimate)
     SW_Timer_C realBusyEstimateTimer_;
     int realBusyEstimate_ms_ = 0; // set per command before starting timer
+
+    bool waitForReady(std::chrono::milliseconds timeout);
+    void setBlockingTimeouts(bool blocking);
+
+    bool handshakeOk_ = false;
+
 };

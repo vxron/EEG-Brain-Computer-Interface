@@ -257,7 +257,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     ONNX_RT_C ONNX_RT;
     // single instance of Servo Driver env
     // Construct without throwing — just sets connected=false on failure
-    ServoDriver_C servoDriver("COM3", 9600);
+    ServoDriver_C servoDriver("COM13", 9600);
     bool servo_available = servoDriver.isConnected();
     if(!servo_available){
         LOG_ALWAYS("consumer: servo unavailable, actuation disabled");
@@ -1204,6 +1204,7 @@ try{
             }
         }
 	}
+    LOG_ALWAYS("consumer: exited main loop. g_stop=" << g_stop.load());
     // exiting due to producer exiting means we need to close window rb
     windowPtr->sliding_window.close();
     rb.close();

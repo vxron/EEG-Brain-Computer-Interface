@@ -1474,7 +1474,14 @@ function updateUiFromState(data) {
         elActTraceLeft.style.display = isDebugMode ? "" : "none";
       if (elActTraceRight)
         elActTraceRight.style.display = isDebugMode ? "" : "none";
-      if (!isDebugMode) stopInferenceSnapPolling();
+      // start/stop polling on edges only — same pattern as demo mode
+      if (isDebugMode && !consumedDebugMode) {
+        startInferenceSnapPolling();
+        consumedDebugMode = true;
+      } else if (!isDebugMode && consumedDebugMode) {
+        stopInferenceSnapPolling();
+        consumedDebugMode = false;
+      }
       applyBodyMode({ fullscreen: true, targets: true, run: true });
       showView("active_run");
       const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
@@ -1483,11 +1490,6 @@ function updateUiFromState(data) {
 
       if (elActuationDebugOverlay)
         elActuationDebugOverlay.classList.toggle("hidden", !isDebugMode);
-      if (isDebugMode && !consumedDebugMode) {
-        // <-- changed from consumedDemoMode
-        startInferenceSnapPolling();
-        consumedDebugMode = true; // <-- changed from consumedDemoMode
-      }
     }
   } else if (stimState === 4 /* Saved Sessions */) {
     stopAllStimuli();
