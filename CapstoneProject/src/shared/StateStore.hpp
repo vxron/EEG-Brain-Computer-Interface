@@ -11,6 +11,8 @@
     (...) and many more :,)
 */
 
+// TODO: integrate mech debug in UI
+
 struct StateStore_s{
 
     // =============== General info about active channels ==================

@@ -26,37 +26,76 @@
 #include <thread>
 #include "../utils/SWTimer.hpp"
 #ifndef MOCK_HARDWARE
-  #define WIN32_LEAN_AND_MEAN   // strips rarely-used Windows headers, keeps compile fast
+  #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
 #endif
 
-// // Map motor IDs exposed by Servo API to enum so we can easily assign cmds to apropriate motor
-// enum MotorId_E {
-//     CLIP_LEFT,
-//     CLIP_RIGHT,
-//     SLIDER,
-//     FLIPPER,
-//     // etc
-// };
+// ─── Arduino connection/health status ────────────────────────────────────────
+// Populated by ServoDriver's reader thread as STATUS: lines arrive from Arduino.
+// Read by UI/HTTP and consumer thread for diagnostics.
+//
+// Thread safety: all atomics are read/written lock-free.
+//                last_status_msg uses arduino_status_mtx.
+ 
+enum class ArduinoMode_E {
+    Unknown,
+    Idle,
+    Calibration,
+    Function
+};
 
-// Tracks what motion driver is currently doing
-// enum MotionState_E {
-//     IDLE,
-//     OPEN_CLIPS,
-//     CLOSE_CLIPS,
-//     SLIDER_FORWARD,
-//     SLIDER_BACK,
-//     FLIP_UP,
-//     FLIP_DOWN,
-//     COMPLETE //Motion finished
-// };
+struct ArduinoStatus_s {
+    // Connection lifecycle
+    std::atomic<bool> port_opened       {false}; // COM port opened by ServoDriver
+    std::atomic<bool> handshake_ok      {false}; // READY received + P sent + CONNECTED received
+    std::atomic<bool> connected         {false}; // same as handshake_ok but stays true across cmds
+    // Machine health 
+    std::atomic<bool> calibrated        {false}; // bookWidth > 0 on Arduino
+    std::atomic<int>  book_width        {0};      // last reported bookWidth
+    std::atomic<bool> estop_active      {false};
+    std::atomic<ArduinoMode_E> mode     {ArduinoMode_E::Unknown};
+ 
+    // Command tracking
+    std::atomic<int>  heartbeats_sent   {0};
+    std::atomic<int>  heartbeats_acked  {0};
+ 
+    using Clock = std::chrono::steady_clock;
+    // last time ANY byte arrived from Arduino (reader thread sets this)
+    std::atomic<long long> last_rx_ts_ms {0}; // ms since epoch, steady_clock
+ 
+    // Last human-readable status line
+    mutable std::mutex arduino_status_mtx;
+    std::string last_status_msg; // latest STATUS: line, or last non-DBG line
+ 
+    void set_last_status(const std::string& s) {
+        std::lock_guard<std::mutex> lk(arduino_status_mtx);
+        last_status_msg = s;
+    }
+    std::string get_last_status() const {
+        std::lock_guard<std::mutex> lk(arduino_status_mtx);
+        return last_status_msg;
+    }
+    
+    // PUBLIC HELPERS FOR ARDUINOSTATUS_S
+    // ms since last byte from Arduino (for heartbeat watchdog)
+    long long ms_since_last_rx() const {
+        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now().time_since_epoch()).count();
+        long long last = last_rx_ts_ms.load(std::memory_order_acquire);
+        if (last == 0) return -1; // never received anything
+        return now_ms - last;
+    }
+    static const char* mode_str(ArduinoMode_E m) {
+        switch(m) {
+            case ArduinoMode_E::Idle:        return "IDLE";
+            case ArduinoMode_E::Calibration: return "CALIB";
+            case ArduinoMode_E::Function:    return "FUNCTION";
+            default:                         return "UNKNOWN";
+        }
+    }
+};
 
-// struct TorqueCmd_S {
-//     float pending_torque_cmd_ = 0.0;
-//     float last_published_torque_cmd_ = 0.0;
-//     MotorId_E dest_motor;
-//     //.. anything that should be aggregated w the numerical cmd
-// };
+// ─── END Arduino connection/health status ────────────────────────────────────────
 
 class ServoDriver_C {
 public:
@@ -88,32 +127,42 @@ public:
     //       Returns 0 once Arduino sends DONE (busy cleared) or estimate expires (from consumer sanity check).
     std::chrono::milliseconds estimatedBusyRemaining() const;
 
+    // Live health/status (updated by reader thread!)
+    // *fields r atomic/mtx-protected for thread safety
+    ArduinoStatus_s arduinoStatus;
+
 private:
  
     // Send one byte char, set busy flag
     bool sendChar(char command);
-    // Background reader thread, watches serial port for DONE
+    
+    // Background reader threads to talk to arduino, watches serial port for DONE
     void readerThreadFn();
-
-    bool openPort(const std::string& portName, unsigned int baudRate);
-    void closePort();
-    void log(const std::string& msg) const;
-
-    // atomic so these bools can be read/written from multiple threads
-    // without a mutex
-    std::atomic<bool> connected  {false};
-    std::atomic<bool> busy       {false};
-    std::atomic<bool> stopReader {false};
-
-    // background thread that watches for DONE from arduino
-    std::thread readerThread;
+    void heartbeatThreadFn();
+    std::thread readerThread; // background thread that watches for DONE from arduino
+    std::thread heartbeatThread;
     // protects WriteFile() so only one thread can write to serial port at a time
     std::mutex writeMutex;
 
-    // handle pointer
-    #ifndef MOCK_HARDWARE
+    // Serial port lifecycle
+    bool openPort(const std::string& portName, unsigned int baudRate);
+    void closePort();
+    bool waitForReady(std::chrono::milliseconds timeout);
+    void setBlockingTimeouts(bool blocking);
+
+    void parseStatusLine(const std::string& line);
+    void log(const std::string& msg) const;
+
+    // Atomics across threads
+    std::atomic<bool> connected  {false};
+    std::atomic<bool> busy       {false};
+    std::atomic<bool> stopReader {false};
+    std::atomic<bool> stopHeartbeat {false};
+
+    // handle COM
+#ifndef MOCK_HARDWARE
         void* m_hSerial = nullptr;
-    #endif
+#endif
 
     // FOR MOCK ACTUATION, timeout estimation
     using Clock = std::chrono::steady_clock;
@@ -135,8 +184,10 @@ private:
     SW_Timer_C realBusyEstimateTimer_;
     int realBusyEstimate_ms_ = 0; // set per command before starting timer
 
-    bool waitForReady(std::chrono::milliseconds timeout);
-    void setBlockingTimeouts(bool blocking);
+    // HEARTBEAT CONFIG
+    // Send 'H' every N ms; warn if no reply for > TIMEOUT ms
+    static constexpr int HEARTBEAT_INTERVAL_MS = 3000;  // 3s between pings
+    static constexpr int HEARTBEAT_TIMEOUT_MS  = 10000; // warn after 10s silence
 
     bool handshakeOk_ = false;
 

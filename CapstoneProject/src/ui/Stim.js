@@ -2516,6 +2516,12 @@ function updateActuationDebugOverlay(data) {
     actDbgLastActuationCount = d.actuation_count ?? 0;
     return;
   }
+  // green flash is redundant in non-demo debug — yellow banner handles it
+  const inDemoMode = lastStateData?.settings?.demo_mode === true;
+  if (!inDemoMode) {
+    actDbgLastActuationCount = d.actuation_count ?? actDbgLastActuationCount;
+    return;
+  }
 
   if ((d.actuation_count ?? 0) > actDbgLastActuationCount) {
     actDbgLastActuationCount = d.actuation_count;

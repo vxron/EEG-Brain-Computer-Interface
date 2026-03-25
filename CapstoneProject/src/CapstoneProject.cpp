@@ -1122,7 +1122,20 @@ try{
                                 // Deadline = estimate + 1s buffer (in case DONE arrives a bit late)
                                 auto est = servoDriver.estimatedBusyRemaining();
                                 auto actuation_deadline = std::chrono::steady_clock::now() + est + std::chrono::seconds{1};
-                                while(servoDriver.isBusy() && std::chrono::steady_clock::now() < actuation_deadline){
+                                while(servoDriver.isBusy() 
+                                    && std::chrono::steady_clock::now() < actuation_deadline 
+                                    && !g_stop.load(std::memory_order_relaxed)){ // TODO: consider exiting this loop when we exit outta run mode (wud need to updat stim controller for this to block exiting run  mode when actuating)
+                                    
+                                    // EXIT early if user left run mode mid-actuation
+                                    if(stateStoreRef.g_ui_state.load(std::memory_order_acquire) != UIState_Active_Run){
+                                        if(debug_mode){
+                                            std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                                            stateStoreRef.OnnxInferenceSnapshot.is_actuating = false;
+                                            stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 0;
+                                        }
+                                        break;
+                                    }
+                                    
                                     // publish actuation state to snapshot so UI can show countdown
                                     if(debug_mode){
                                         auto remaining_ms = servoDriver.estimatedBusyRemaining().count();
@@ -1136,7 +1149,10 @@ try{
                                 }
 
                                 // JUST ACTUATED :)
+                                // only do post-actuation cleanup if we're still in run mode.
+                                // if user exited mid-flip, the state transition at the top of the while loop will handle cleanup
                                 // drain stale EEG that accumulated during actuation so we dont classify data from 3.5s ago as if it's current
+                                if(stateStoreRef.g_ui_state.load(std::memory_order_acquire) == UIState_Active_Run)
                                 {
                                     std::vector<bufferChunk_S> stale(rb.get_count()); //temp to drain into
                                     rb.drain(stale.data());
