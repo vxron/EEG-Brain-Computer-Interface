@@ -414,6 +414,19 @@ function hideModal() {
   modalVisible = false;
 }
 
+function hideRunActuationFlash() {
+  if (!elActuationDebugOverlay) return;
+  elActuationDebugOverlay.classList.add("hidden");
+  elActuationDebugOverlay.style.animation = "none";
+  clearTimeout(elActuationDebugOverlay._timer);
+}
+
+function hideRunDebugConfidence() {
+  const rdcPanel = document.getElementById("run-debug-conf");
+  if (!rdcPanel) return;
+  rdcPanel.classList.add("hidden");
+}
+
 // (5a) pending training overlay helper
 function showTrainingOverlay(show) {
   if (!elTrainingOverlay) return;
@@ -1388,7 +1401,10 @@ function updateUiFromState(data) {
       clearInterval(hwSerialInterval);
       hwSerialInterval = null;
     }
+    hideRunDebugConfidence();
     if (elHwOverlay) elHwOverlay.style.display = "none";
+    if (elActuationDebugOverlay)
+      elActuationDebugOverlay.classList.add("hidden");
   }
 
   const pauseVisible =
@@ -1514,8 +1530,7 @@ function updateUiFromState(data) {
       const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
       startRunFlicker(runLeftHz, runRightHz);
 
-      if (elActuationDebugOverlay)
-        elActuationDebugOverlay.classList.toggle("hidden", !isDebugMode);
+      hideRunActuationFlash();
     }
   } else if (stimState === 4 /* Saved Sessions */) {
     stopAllStimuli();
@@ -2487,6 +2502,7 @@ function stopInferenceSnapPolling() {
   }
   const actFlash = document.getElementById("demo-actuation-flash");
   if (actFlash) actFlash._lastCount = undefined; // reset last count back to 0 for next session (since it's a monotonic counter in backend)
+  hideRunActuationFlash();
   // reset skeleton for next entry
   demoFirstDataReceived = false;
   setDemoPanelsLoading(false);
@@ -2514,9 +2530,10 @@ function updateActuationDebugOverlay(data) {
   // --- run mode debug confidence strip ---
   const rdcPanel = document.getElementById("run-debug-conf");
   if (rdcPanel) {
-    const inDemoMode = lastStateData?.settings?.demo_mode === true;
-    const inDebugMode = lastStateData?.settings?.debug_mode === true;
-    const showRdc = inDebugMode && !inDemoMode;
+    const inDemoMode = currentDemoMode === true;
+    const inDebugMode = currentDebugMode === true;
+    const showRdc =
+      inDebugMode && !inDemoMode && lastStateData?.stim_window === 0;
     rdcPanel.classList.toggle("hidden", !showRdc);
     if (showRdc && Array.isArray(d.softmax)) {
       ["left", "right", "none"].forEach((side, i) => {
@@ -2551,29 +2568,43 @@ function updateActuationDebugOverlay(data) {
     return;
   }
   // green flash is redundant in non-demo debug; yellow banner handles it
-  const inDemoMode = lastStateData?.settings?.demo_mode === true;
+  const inDemoMode = currentDemoMode === true;
+
   if (!inDemoMode) {
-    actDbgLastActuationCount = d.actuation_count ?? actDbgLastActuationCount;
+    if (elActuationDebugOverlay) {
+      elActuationDebugOverlay.classList.add("hidden");
+      elActuationDebugOverlay.style.animation = "none";
+      clearTimeout(elActuationDebugOverlay._timer);
+    }
+    actDbgLastActuationCount = d.actuation_count ?? 0;
+    return;
+  }
+
+  // restore animation capability when demo mode is actually allowed
+  elActuationDebugOverlay.style.animation = "";
+
+  if (actDbgLastActuationCount === undefined) {
+    actDbgLastActuationCount = d.actuation_count ?? 0;
     return;
   }
 
   if ((d.actuation_count ?? 0) > actDbgLastActuationCount) {
-    actDbgLastActuationCount = d.actuation_count;
+    actDbgLastActuationCount = d.actuation_count ?? 0;
 
     const isLeft = d.predicted_state === 0;
-    if (elActDbgDir)
+    if (elActDbgDir) {
       elActDbgDir.textContent = isLeft ? "ACTUATED ←" : "ACTUATED →";
+    }
 
     elActuationDebugOverlay.classList.remove("hidden");
     elActuationDebugOverlay.style.animation = "none";
-    elActuationDebugOverlay.offsetHeight;
+    void elActuationDebugOverlay.offsetHeight;
     elActuationDebugOverlay.style.animation = "";
 
     clearTimeout(elActuationDebugOverlay._timer);
-    elActuationDebugOverlay._timer = setTimeout(
-      () => elActuationDebugOverlay.classList.add("hidden"),
-      1200,
-    );
+    elActuationDebugOverlay._timer = setTimeout(() => {
+      elActuationDebugOverlay.classList.add("hidden");
+    }, 900);
   }
 }
 

@@ -791,21 +791,34 @@ bool StimulusController_C::has_divisor_6_to_20(int n) {
 void StimulusController_C::fakeAcq_buildSeqAndShuffle() {
     fakeAcqShuffledSeq_.clear();
 
-    // emulatedFreqsForFakeAcq_ = { -1(REST), leftHz, rightHz }
-    // gather all the freqs w appropriate reps
-    for(int i = 0; i<static_cast<int>(emulatedFreqsForFakeAcq_.size()); i++){
-        int hz = emulatedFreqsForFakeAcq_[i];
-        int reps = (hz == -1) ? FAKE_NO_SSVEP_REPS : FAKE_ACTIVE_REPS;
-        for(int r = 0; r < reps; r++){
-            fakeAcqShuffledSeq_.push_back(hz);
+    // Collect active freqs only (not -1/rest)
+    std::vector<int> activeFreqs;
+    for (int hz : emulatedFreqsForFakeAcq_) {
+        if (hz != -1) activeFreqs.push_back(hz);
+    }
+
+    // Build reps of each active freq
+    std::vector<int> activePool;
+    for (int hz : activeFreqs) {
+        for (int r = 0; r < FAKE_ACTIVE_REPS; r++) {
+            activePool.push_back(hz);
         }
     }
-    // Fisher-Yates shuffle
-    for(int i = static_cast<int>(fakeAcqShuffledSeq_.size() - 1); i>0; i--){
+
+    // Fisher-Yates shuffle the active pool
+    for (int i = static_cast<int>(activePool.size() - 1); i > 0; i--) {
         std::uniform_int_distribution<int> pick(0, i);
-        std::swap(fakeAcqShuffledSeq_[i], fakeAcqShuffledSeq_[pick(fakeAcqRng_)]);
+        std::swap(activePool[i], activePool[pick(fakeAcqRng_)]);
     }
-    // init idx
+
+    // Interleave: rest -> active -> rest -> active ...
+    // Always start and end with rest, always have rest between every active
+    fakeAcqShuffledSeq_.push_back(-1); // opening rest
+    for (int hz : activePool) {
+        fakeAcqShuffledSeq_.push_back(hz);
+        fakeAcqShuffledSeq_.push_back(-1); // rest after every active block
+    }
+
     fakeAcqSeqIdx_ = 0;
 }
 

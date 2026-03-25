@@ -235,6 +235,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     size_t run_mode_clean_window_count = 0;
     SW_Timer_C run_mode_bad_window_timer;
     SW_Timer_C reload_timer_guard;
+    SW_Timer_C actuation_cooldown_timer;
 
     // run mode pseudo state machine
     int window_class = -1;
@@ -252,6 +253,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10;
     int NUM_ALLOWED_WRONG_WINDOWS_BEFORE_DEBOUNCE_RESET = 3; // TODO
     ClassifyResult_s currResults{};
+    int ACTUATION_COOLDOWN_MS = 3000; // 3s cooldown after any actuation
     
     // single instance of onnx env
     ONNX_RT_C ONNX_RT;
@@ -905,6 +907,7 @@ try{
             debug_actuation_count = 0;
             actuation_lockout = false;       
             lockout_direction = SSVEP_Unknown;
+            actuation_cooldown_timer.stop_timer(); 
             // reset snapshot
             std::lock_guard<std::mutex> lock_demo(stateStoreRef.mtx_demo_inference);
             stateStoreRef.OnnxInferenceSnapshot = ONNXInferenceSnapshot_s{};
@@ -1177,6 +1180,13 @@ try{
                             actuation_fired = true;
                             act_dir = curr_win_prediction;
                             actuation_lockout = true;          // engage lockout
+#ifdef ACQ_BACKEND_FAKE
+                            // in demo mode -> dataset has limited trials so we need no cooldown
+                            if(demo_mode){
+                                ACTUATION_COOLDOWN_MS = 300;
+                            }
+#endif
+                            actuation_cooldown_timer.start_timer(std::chrono::milliseconds{ACTUATION_COOLDOWN_MS}); // start timer
                             lockout_direction = curr_win_prediction;
                             
                             // Perform actuation inline - consumer blocks here until done 
@@ -1184,8 +1194,8 @@ try{
                             // make sure its available first
                             if(servoDriver.isConnected() && !servoDriver.isBusy()){
                                 switch(curr_win_prediction){
-                                        case SSVEP_Left: servoDriver.flipForward(); break;
-                                        case SSVEP_Right: servoDriver.flipBackward(); break;
+                                        case SSVEP_Left: servoDriver.flipBackward(); break;
+                                        case SSVEP_Right: servoDriver.flipForward(); break;
                                         default: break;
                                 }
                                 // block until servo signals done
@@ -1247,23 +1257,15 @@ try{
                                 }
 
                                 // also reset the window meta stuff so we dont use prior stale windows as valid "prevs"
-                                LOG_ALWAYS("consumer: after drain, before reset num_windows_stable_prediction");
                                 num_windows_stable_prediction = 0;
-                                LOG_ALWAYS("consumer: after reset num_windows_stable_prediction, before reset last_win_prediction");
                                 last_win_prediction = SSVEP_Unknown;
-                                LOG_ALWAYS("consumer: after reset last_win_prediction, before windowPtr stash reset");
-                                LOG_ALWAYS("consumer: windowPtr=" << static_cast<const void*>(windowPtr));
                                 windowPtr->stash_len = 0;
-                                LOG_ALWAYS("consumer: after windowPtr stash reset, before debug snapshot clear");
                                 if(debug_mode){
                                     // clear actuation state
                                     std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
-                                    LOG_ALWAYS("consumer: debug snapshot lock acquired");
                                     stateStoreRef.OnnxInferenceSnapshot.is_actuating = false;
                                     stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 0;
-                                    LOG_ALWAYS("consumer: debug snapshot clear done");
                                 }
-                                LOG_ALWAYS("consumer: post-actuation cleanup fully complete");
                             }
                             if(debug_mode){
                                 debug_actuation_count++; 
@@ -1273,10 +1275,18 @@ try{
                     }
                 }
 
-                // release lockout when user looks away from the locked-out direction (prevents double triggering same direction page-turn without first looking away!!!)
-                if(actuation_lockout && curr_win_prediction != lockout_direction){
-                    actuation_lockout = false;
-                    lockout_direction = SSVEP_Unknown;
+                // Release lockout only after cooldown has elapsed AND prediction changed direction
+                // This prevents immediate re-actuation after a flip
+                if (actuation_lockout) {
+                    bool cooldown_done = actuation_cooldown_timer.is_started() && 
+                                         actuation_cooldown_timer.check_timer_expired();
+                    bool direction_changed = (curr_win_prediction != lockout_direction);
+
+                    if (cooldown_done && direction_changed) {
+                        actuation_lockout = false;
+                        lockout_direction = SSVEP_Unknown;
+                        actuation_cooldown_timer.stop_timer();
+                    }
                 }
                 
                 log_run_classifier_window(stim_hz, false, true, currResults, window_class, curr_win_prediction, 
