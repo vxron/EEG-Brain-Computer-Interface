@@ -1297,19 +1297,19 @@ def make_block_groups_within_trials_by_window_idx(
     key = list(zip(trial_ids.tolist(), yb.tolist(), block_bin.tolist()))
     groups = pd.factorize(key)[0].astype(np.int64) # array of group numbers
 
-    # (2) downsample REST group (because protocol is such that we likely we have way more rest examples, and we don't want imbalance)
-    # REST can be downsampled randomly rather than by trial, since all background frequency pairs are random anyways
-    # to minimize eventual size differences within rest groups & maximize training diversity, we structurally select REST examples from one group at a time
-    
+    # (2) try to achieve class balance, w a BIT more for rest
     rest_group_to_indices: dict[int, np.ndarray] = {} # dictionary mapping rest group (g) -> rest indices [x1,x2..]
-    
-    REST_RATIO = 1.1 # amount of rest examples relative to max(a,b)
-    num_examples_a = (yb == 0).sum()
-    num_examples_b = (yb == 1).sum()
-    num_examples_rest = (yb == 2).sum()
-    rest_target = int(min(REST_RATIO*max(num_examples_a,num_examples_b), num_examples_rest))
-    if(rest_target >= num_examples_rest):
-        return groups, np.ones(len(yb), dtype = bool)
+    num_examples_a = int((yb == 0).sum())
+    num_examples_b = int((yb == 1).sum())
+    num_examples_rest = int((yb == 2).sum())
+    # Target REST windows = average of the two SSVEP classes * 1.2
+    # This is adaptive: if fewer REST than SSVEP, keep all REST
+    # If have way more REST than SSVEP (typical in long sessions), trim to ~parity
+    avg_ssvep = (num_examples_a + num_examples_b) / 2.0
+    rest_target = int(min(avg_ssvep * 1.2, num_examples_rest))
+    # Always keep all REST if we have less than or equal to target (no downsampling needed)
+    if rest_target >= num_examples_rest:
+        return groups, np.ones(len(yb), dtype=bool)
     
     # Random shuffling
     rest_idx = np.where(yb == 2)[0].astype(np.int64) # get the array of idx elements
@@ -1427,7 +1427,7 @@ def select_best_pair(
     pair_issues: list[utils.TrainIssue] = [] # error catching
     cand_freqs = shortlist_freqs(
         y_hz,
-        pick_top_k=5,
+        pick_top_k=3,
     )
     pairs = [(cand_freqs[i], cand_freqs[j]) for i in range(len(cand_freqs)) for j in range(i + 1, len(cand_freqs))]
     rejected_pairs = []

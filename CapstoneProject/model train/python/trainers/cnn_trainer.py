@@ -59,8 +59,8 @@ def eval_pred_stats(model, loader, *, device) -> dict[str, Any]:
 @dataclass(frozen=True)
 class CNNTrainConfig:
     # Optimization & Convergence Stability
-    MAX_EPOCHS: int = 300            # number of epochs for final model training
-    MAX_EPOCHS_CV: int = 100         # number of epochs while running all the pairwise models for comparison
+    MAX_EPOCHS: int = 400            # number of epochs for final model training
+    MAX_EPOCHS_CV: int = 150         # number of epochs while running all the pairwise models for comparison
     MAX_EPOCHS_HTUNING: int = 200    # number of epochs while running all the candidate grids for hparam tuning
     batch_size: int = 18             # how many (mostly indep, non-overlapping due to batching strategy) training windows the CNN sees at once before updating its weights (1 optimizer step) -> keep batches small for overlapping EEG windows
     learning_rate: float = 1e-3      # magnitude of gradient descent steps. smaller batches require smaller LR. (1e-3 is adam optimizer default)
@@ -68,8 +68,8 @@ class CNNTrainConfig:
     seed: int = 0
 
     # Generalization Control
-    patience: int = 25               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
-    min_delta: float = 1e-3          # numerical change in loss func necessary to consider real improvement 
+    patience: int = 40               # Number of successive iterations we'll continue for when seeing no improvement [larger = less premature stopping but nore overfit risk]
+    min_delta: float = 1e-4          # numerical change in loss func necessary to consider real improvement 
 
     # Model Capacity & Sizing
     F1: int = 8                      # [temporal frequency detectors] number of output channels from the first layer (inputs to 2nd layer), aka: number of different temporal kernels ('weight matrices') generated
@@ -1476,12 +1476,16 @@ def run_training_to_convergence(model, train_loader, val_loader,
         stats = eval_pred_stats(model, val_loader, device=device)
         conf = stats["conf"]
         
-        if debug_heavy:
-            _log(
-                logger,
-                f"val_pred_count: pred0={stats['pred0']} pred1={stats['pred1']} pred2={stats['pred2']} | "
-                f"conf rows=true: "
-                f"t0={conf[0]} t1={conf[1]} t2={conf[2]}"
+        conf = np.array(stats["conf"])
+        recall_a    = conf[0][0] / max(1, int(conf[0].sum()))
+        recall_b    = conf[1][1] / max(1, int(conf[1].sum()))
+        recall_rest = conf[2][2] / max(1, int(conf[2].sum()))
+        improved = (best_val_loss - va_loss) > min_delta  # compute early so logging can use it
+        # Always log recall every 10 epochs or on improvement so REST collapse is visible
+        if debug_heavy or ep % 10 == 0 or improved:
+            _log(logger,
+                f"  recall: freq_a={recall_a:.2f} freq_b={recall_b:.2f} REST={recall_rest:.2f} | "
+                f"pred counts: c0={stats['pred0']} c1={stats['pred1']} c2={stats['pred2']}"
             )
 
         history.append({
@@ -1491,8 +1495,6 @@ def run_training_to_convergence(model, train_loader, val_loader,
             "val_loss": va_loss,
             "val_acc": va_acc,
         })
-
-        improved = (best_val_loss - va_loss) > min_delta
 
         if improved:
             best_val_loss = va_loss
@@ -1905,7 +1907,20 @@ def train_cnn_on_split(
         pooling_factor_final=int(cfg.pooling_factor_final),
         dropout=float(cfg.dropout), norm_mode=cfg.norm_mode
     ).to(device)
-    criterion = nn.CrossEntropyLoss()
+
+    # Class-weighted loss criterion instead of basic cross-entropy: compensates for any remaining class imbalance in batches
+    # Inverse-frequency weighting so each class contributes equally to the gradient
+    n0 = max(1, int((y_train == 0).sum()))
+    n1 = max(1, int((y_train == 1).sum()))
+    n2 = max(1, int((y_train == 2).sum()))
+    total = n0 + n1 + n2
+    w0 = total / (3.0 * n0)
+    w1 = total / (3.0 * n1)
+    w2 = total / (3.0 * n2)
+    class_weights = torch.tensor([w0, w1, w2], dtype=torch.float32).to(device)
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    _log(logger, f"[CRITERION] class weights: c0={w0:.3f} c1={w1:.3f} REST={w2:.3f} "
+                 f"(n0={n0} n1={n1} n2={n2})")
     optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg.learning_rate), weight_decay=float(cfg.weight_decay))
 
     run_training_to_convergence(
