@@ -1304,6 +1304,33 @@
                         </span>
                       </label>
                     </div>
+
+                    <div class="debug-divider"></div>
+
+                    <!-- Toggle 3: Show HW Actuation Debug -->
+                    <div class="debug-toggle-row">
+                      <div class="debug-toggle-info">
+                        <div class="debug-toggle-label">
+                          HW Actuation Debug
+                          <span
+                            id="hw-debug-status-badge"
+                            class="debug-status-badge off"
+                            >OFF</span
+                          >
+                        </div>
+                        <div class="debug-toggle-sub">
+                          Shows Arduino serial console and actuation status
+                          overlay during run mode.
+                        </div>
+                      </div>
+
+                      <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-hw-debug" />
+                        <span class="toggle-track">
+                          <span class="toggle-thumb"></span>
+                        </span>
+                      </label>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1592,6 +1619,42 @@
           class="actuating-banner hidden"
           aria-live="polite"
         ></div>
+
+        <!-- HW Actuation Debug Overlay — run mode only, toggle-gated -->
+        <div
+          id="hw-debug-overlay"
+          class="hw-debug-overlay"
+          style="display: none"
+        >
+          <div class="hw-status-strip">
+            <span
+              id="hw-badge-mock"
+              class="hw-badge hw-badge-mock"
+              style="display: none"
+              >MOCK</span
+            >
+            <span id="hw-badge-conn" class="hw-badge hw-badge-err"
+              >DISCONNECTED</span
+            >
+            <span id="hw-badge-calib" class="hw-badge hw-badge-warn"
+              >UNCALIBRATED</span
+            >
+            <span
+              id="hw-badge-estop"
+              class="hw-badge hw-badge-err"
+              style="display: none"
+              >E-STOP</span
+            >
+            <span id="hw-badge-mode" class="hw-badge hw-badge-mode">IDLE</span>
+            <span
+              id="hw-badge-action"
+              class="hw-badge hw-badge-action"
+              style="display: none"
+              >⟳ FLIPPING</span
+            >
+          </div>
+          <div id="hw-serial-log" class="hw-serial-log"></div>
+        </div>
       </main>
     </div>
 

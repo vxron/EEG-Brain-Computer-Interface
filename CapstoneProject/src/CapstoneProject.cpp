@@ -255,18 +255,16 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     
     // single instance of onnx env
     ONNX_RT_C ONNX_RT;
+    
     // single instance of Servo Driver env
-    // Construct without throwing — just sets connected=false on failure
-    ServoDriver_C servoDriver("COM13", 9600);
+    // sets connected=false on failure
+    ServoDriver_C servoDriver("COM13", 9600, &stateStoreRef);
     bool servo_available = servoDriver.isConnected();
     if(!servo_available){
-        LOG_ALWAYS("consumer: servo unavailable, actuation disabled");
+        LOG_ALWAYS("consumer: servo unavailable AT STARTUP, actuation disabled");
     }
-
-    // actually don't require concurrent actuation... since it should occur right after consumer requests it, and consumer shouldn't do anything else while actuating
-    // actually ACTUALLY haha we do want actuation on its own thread because we need to run it at a fixed frequency (control loop)
-    // TODO: EXCEPT if user presses button on UI that's "STOP IMMEDIATELY" -> then it should get interrupted immediately (torque cmd to zero)
-    // thus need to decide frequency at which controller is operating (sending out torque cmds) & that will be freq at which we poll atomic g_actuation_stop_requested from state store
+    bool servo_connected_prev = servoDriver.isConnected();
+    bool hw_disconnect_handled = !servo_connected_prev; // alr handled above if its alr disconn at startup...
 
 try{
     SignalQualityAnalyzer_C SignalQualityAnalyzer(&stateStoreRef);
@@ -774,6 +772,52 @@ try{
         LOG_ALWAYS("notify");
         stateStoreRef.cv_train_job_request.notify_one();
     };
+
+    // lambda to publish wtv the servo is storing in its arduinoStatus obj to the one in statestore bcuz we cant rlly raw copy w mutexes and atomics n shi 
+    auto publish_servo_status_to_state = [&]() {
+        stateStoreRef.arduinoStatus.port_opened.store(
+            servoDriver.arduinoStatus.port_opened.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.handshake_ok.store(
+            servoDriver.arduinoStatus.handshake_ok.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.connected.store(
+            servoDriver.arduinoStatus.connected.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.calibrated.store(
+            servoDriver.arduinoStatus.calibrated.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.book_width.store(
+            servoDriver.arduinoStatus.book_width.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.estop_active.store(
+            servoDriver.arduinoStatus.estop_active.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.mode.store(
+            servoDriver.arduinoStatus.mode.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.heartbeats_sent.store(
+            servoDriver.arduinoStatus.heartbeats_sent.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.heartbeats_acked.store(
+            servoDriver.arduinoStatus.heartbeats_acked.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.last_rx_ts_ms.store(
+            servoDriver.arduinoStatus.last_rx_ts_ms.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.set_last_status(
+            servoDriver.arduinoStatus.get_last_status());
+    };
     
     UIState_E currState  = UIState_None;
     UIState_E prevState = UIState_None;
@@ -786,7 +830,32 @@ try{
     SSVEPState_E lockout_direction = SSVEP_Unknown; // direction that triggered lockout
 
     while(!g_stop.load(std::memory_order_relaxed)){
+        // 0) publish current servo status to statstore & detect if disconnect & if its been handled
+        publish_servo_status_to_state();
+        // detect runtime disconnect edge
+        bool servo_connected_now = servoDriver.isConnected();
+        if (servo_connected_prev && !servo_connected_now && !hw_disconnect_handled) {
+            LOG_ALWAYS("Arduino disconnected during runtime; disabling actuation");
+            servo_available = false;
+            hw_disconnect_handled = false;
+        }
+        servo_connected_prev = servo_connected_now;
+        // handle disconnect once if its not handled yet
+        if(!hw_disconnect_handled && !servo_connected_now){
+            stateStoreRef.g_ui_popup.store(UIPopup_ArduinoDisconnected, std::memory_order_release);
+            UIState_E ui = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+            if (ui == UIState_Active_Run) {
+                stateStoreRef.g_ui_event.store(UIStateEvent_ArduinoDisconnected, std::memory_order_release);
+            }
         
+            {
+                std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                stateStoreRef.OnnxInferenceSnapshot.is_actuating = false;
+                stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 0;
+            }
+            hw_disconnect_handled = true;
+        }
+
         // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============ 
         // check if we need to stop writing calib data and start training thread
         handle_finalize_if_requested();
@@ -810,7 +879,7 @@ try{
         if(currState == UIState_NoSSVEP_Test && prevState != UIState_NoSSVEP_Test){
             window_calib.stash_len = 0; // flush stale stash
             std::vector<float> tmp(window_calib.winLen); // max amount we might need to drain is winLen
-            window_calib.sliding_window.drain(tmp.data()); // as well as any partial refill
+            window_calib.sliding_window.drain(tmp.data(), tmp.size()); // as well as any partial refill
             windowPtr = &window_calib;
             firstCalibWindowBuilt = false; // reset
             firstWinCheckPtr = &firstCalibWindowBuilt;
@@ -819,7 +888,7 @@ try{
         else if (currState == UIState_Pending_Training && prevState != UIState_Pending_Training){
             window_run.stash_len = 0; // flush stale stash
             std::vector<float> tmp(window_run.winLen);
-            window_run.sliding_window.drain(tmp.data()); // as well as any partial refill
+            window_run.sliding_window.drain(tmp.data(), tmp.size()); // as well as any partial refill
             windowPtr = &window_run;
             firstRunWindowBuilt = false; // reset
             firstWinCheckPtr = &firstRunWindowBuilt;
@@ -1112,7 +1181,8 @@ try{
                             
                             // Perform actuation inline - consumer blocks here until done 
                             // no windows need to be classified during actuation
-                            if(servo_available && !servoDriver.isBusy()){
+                            // make sure its available first
+                            if(servoDriver.isConnected() && !servoDriver.isBusy()){
                                 switch(curr_win_prediction){
                                         case SSVEP_Left: servoDriver.flipForward(); break;
                                         case SSVEP_Right: servoDriver.flipBackward(); break;
@@ -1123,6 +1193,7 @@ try{
                                 auto est = servoDriver.estimatedBusyRemaining();
                                 auto actuation_deadline = std::chrono::steady_clock::now() + est + std::chrono::seconds{1};
                                 while(servoDriver.isBusy() 
+                                    && servoDriver.isConnected() // make sure its still conn and we didnt lose it :,)
                                     && std::chrono::steady_clock::now() < actuation_deadline 
                                     && !g_stop.load(std::memory_order_relaxed)){ // TODO: consider exiting this loop when we exit outta run mode (wud need to updat stim controller for this to block exiting run  mode when actuating)
                                     
@@ -1147,6 +1218,15 @@ try{
                                     }
                                     std::this_thread::sleep_for(std::chrono::milliseconds{10});
                                 }
+                                LOG_ALWAYS("consumer: actuation wait loop ended; connected="
+                                    << servoDriver.isConnected()
+                                    << " busy=" << servoDriver.isBusy()
+                                    << " ui_state=" << (int)stateStoreRef.g_ui_state.load(std::memory_order_acquire));
+
+                                publish_servo_status_to_state(); // loop can take a while so lets recheck
+                                if (!servoDriver.isConnected()) {
+                                    LOG_ALWAYS("actuation loop interrupted because Arduino disconnected");
+                                }
 
                                 // JUST ACTUATED :)
                                 // only do post-actuation cleanup if we're still in run mode.
@@ -1154,21 +1234,36 @@ try{
                                 // drain stale EEG that accumulated during actuation so we dont classify data from 3.5s ago as if it's current
                                 if(stateStoreRef.g_ui_state.load(std::memory_order_acquire) == UIState_Active_Run)
                                 {
-                                    std::vector<bufferChunk_S> stale(rb.get_count()); //temp to drain into
-                                    rb.drain(stale.data());
+                                    const size_t stale_n = rb.get_count();
+                                    if (stale_n > 0) {
+                                        std::vector<bufferChunk_S> stale(stale_n);
+                                        // DETERMINISTIC DRAIN AMNT
+                                        const size_t drained = rb.drain(stale.data(), stale_n);
+                                        LOG_ALWAYS("post-actuation drain complete; requested=" << stale_n
+                                            << " drained=" << drained);
+                                    } else {
+                                        LOG_ALWAYS("post-actuation drain skipped (empty rb)");
+                                    }
                                 }
 
                                 // also reset the window meta stuff so we dont use prior stale windows as valid "prevs"
+                                LOG_ALWAYS("consumer: after drain, before reset num_windows_stable_prediction");
                                 num_windows_stable_prediction = 0;
+                                LOG_ALWAYS("consumer: after reset num_windows_stable_prediction, before reset last_win_prediction");
                                 last_win_prediction = SSVEP_Unknown;
+                                LOG_ALWAYS("consumer: after reset last_win_prediction, before windowPtr stash reset");
+                                LOG_ALWAYS("consumer: windowPtr=" << static_cast<const void*>(windowPtr));
                                 windowPtr->stash_len = 0;
-
+                                LOG_ALWAYS("consumer: after windowPtr stash reset, before debug snapshot clear");
                                 if(debug_mode){
                                     // clear actuation state
                                     std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                                    LOG_ALWAYS("consumer: debug snapshot lock acquired");
                                     stateStoreRef.OnnxInferenceSnapshot.is_actuating = false;
                                     stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 0;
+                                    LOG_ALWAYS("consumer: debug snapshot clear done");
                                 }
+                                LOG_ALWAYS("consumer: post-actuation cleanup fully complete");
                             }
                             if(debug_mode){
                                 debug_actuation_count++; 

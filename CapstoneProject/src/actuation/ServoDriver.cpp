@@ -3,6 +3,8 @@
 #include <chrono>
 #include "../utils/Logger.hpp"
 #include <sstream>
+#include <iomanip>
+#include <ctime>
 
 // ------------- Lil timestamp helper for status checking ------------
 static std::string sd_timestamp() {
@@ -21,14 +23,74 @@ void ServoDriver_C::log(const std::string& msg) const {
     LOG_ALWAYS("[ServoDriver][" << sd_timestamp() << "] " << msg);
 }
 
+void ServoDriver_C::emitLine(const std::string& line, bool fromArduino) {
+    // write to serial log in StateStore (both real and mock paths)
+    if (stateStoreRef_) {
+        auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::lock_guard<std::mutex> lk(stateStoreRef_->hw_serial_log_mtx);
+        stateStoreRef_->hw_serial_log.push_back({line, ts, fromArduino});
+        if (stateStoreRef_->hw_serial_log.size() > StateStore_s::HW_LOG_CAPACITY)
+            stateStoreRef_->hw_serial_log.pop_front();
+    }
+
+    if (!fromArduino) return; // TX lines just get logged, nothing else
+
+    // update last-rx timestamp
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        Clock::now().time_since_epoch()).count();
+    arduinoStatus.last_rx_ts_ms.store(now_ms, std::memory_order_release);
+
+    // same dispatch for both real and mock
+    if (line == "DONE") {
+        busy.store(false, std::memory_order_release);
+#ifdef MOCK_HARDWARE
+        mockBusy_.store(false, std::memory_order_release);
+#endif
+        log("DONE received");
+    } else if (line == "HB") {
+        arduinoStatus.heartbeats_acked.fetch_add(1, std::memory_order_relaxed);
+    } else if (line == "NOCALIB") {
+        busy.store(false, std::memory_order_release);
+#ifdef MOCK_HARDWARE
+        mockBusy_.store(false, std::memory_order_release);
+#endif
+        log("NOCALIB received");
+    } else if (line == "ESTOP") {
+        busy.store(false, std::memory_order_release);
+#ifdef MOCK_HARDWARE
+        mockBusy_.store(false, std::memory_order_release);
+#endif
+        arduinoStatus.estop_active.store(true);
+        log("ESTOP received");
+    } else if (line.rfind("STATUS:", 0) == 0) {
+        parseStatusLine(line.substr(7));
+    } else if (line.rfind("DBG:", 0) == 0) {
+        log("[Arduino DBG] " + line.substr(4));
+    } else {
+        log("[Arduino] " + line);
+    }
+}
+
 // ---------- Constructor/Destructor ----------
-ServoDriver_C::ServoDriver_C(const std::string& portName, unsigned int baudRate){
+ServoDriver_C::ServoDriver_C(const std::string& portName, unsigned int baudRate, StateStore_s* ss) : 
+    stateStoreRef_(ss) {
 #ifdef MOCK_HARDWARE
     arduinoStatus.port_opened.store(true);
-    arduinoStatus.handshake_ok.store(true);
-    arduinoStatus.connected.store(true);
     connected.store(true);
     log("MOCK MODE - no COM port opened. Commands logged, busy auto-clears.");
+    // Simulate Arduino boot sequence — exact same STATUS lines real firmware sends
+    emitLine("STATUS:BOOT",         true);
+    emitLine("READY",               true);
+    emitLine("STATUS:CONNECTED",    true);
+    arduinoStatus.handshake_ok.store(true);
+    arduinoStatus.connected.store(true);
+    emitLine("STATUS:CALIBRATED=0", true);
+    emitLine("STATUS:BOOKWIDTH=0",  true);
+    emitLine("STATUS:ESTOP=0",      true);
+    emitLine("STATUS:MODE=IDLE",    true);
+    // Auto-calibrate since there's no physical button in mock mode
+    mockThread_ = std::thread(&ServoDriver_C::mockRunCalibration, this);
 #else 
     log("Opening port " + portName + " @ " + std::to_string(baudRate) + " baud...");
     if (!openPort(portName, baudRate)){
@@ -60,6 +122,10 @@ ServoDriver_C::ServoDriver_C(const std::string& portName, unsigned int baudRate)
 
 ServoDriver_C::~ServoDriver_C() {
     log("Destructor stopping threads...");
+#ifdef MOCK_HARDWARE
+    mockStop_.store(true);
+    if (mockThread_.joinable()) mockThread_.join();
+#endif
     stopHeartbeat.store(true);
     stopReader.store(true);
     if (heartbeatThread.joinable()) heartbeatThread.join();
@@ -112,22 +178,54 @@ void ServoDriver_C::zeroPosition(){
 }
 
 // ---------- States ----------
-bool ServoDriver_C::isBusy() const{
+bool ServoDriver_C::isBusy() const {
 #ifdef MOCK_HARDWARE
-    return Clock::now() < mockBusyUntil; //busy until estimated timeout elapses
+    return mockBusy_.load(std::memory_order_acquire);
 #else
-    return busy.load(std::memory_order_acquire); // busy until reader thread clears flag on DONE
+    return busy.load(std::memory_order_acquire);
 #endif
 }
 
-bool ServoDriver_C::isConnected() const{
+bool ServoDriver_C::isConnected() const {
     return connected.load(std::memory_order_acquire);
+}
+
+std::chrono::milliseconds ServoDriver_C::estimatedBusyRemaining() const {
+#ifdef MOCK_HARDWARE
+    auto now = Clock::now();
+    if (now >= mockBusyUntil) return std::chrono::milliseconds{0};
+    return std::chrono::duration_cast<std::chrono::milliseconds>(mockBusyUntil - now);
+#else
+    if (!busy.load(std::memory_order_acquire))   return std::chrono::milliseconds{0};
+    if (!realBusyEstimateTimer_.is_started())    return std::chrono::milliseconds{0};
+    auto elapsed = realBusyEstimateTimer_.get_timer_value_ms();
+    auto total   = std::chrono::milliseconds{realBusyEstimate_ms_};
+    if (elapsed >= total) return std::chrono::milliseconds{0};
+    return total - elapsed;
+#endif
 }
 
 // ---------- sendChar (writes 1 byte, sets busy flag) ----------
 bool ServoDriver_C::sendChar(char cmd){
 #ifdef MOCK_HARDWARE
-    std::cout << "[" << sd_timestamp() << "] [ServoDriver] [MOCK TX]" << cmd << "\n";
+    emitLine(std::string("TX:'") + cmd + "'", false); // log the outgoing byte
+    mockBusy_.store(true, std::memory_order_release);
+    busy.store(true, std::memory_order_release);
+    if (mockThread_.joinable()) mockThread_.join();
+    if      (cmd == 'F' || cmd == 'f')
+        mockThread_ = std::thread(&ServoDriver_C::mockRunFlip, this, true);
+    else if (cmd == 'B' || cmd == 'b')
+        mockThread_ = std::thread(&ServoDriver_C::mockRunFlip, this, false);
+    // O and C don't need a thread — they just clear busy after the timeout
+    // (no STATUS protocol for clips/zero in Arduino firmware)
+    else {
+        // brief sleep then auto-clear, same as real firmware DONE
+        std::thread([this, cmd](){
+            std::this_thread::sleep_for(std::chrono::milliseconds{
+                cmd == 'O' ? MOCK_BUSY_OPEN_CLIPS_MS : MOCK_BUSY_ZERO_MS});
+            emitLine("DONE", true);
+        }).detach();
+    }
     return true;
 #else
     std::lock_guard<std::mutex> lock(writeMutex); // grab the mutex
@@ -159,7 +257,7 @@ bool ServoDriver_C::sendChar(char cmd){
 // ---------- readerThreadFn (bg thread that reads serial for DONE) ----------
 void ServoDriver_C::readerThreadFn(){
 #ifdef MOCK_HARDWARE
-    return; // no reader thread needed, isBusy() uses mockBusyUntil
+    return; // no reader thread needed, mock uses emitLine directly
 #else
     log("Reader thread running.");
     std::string lineBuffer;
@@ -185,49 +283,12 @@ void ServoDriver_C::readerThreadFn(){
         if(byte == '\n'){
             // Line complete, check if it's DONE
             // Arduino send "DONE\r\n" one char at a time, so collect chars into lineBuffer until we hit \n
-            // Since Arduino Serial.println sends \r\n, strip trailing \r if present
-            if(!lineBuffer.empty() && lineBuffer.back() == '\r'){
+            if (!lineBuffer.empty() && lineBuffer.back() == '\r')
                 lineBuffer.pop_back();
-            }
-            
             const std::string line = lineBuffer;
             lineBuffer.clear();
-            
             if (line.empty()) continue;
-            
-            if(line == "DONE"){
-                busy.store(false, std::memory_order_release);
-                log("ACK received - Arduino DONE. Ready for next command.");
-            }
-            
-            else if(line == "HB"){
-                arduinoStatus.heartbeats_acked.fetch_add(1, std::memory_order_relaxed);
-                // don't log every heartbeat at ALWAYS level
-                // but track the timestamp update (done above)
- 
-            } else if (line == "NOCALIB") {
-                // Arduino rejected command because bookWidth == 0
-                busy.store(false, std::memory_order_release); // unblock consumer
-                log("ERROR: Arduino NOCALIB — command rejected (bookWidth==0). "
-                    "Consumer unblocked. calibrated=" +
-                    std::string(arduinoStatus.calibrated.load() ? "true" : "false"));
- 
-            } else if (line == "ESTOP") {
-                busy.store(false, std::memory_order_release);
-                arduinoStatus.estop_active.store(true);
-                log("ERROR: Arduino ESTOP — command rejected, e-stop active. Consumer unblocked.");
- 
-            } else if (line.rfind("STATUS:", 0) == 0) {
-                parseStatusLine(line.substr(7));
- 
-            } else if (line.rfind("DBG:", 0) == 0) {
-                // Verbose Arduino debug line
-                log("[Arduino DBG] " + line.substr(4));
- 
-            } else {
-                // Any other line from Arduino (legacy prints etc.)
-                log("[Arduino] " + line);
-            }
+            emitLine(line, true); // this single call handles log + arduinoStatus + busy
         } else {
             lineBuffer += byte;
         }
@@ -236,93 +297,78 @@ void ServoDriver_C::readerThreadFn(){
 #endif
 }
 
-// PARSESTATUSLINE Called from readerThreadFn for every line starting with "STATUS:"
+// PARSESTATUSLINE Called from emitLine for both paths for every line starting with "STATUS:" from Arduino to monitor health
 void ServoDriver_C::parseStatusLine(const std::string& line) {
-    // line is the part AFTER "STATUS:"
     log("[Arduino STATUS] " + line);
     arduinoStatus.set_last_status(line);
- 
+
     if (line == "BOOT") {
-        // Arduino just reset; mark as not calibrated, mode unknown
+        connected.store(false, std::memory_order_release);
+        arduinoStatus.connected.store(false, std::memory_order_release);
+        arduinoStatus.handshake_ok.store(false, std::memory_order_release);
         arduinoStatus.calibrated.store(false);
         arduinoStatus.mode.store(ArduinoMode_E::Unknown);
         arduinoStatus.estop_active.store(false);
-        log("WARN: Arduino BOOT detected — it may have reset unexpectedly!");
- 
+        busy.store(false, std::memory_order_release);
+        log("WARN: Arduino BOOT detected!");
     } else if (line == "CONNECTED") {
-        arduinoStatus.handshake_ok.store(true);
-        arduinoStatus.connected.store(true);
-        log("Arduino confirmed connected.");
- 
+        connected.store(true, std::memory_order_release);
+        arduinoStatus.handshake_ok.store(true, std::memory_order_release);
+        arduinoStatus.connected.store(true, std::memory_order_release);
     } else if (line == "CALIB_START") {
         arduinoStatus.calibrated.store(false);
         arduinoStatus.mode.store(ArduinoMode_E::Calibration);
- 
     } else if (line.rfind("CALIB_RIGHT=", 0) == 0) {
-        // CALIB_RIGHT=<steps>
-        try {
-            int v = std::stoi(line.substr(12));
-            log("Calib right edge = " + std::to_string(v) + " steps");
-        } catch (...) {}
- 
+        try { log("Calib right edge = " + line.substr(12) + " steps"); } catch (...) {}
     } else if (line.rfind("CALIB_LEFT=", 0) == 0) {
-        try {
-            int v = std::stoi(line.substr(11));
-            log("Calib left edge = " + std::to_string(v) + " steps");
-        } catch (...) {}
- 
+        try { log("Calib left edge = " + line.substr(11) + " steps"); } catch (...) {}
     } else if (line.rfind("CALIB_DONE", 0) == 0) {
         arduinoStatus.calibrated.store(true);
-        // try to parse bookWidth from "CALIB_DONE bookWidth=<n>"
         auto pos = line.find("bookWidth=");
         if (pos != std::string::npos) {
             try {
                 int bw = std::stoi(line.substr(pos + 10));
                 arduinoStatus.book_width.store(bw);
+#ifdef MOCK_HARDWARE
+                mockState_.bookWidth = bw;
+                mockState_.calibrated = true;
+#endif
                 log("Calibration complete. bookWidth=" + std::to_string(bw));
             } catch (...) {}
         }
- 
     } else if (line == "ESTOP_ON") {
         arduinoStatus.estop_active.store(true);
-        busy.store(false, std::memory_order_release); // unblock consumer bc no DONE is coming
+#ifdef MOCK_HARDWARE
+        mockState_.estopActive = true;
+#endif
+        busy.store(false, std::memory_order_release);
         log("WARN: Arduino E-STOP activated!");
- 
     } else if (line == "ESTOP_OFF") {
         arduinoStatus.estop_active.store(false);
+#ifdef MOCK_HARDWARE
+        mockState_.estopActive = false;
+#endif
         log("Arduino E-STOP cleared.");
- 
     } else if (line == "CMD_F") {
-        log("Arduino acknowledged CMD_F (forward flip)");
- 
+        log("Arduino acknowledged CMD_F");
     } else if (line == "CMD_B") {
-        log("Arduino acknowledged CMD_B (backward flip)");
- 
+        log("Arduino acknowledged CMD_B");
     } else if (line.rfind("MODE=", 0) == 0) {
-        std::string modeStr = line.substr(5);
-        if      (modeStr == "IDLE")     arduinoStatus.mode.store(ArduinoMode_E::Idle);
-        else if (modeStr == "CALIB")    arduinoStatus.mode.store(ArduinoMode_E::Calibration);
-        else if (modeStr == "FUNCTION") arduinoStatus.mode.store(ArduinoMode_E::Function);
-        log("Arduino mode -> " + modeStr);
- 
-    } else if (line.rfind("STEPPOS=", 0) == 0) {
-        try {
-            int pos = std::stoi(line.substr(8));
-        } catch (...) {}
- 
+        std::string m = line.substr(5);
+        if      (m == "IDLE")     arduinoStatus.mode.store(ArduinoMode_E::Idle);
+        else if (m == "CALIB")    arduinoStatus.mode.store(ArduinoMode_E::Calibration);
+        else if (m == "FUNCTION") arduinoStatus.mode.store(ArduinoMode_E::Function);
+        log("Arduino mode -> " + m);
     } else if (line.rfind("CALIBRATED=", 0) == 0) {
         arduinoStatus.calibrated.store(line.substr(11) == "1");
- 
     } else if (line.rfind("BOOKWIDTH=", 0) == 0) {
         try {
             int bw = std::stoi(line.substr(10));
             arduinoStatus.book_width.store(bw);
             arduinoStatus.calibrated.store(bw > 0);
         } catch (...) {}
- 
     } else if (line.rfind("ESTOP=", 0) == 0) {
         arduinoStatus.estop_active.store(line.substr(6) == "1");
- 
     } else if (line.rfind("CONNECTED=", 0) == 0) {
         arduinoStatus.connected.store(line.substr(10) == "1");
     }
@@ -337,7 +383,7 @@ void ServoDriver_C::heartbeatThreadFn() {
     while (!stopHeartbeat.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds{HEARTBEAT_INTERVAL_MS});
         if (stopHeartbeat.load(std::memory_order_acquire)) break;
- 
+        
         // Only send heartbeat when not busy (avoid polluting mid-command serial stream)
         if (!busy.load(std::memory_order_acquire) && connected.load(std::memory_order_acquire)) {
             {
@@ -350,10 +396,19 @@ void ServoDriver_C::heartbeatThreadFn() {
                 }
             }
             // Check if heartbeat was acked recently (liveness check)
+            // note this timeout is acc based on any RX (not just heartbeat ack)
             long long ms_silent = arduinoStatus.ms_since_last_rx();
             if (ms_silent > HEARTBEAT_TIMEOUT_MS) {
-                log("WARN: No data from Arduino for " + std::to_string(ms_silent)
-                    + "ms — Arduino may be unresponsive or frozen!");
+                const bool was_connected = connected.exchange(false, std::memory_order_acq_rel);
+                // we were conn and now were not (so its likely not a bootup delay or anything..) not safe to actuate (connection loss) mia arduino <3
+                connected.store(false, std::memory_order_release);
+                arduinoStatus.connected.store(false, std::memory_order_release);
+                arduinoStatus.handshake_ok.store(false, std::memory_order_release);
+                busy.store(false, std::memory_order_release); // avoid getting stuck waiting for a DONE that will never come 
+                if (was_connected) {
+                    log("ERROR: Arduino connection lost");
+                }
+                arduinoStatus.set_last_status("HEARTBEAT_TIMEOUT");
             }
         }
     }
@@ -417,34 +472,27 @@ bool ServoDriver_C::openPort(const std::string& portName, unsigned int baudRate)
     #endif
 }
 
+#ifndef MOCK_HARDWARE
 bool ServoDriver_C::waitForReady(std::chrono::milliseconds timeout) {
     auto deadline = Clock::now() + timeout;
     std::string lineBuf;
     HANDLE h = static_cast<HANDLE>(m_hSerial);
     log("waitForReady: listening for 'READY' beacon from Arduino...");
- 
     while (Clock::now() < deadline) {
-        char  byte = 0;
-        DWORD bytesRead = 0;
-        BOOL  ok = ReadFile(h, &byte, 1, &bytesRead, nullptr);
+        char byte = 0; DWORD bytesRead = 0;
+        BOOL ok = ReadFile(h, &byte, 1, &bytesRead, nullptr);
         if (!ok || bytesRead == 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds{5});
             continue;
         }
- 
         if (byte == '\n') {
             if (!lineBuf.empty() && lineBuf.back() == '\r') lineBuf.pop_back();
-            log("Arduino says: [" + lineBuf + "]");
- 
+            emitLine(lineBuf, true); // log it
             if (lineBuf == "READY") {
-                // Send ping
-                DWORD written = 0;
-                char  ping    = 'P';
+                DWORD written = 0; char ping = 'P';
                 WriteFile(h, &ping, 1, &written, nullptr);
+                emitLine("TX:'P'", false);
                 log("Sent 'P' ping. Waiting for STATUS:CONNECTED...");
- 
-                // Now wait for STATUS:CONNECTED confirmation
-                // (Arduino sends this immediately after receiving P)
                 std::string lineBuf2;
                 auto ackDeadline = Clock::now() + std::chrono::milliseconds{2000};
                 while (Clock::now() < ackDeadline) {
@@ -453,38 +501,34 @@ bool ServoDriver_C::waitForReady(std::chrono::milliseconds timeout) {
                     if (!ok2 || r2 == 0) { std::this_thread::sleep_for(std::chrono::milliseconds{2}); continue; }
                     if (b2 == '\n') {
                         if (!lineBuf2.empty() && lineBuf2.back() == '\r') lineBuf2.pop_back();
-                        log("Arduino says: [" + lineBuf2 + "]");
+                        emitLine(lineBuf2, true);
                         if (lineBuf2.rfind("STATUS:CONNECTED", 0) == 0) {
-                            log("Handshake complete — STATUS:CONNECTED received.");
+                            log("Handshake complete.");
                             return true;
                         }
-                        // Also accept the full status dump lines that follow CONNECTED
-                        // (Arduino calls emitFullStatus() right after sending STATUS:CONNECTED)
-                        if (lineBuf2.rfind("STATUS:CALIBRATED=", 0) == 0) {
+                        if (lineBuf2.rfind("STATUS:CALIBRATED=", 0) == 0)
                             arduinoStatus.calibrated.store(lineBuf2.substr(18) == "1");
-                        }
-                        if (lineBuf2.rfind("STATUS:BOOKWIDTH=", 0) == 0) {
+                        if (lineBuf2.rfind("STATUS:BOOKWIDTH=", 0) == 0)
                             try { arduinoStatus.book_width.store(std::stoi(lineBuf2.substr(17))); } catch (...) {}
-                        }
-                        if (lineBuf2.rfind("STATUS:ESTOP=", 0) == 0) {
+                        if (lineBuf2.rfind("STATUS:ESTOP=", 0) == 0)
                             arduinoStatus.estop_active.store(lineBuf2.substr(13) == "1");
-                        }
                         lineBuf2.clear();
-                    } else {
-                        lineBuf2 += b2;
-                    }
+                    } else { lineBuf2 += b2; }
                 }
-                log("WARN: No STATUS:CONNECTED received after P. Treating as partial handshake.");
-                return true; // We at least got READY + sent P, so mostly OK
+                log("WARN: No STATUS:CONNECTED received after P.");
+                return true;
             }
             lineBuf.clear();
-        } else {
-            lineBuf += byte;
-        }
+        } else { lineBuf += byte; }
     }
-    log("waitForReady: timed out waiting for READY ping from Arduino.");
+    log("waitForReady: timed out.");
     return false;
 }
+#else
+bool ServoDriver_C::waitForReady(std::chrono::milliseconds) {
+    return true;
+}
+#endif
 
 void ServoDriver_C::closePort() {
 #ifndef MOCK_HARDWARE
@@ -497,26 +541,8 @@ void ServoDriver_C::closePort() {
 #endif
 }
 
-std::chrono::milliseconds ServoDriver_C::estimatedBusyRemaining() const {
-#ifdef MOCK_HARDWARE
-    auto now = Clock::now();
-    if(now >= mockBusyUntil) return std::chrono::milliseconds{0};
-    return std::chrono::duration_cast<std::chrono::milliseconds>(mockBusyUntil - now);
-#else
-    // If Arduino already sent DONE, busy is false
-    if(!busy.load(std::memory_order_acquire)) return std::chrono::milliseconds{0};
-
-    if(!realBusyEstimateTimer_.is_started()) return std::chrono::milliseconds{0};
-
-    // Remaining = estimate_ms - elapsed
-    auto elapsed = realBusyEstimateTimer_.get_timer_value_ms();
-    auto total   = std::chrono::milliseconds{realBusyEstimate_ms_};
-    if(elapsed >= total) return std::chrono::milliseconds{0};
-    return total - elapsed;
-#endif
-}
-
 void ServoDriver_C::setBlockingTimeouts(bool blocking) {
+#ifndef MOCK_HARDWARE
     HANDLE h = static_cast<HANDLE>(m_hSerial);
     COMMTIMEOUTS t = {};
     if (blocking) {
@@ -531,4 +557,68 @@ void ServoDriver_C::setBlockingTimeouts(bool blocking) {
         t.WriteTotalTimeoutConstant   = 2000;
     }
     SetCommTimeouts(h, &t);
+#endif
 }
+
+// MOCK IMPLEMENTATION
+#ifdef MOCK_HARDWARE
+void ServoDriver_C::mockRunFlip(bool forward) {
+    auto sleepMs = [&](int ms) {
+        auto end = Clock::now() + std::chrono::milliseconds(ms);
+        while (Clock::now() < end && !mockStop_.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    };
+
+    emitLine(forward ? "STATUS:CMD_F" : "STATUS:CMD_B", true);
+
+    // Reject conditions — same as real firmware
+    if (mockState_.estopActive) {
+        emitLine("ESTOP", true);
+        return; // busy cleared by emitLine
+    }
+    if (mockState_.injectNocalib || !mockState_.calibrated) {
+        mockState_.injectNocalib = false; // one-shot
+        emitLine("NOCALIB", true);
+        return;
+    }
+
+    emitLine("STATUS:MODE=FUNCTION", true);
+    sleepMs(mockState_.flipDuration_ms / 2);
+
+    // Mid-flip estop injection
+    if (mockState_.injectEstopMid) {
+        mockState_.injectEstopMid = false;
+        mockState_.estopActive = true;
+        emitLine("STATUS:ESTOP_ON", true);
+        emitLine("!!! ALL MOTION STOPPED !!!", true);
+        return;
+    }
+
+    sleepMs(mockState_.flipDuration_ms / 2);
+    emitLine("STATUS:MODE=IDLE", true);
+    emitLine("DONE", true); // emitLine clears busy when it sees DONE
+}
+
+void ServoDriver_C::mockRunCalibration() {
+    auto sleepMs = [&](int ms) {
+        auto end = Clock::now() + std::chrono::milliseconds(ms);
+        while (Clock::now() < end && !mockStop_.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    };
+
+    emitLine("STATUS:CALIB_START",    true);
+    emitLine("STATUS:MODE=CALIB",     true);
+    sleepMs(400);
+    emitLine("STATUS:CALIB_RIGHT=320", true);
+    sleepMs(500);
+    emitLine("STATUS:CALIB_LEFT=960",  true);
+    sleepMs(300);
+    mockState_.bookWidth  = 640;
+    mockState_.calibrated = true;
+    emitLine("STATUS:CALIB_DONE bookWidth=640", true);
+    emitLine("STATUS:MODE=IDLE",      true);
+}
+
+
+
+#endif

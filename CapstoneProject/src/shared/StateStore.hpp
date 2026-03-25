@@ -84,6 +84,18 @@ struct StateStore_s{
         g_lastEegChunk = v;
     }
 
+    // ================== Actuation information =====================================
+    ArduinoStatus_s arduinoStatus{};
+    // Display serial console
+    struct HwSerialEntry_s {
+        std::string line;
+        long long   ts_ms;
+        bool        fromArduino;
+    };
+    static constexpr std::size_t HW_LOG_CAPACITY = 200;
+    mutable std::mutex              hw_serial_log_mtx;
+    std::deque<HwSerialEntry_s>     hw_serial_log;
+
     // ============= Running statistic measures of EEG (rolling 45s) for bad window detection/removal ============================
     // AFTER bandpass + CAR + artifact rejection
     SignalStats_s SignalStats;

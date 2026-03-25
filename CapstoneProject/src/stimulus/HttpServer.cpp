@@ -124,6 +124,20 @@ void HttpServer_C::handle_get_state(const httplib::Request& req, httplib::Respon
     std::lock_guard<std::mutex> lock2(stateStoreRef_.calib_options_mtx);
     std::string pending_subject_name = stateStoreRef_.pending_subject_name;
 
+    // Actuation (arduino) status from ss
+    const auto& as = stateStoreRef_.arduinoStatus;
+    const char* actModeStr = "UNKNOWN";
+    switch (as.mode.load()) {
+        case ArduinoMode_E::Idle:        actModeStr = "IDLE";     break;
+        case ArduinoMode_E::Calibration: actModeStr = "CALIB";    break;
+        case ArduinoMode_E::Function:    actModeStr = "FUNCTION"; break;
+        default: break;
+    }
+    bool isMock = false;
+#ifdef MOCK_HARDWARE
+    isMock = true;
+#endif
+
     // Settings so JS renders correct toggle on entry
     int calib_data_setting_e = stateStoreRef_.settings.calib_data_setting.load(std::memory_order_acquire);
     int train_arch_e = stateStoreRef_.settings.train_arch_setting.load(std::memory_order_acquire);
@@ -226,6 +240,17 @@ static constexpr bool isFakeBackend = false;
             if (i + 1 < data_insuff.size()) oss << ",";
         }
         oss << "]";
+    oss << ",\"actuation\":{"
+        << "\"is_mock\":"    << (isMock ? "true" : "false")             << ","
+        << "\"connected\":"  << (as.connected.load()    ? "true" : "false") << ","
+        << "\"calibrated\":" << (as.calibrated.load()   ? "true" : "false") << ","
+        << "\"bookWidth\":"  << as.book_width.load()                    << ","
+        << "\"estop\":"      << (as.estop_active.load() ? "true" : "false") << ","
+        << "\"mode\":\""     << actModeStr                              << "\","
+        << "\"hb_sent\":"    << as.heartbeats_sent.load()               << ","
+        << "\"hb_acked\":"   << as.heartbeats_acked.load()              << ","
+        << "\"ms_since_rx\":" << as.ms_since_last_rx()
+        << "}";
     oss << "}";
 
     lock3.unlock();
@@ -775,6 +800,35 @@ void HttpServer_C::handle_get_runtime_inference_snapshot(const httplib::Request&
 
 }
 
+// /hw_serial only publishes serial log entries + is_mock (rest is published in regular get/state)
+void HttpServer_C::handle_get_hw_serial(const httplib::Request&,
+                                         httplib::Response& res) {
+    bool isMock = false;
+#ifdef MOCK_HARDWARE
+    isMock = true;
+#endif
+    std::vector<StateStore_s::HwSerialEntry_s> entries;
+    {
+        std::lock_guard<std::mutex> lk(stateStoreRef_.hw_serial_log_mtx);
+        auto& dq = stateStoreRef_.hw_serial_log;
+        std::size_t n = std::min<std::size_t>(dq.size(), 80);
+        entries.assign(dq.end() - (std::ptrdiff_t)n, dq.end());
+    }
+
+    std::ostringstream oss;
+    oss << "{\"is_mock\":" << (isMock ? "true" : "false")
+        << ",\"entries\":[";
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (i) oss << ",";
+        oss << "{\"ts_ms\":"  << entries[i].ts_ms
+            << ",\"line\":\"" << JSON::json_escape(entries[i].line) << "\""
+            << ",\"dir\":\""  << (entries[i].fromArduino ? "rx" : "tx") << "\""
+            << "}";
+    }
+    oss << "]}";
+    write_json(res, oss.str());
+}
+
 // check ready and write monitor refresh rate from client response
 void HttpServer_C::handle_post_ready(const httplib::Request& req, httplib::Response& res){
     /* 
@@ -831,6 +885,9 @@ bool HttpServer_C::http_start_server(){
 
     liveServerRef_->Get("/runtime_inference_snapshot",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_runtime_inference_snapshot(rq, rs); });
+
+    liveServerRef_->Get("/hw_serial",
+        [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_get_hw_serial(rq, rs); });
 
     liveServerRef_->Post("/event",
         [this](const httplib::Request& rq, httplib::Response& rs){ this->handle_post_event(rq, rs); });

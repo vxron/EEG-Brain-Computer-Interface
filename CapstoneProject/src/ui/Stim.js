@@ -242,6 +242,20 @@ const elActuationDebugOverlay = document.getElementById(
 const elActDbgDir = document.getElementById("act-dbg-dir");
 let actDbgLastActuationCount = undefined;
 const actuatingBanner = document.getElementById("actuating-banner");
+let hwDebugEnabled = false;
+let hwSerialInterval = null;
+let hwLastEntryTs = 0;
+// SERIAL CONSOLE overlay
+const elToggleHwDebug = document.getElementById("toggle-hw-debug");
+const elHwDebugStatusBadge = document.getElementById("hw-debug-status-badge");
+const elHwOverlay = document.getElementById("hw-debug-overlay");
+const elHwSerialLog = document.getElementById("hw-serial-log");
+const elHwBadgeMock = document.getElementById("hw-badge-mock");
+const elHwBadgeConn = document.getElementById("hw-badge-conn");
+const elHwBadgeCalib = document.getElementById("hw-badge-calib");
+const elHwBadgeEstop = document.getElementById("hw-badge-estop");
+const elHwBadgeMode = document.getElementById("hw-badge-mode");
+const elHwBadgeAct = document.getElementById("hw-badge-action");
 
 let currIdx = 0;
 let prevIdx = 0;
@@ -477,6 +491,13 @@ function updateSettingsFromState(data) {
     elOnnxOverlayStatusBadge.textContent = currentDebugMode ? "ON" : "OFF";
     elOnnxOverlayStatusBadge.classList.toggle("on", currentDebugMode);
     elOnnxOverlayStatusBadge.classList.toggle("off", !currentDebugMode);
+  }
+  // hw debug toggle — restore state on settings page entry
+  if (elToggleHwDebug) elToggleHwDebug.checked = hwDebugEnabled;
+  if (elHwDebugStatusBadge) {
+    elHwDebugStatusBadge.textContent = hwDebugEnabled ? "ON" : "OFF";
+    elHwDebugStatusBadge.classList.toggle("on", hwDebugEnabled);
+    elHwDebugStatusBadge.classList.toggle("off", !hwDebugEnabled);
   }
 
   if (elDurActive && !Number.isNaN(duractive_i))
@@ -1363,6 +1384,11 @@ function updateUiFromState(data) {
     if (elActTraceLeft) elActTraceLeft.innerHTML = "";
     if (elActTraceRight) elActTraceRight.innerHTML = "";
     if (actuatingBanner) actuatingBanner.classList.add("hidden");
+    if (hwSerialInterval) {
+      clearInterval(hwSerialInterval);
+      hwSerialInterval = null;
+    }
+    if (elHwOverlay) elHwOverlay.style.display = "none";
   }
 
   const pauseVisible =
@@ -1620,6 +1646,11 @@ function updateUiFromState(data) {
           "There was an internal error. Please try calibration again.",
         );
         break;
+      case 8: // UIPopup_ArduinoDisconnected
+        showModal(
+          "Arduino Disconnected",
+          "The actuator hardware is not responding and run mode is unavailable. Please try reconnecting Arduino.",
+        );
       default:
         showModal(
           "DEBUG MSG",
@@ -1628,6 +1659,10 @@ function updateUiFromState(data) {
         break;
     }
   }
+  // HW actuation debug overlay: sync visibility + update badges
+  syncHwOverlayVisibility(stimState);
+  if (data.actuation) updateHwStatusStrip(data.actuation);
+
   // update state
   prevStimState = stimState;
   prevIdx = currIdx;
@@ -2466,7 +2501,6 @@ function updateActuationDebugOverlay(data) {
   const actDir = d.actuating_direction;
   const msRemaining = d.actuation_busy_ms_remaining ?? 0;
   const secRemaining = (msRemaining / 1000).toFixed(1);
-  const actuatingBanner = document.getElementById("actuating-banner");
   if (actuatingBanner) {
     if (isActuating) {
       const dirLabel = actDir === 0 ? "← LEFT" : "→ RIGHT";
@@ -2516,7 +2550,7 @@ function updateActuationDebugOverlay(data) {
     actDbgLastActuationCount = d.actuation_count ?? 0;
     return;
   }
-  // green flash is redundant in non-demo debug — yellow banner handles it
+  // green flash is redundant in non-demo debug; yellow banner handles it
   const inDemoMode = lastStateData?.settings?.demo_mode === true;
   if (!inDemoMode) {
     actDbgLastActuationCount = d.actuation_count ?? actDbgLastActuationCount;
@@ -2564,6 +2598,134 @@ function updateTsinghuaFreqOverlay() {
       updateFreqCounterUI();
     }
   });
+}
+
+// HW ACTUATION DEBUG OVERLAY
+
+function syncHwOverlayVisibility(stimState) {
+  // only active during run mode (stim_window === 0 = UIState_Active_Run)
+  const inRunMode = stimState === 0;
+  const shouldShow = hwDebugEnabled && inRunMode;
+
+  if (!elHwOverlay) return;
+  elHwOverlay.style.display = shouldShow ? "flex" : "none";
+
+  if (shouldShow && !hwSerialInterval) {
+    // entering run mode with toggle on — reset log and start polling
+    hwLastEntryTs = 0;
+    if (elHwSerialLog) elHwSerialLog.innerHTML = "";
+    hwSerialInterval = setInterval(pollHwSerial, 300);
+    pollHwSerial(); // immediate first fetch
+  } else if (!shouldShow && hwSerialInterval) {
+    clearInterval(hwSerialInterval);
+    hwSerialInterval = null;
+  }
+  // in demo mode the overlay sits on top of the demo view; bump z-index so it clears the demo panels
+  if (elHwOverlay) {
+    elHwOverlay.style.zIndex =
+      lastStateData?.settings?.demo_mode === true ? "700" : "600";
+  }
+}
+
+async function pollHwSerial() {
+  try {
+    const res = await fetch(`${API_BASE}/hw_serial`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderHwSerialEntries(data.entries);
+  } catch (_) {}
+}
+
+function renderHwSerialEntries(entries) {
+  if (!entries?.length || !elHwSerialLog) return;
+
+  const fresh = entries.filter((e) => e.ts_ms > hwLastEntryTs);
+  if (!fresh.length) return;
+
+  const frag = document.createDocumentFragment();
+  for (const e of fresh) {
+    const row = document.createElement("div");
+    row.className = "hw-log-line";
+
+    // semantic highlight class based on content
+    if (e.dir === "rx") {
+      const u = e.line.toUpperCase();
+      if (u === "DONE") row.classList.add("is-done");
+      else if (u === "ESTOP" || u === "STATUS:ESTOP_ON")
+        row.classList.add("is-estop");
+      else if (u === "NOCALIB") row.classList.add("is-nocalib");
+      else if (u.startsWith("STATUS:")) row.classList.add("is-status");
+    }
+
+    const tsEl = document.createElement("span");
+    tsEl.className = "hw-log-ts";
+    tsEl.textContent = fmtHwTs(e.ts_ms);
+
+    const dirEl = document.createElement("span");
+    dirEl.className = "hw-log-dir";
+    dirEl.textContent = e.dir === "rx" ? "←" : "→";
+
+    const lineEl = document.createElement("span");
+    lineEl.className = e.dir === "rx" ? "hw-log-rx" : "hw-log-tx";
+    lineEl.textContent = e.line;
+
+    row.appendChild(tsEl);
+    row.appendChild(dirEl);
+    row.appendChild(lineEl);
+    frag.appendChild(row);
+  }
+
+  elHwSerialLog.appendChild(frag);
+  hwLastEntryTs = fresh[fresh.length - 1].ts_ms;
+
+  // cap DOM to avoid unbounded growth
+  while (elHwSerialLog.children.length > 150) {
+    elHwSerialLog.removeChild(elHwSerialLog.firstChild);
+  }
+  elHwSerialLog.scrollTop = elHwSerialLog.scrollHeight;
+}
+
+function fmtHwTs(ts_ms) {
+  const d = new Date(ts_ms);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function updateHwStatusStrip(act) {
+  if (!act) return;
+
+  if (elHwBadgeMock) {
+    elHwBadgeMock.style.display = act.is_mock ? "inline-flex" : "none";
+  }
+
+  if (elHwBadgeConn) {
+    elHwBadgeConn.textContent = act.connected ? "CONNECTED" : "DISCONNECTED";
+    elHwBadgeConn.className =
+      "hw-badge " + (act.connected ? "hw-badge-ok" : "hw-badge-err");
+  }
+
+  if (elHwBadgeCalib) {
+    elHwBadgeCalib.textContent = act.calibrated
+      ? `CAL ${act.bookWidth}px`
+      : "UNCALIBRATED";
+    elHwBadgeCalib.className =
+      "hw-badge " + (act.calibrated ? "hw-badge-ok" : "hw-badge-warn");
+  }
+
+  if (elHwBadgeEstop) {
+    elHwBadgeEstop.style.display = act.estop ? "inline-flex" : "none";
+  }
+
+  if (elHwBadgeMode) {
+    elHwBadgeMode.textContent = act.mode ?? "UNKNOWN";
+  }
+
+  if (elHwBadgeAct) {
+    const flipping = act.mode === "FUNCTION";
+    elHwBadgeAct.style.display = flipping ? "inline-flex" : "none";
+  }
 }
 
 // ================ 13) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
@@ -3203,6 +3365,18 @@ async function init() {
     });
   }
 
+  if (elToggleHwDebug) {
+    elToggleHwDebug.addEventListener("change", () => {
+      hwDebugEnabled = elToggleHwDebug.checked;
+      if (elHwDebugStatusBadge) {
+        elHwDebugStatusBadge.textContent = hwDebugEnabled ? "ON" : "OFF";
+        elHwDebugStatusBadge.classList.toggle("on", hwDebugEnabled);
+        elHwDebugStatusBadge.classList.toggle("off", !hwDebugEnabled);
+      }
+      syncHwOverlayVisibility(prevStimState);
+    });
+  }
+
   if (elOnnxOverlayToggle) {
     elOnnxOverlayToggle.addEventListener("change", () => {
       currentDebugMode = elOnnxOverlayToggle.checked;
@@ -3224,6 +3398,56 @@ async function init() {
       }
     });
   }
+  // DRAGGABLE HW OVERLAY
+  (function makeDraggable() {
+    const el = document.getElementById("hw-debug-overlay");
+    if (!el) return;
+    let startX = 0,
+      startY = 0,
+      startLeft = 0,
+      startTop = 0,
+      dragging = false;
+
+    const titleBar = el; // drag anywhere on the panel
+    titleBar.addEventListener("mousedown", (e) => {
+      // don't steal clicks on the log scroll area
+      if (e.target.closest(".hw-serial-log")) return;
+      dragging = true;
+      el.classList.add("is-dragging");
+      const rect = el.getBoundingClientRect();
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = rect.left;
+      startTop = rect.top;
+      // switch from bottom/left anchoring to top/left so transforms are predictable
+      el.style.bottom = "auto";
+      el.style.top = rect.top + "px";
+      el.style.left = rect.left + "px";
+      e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      const newLeft = Math.max(
+        0,
+        Math.min(window.innerWidth - el.offsetWidth, startLeft + dx),
+      );
+      const newTop = Math.max(
+        0,
+        Math.min(window.innerHeight - el.offsetHeight, startTop + dy),
+      );
+      el.style.left = newLeft + "px";
+      el.style.top = newTop + "px";
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      el.classList.remove("is-dragging");
+    });
+  })();
 }
 // Init as soon as page loads
 window.addEventListener("DOMContentLoaded", () => {

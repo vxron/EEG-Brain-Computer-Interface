@@ -120,7 +120,8 @@ enum UIStateEvent_E {
 	UIStateEvent_UserPushesPause, // 20
 	UIStateEvent_UserPushesResume, // 21
 	UIStateEvent_UserTogglesDemoMode, // 22
-	UIStateEvent_None, // 23
+	UIStateEvent_ArduinoDisconnected, // 23
+	UIStateEvent_None, // 24
 };
 
 enum UIPopup_E {
@@ -132,6 +133,7 @@ enum UIPopup_E {
 	UIPopup_ConfirmOverwriteCalib, // 5
 	UIPopup_ConfirmHighFreqOk, // 6
 	UIPopup_TrainJobFailed, // 7
+	UIPopup_ArduinoDisconnected, // 8
 };
 
 // SETTINGS PAGE ENUMS
@@ -463,5 +465,72 @@ struct ONNXInferenceSnapshot_s {
 	int actuating_direction = -1;
 	int actuation_busy_ms_remaining = 0; // for UI countdown
 };
+
+// 3) Arduino connection/health status
+// Populated by ServoDriver's reader thread as STATUS: lines arrive from Arduino.
+// Read by UI/HTTP and consumer thread for diagnostics.
+//
+// Thread safety: all atomics are read/written lock-free.
+//                last_status_msg uses arduino_status_mtx.
+ 
+enum class ArduinoMode_E {
+    Unknown,
+    Idle,
+    Calibration,
+    Function
+};
+
+struct ArduinoStatus_s {
+    // Connection lifecycle
+    std::atomic<bool> port_opened       {false}; // COM port opened by ServoDriver
+    std::atomic<bool> handshake_ok      {false}; // READY received + P sent + CONNECTED received
+    std::atomic<bool> connected         {false}; // same as handshake_ok but stays true across cmds
+    // Machine health 
+    std::atomic<bool> calibrated        {false}; // bookWidth > 0 on Arduino
+    std::atomic<int>  book_width        {0};      // last reported bookWidth
+    std::atomic<bool> estop_active      {false};
+    std::atomic<ArduinoMode_E> mode     {ArduinoMode_E::Unknown};
+ 
+    // Command tracking
+    std::atomic<int>  heartbeats_sent   {0};
+    std::atomic<int>  heartbeats_acked  {0};
+ 
+    using Clock = std::chrono::steady_clock;
+    // last time ANY byte arrived from Arduino (reader thread sets this)
+    std::atomic<long long> last_rx_ts_ms {0}; // ms since epoch, steady_clock
+ 
+    // Last human-readable status line
+    mutable std::mutex arduino_status_mtx;
+    std::string last_status_msg; // latest STATUS: line, or last non-DBG line
+ 
+    void set_last_status(const std::string& s) {
+        std::lock_guard<std::mutex> lk(arduino_status_mtx);
+        last_status_msg = s;
+    }
+    std::string get_last_status() const {
+        std::lock_guard<std::mutex> lk(arduino_status_mtx);
+        return last_status_msg;
+    }
+    
+    // PUBLIC HELPERS FOR ARDUINOSTATUS_S
+    // ms since last byte from Arduino (for heartbeat watchdog)
+    long long ms_since_last_rx() const {
+        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now().time_since_epoch()).count();
+        long long last = last_rx_ts_ms.load(std::memory_order_acquire);
+        if (last == 0) return -1; // never received anything
+        return now_ms - last;
+    }
+    static const char* mode_str(ArduinoMode_E m) {
+        switch(m) {
+            case ArduinoMode_E::Idle:        return "IDLE";
+            case ArduinoMode_E::Calibration: return "CALIB";
+            case ArduinoMode_E::Function:    return "FUNCTION";
+            default:                         return "UNKNOWN";
+        }
+    }
+};
+
+// END Arduino connection/health status
 
 /* END STRUCTS */

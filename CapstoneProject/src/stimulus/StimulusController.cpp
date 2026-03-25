@@ -38,6 +38,7 @@ static const state_transition state_transition_table[] = {
     {UIState_Settings,         UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_NoSSVEP_Test,     UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Paused,           UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Active_Run,       UIStateEvent_ArduinoDisconnected,            UIState_Home},
     
     {UIState_Active_Calib,     UIStateEvent_UserPushesPause,                UIState_Paused},  
     {UIState_Instructions,     UIStateEvent_UserPushesPause,                UIState_Paused},
@@ -870,7 +871,7 @@ void StimulusController_C::runUIStateMachine(){
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    
+
 }
 
 void StimulusController_C::stopStateMachine(){

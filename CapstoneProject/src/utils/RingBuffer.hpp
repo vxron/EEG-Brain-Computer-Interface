@@ -58,7 +58,7 @@ public:
     // ring buffer methods
     bool pop(T *dest);
     bool push(const T& data);
-    size_t drain(T *dest);
+    size_t drain(T *dest, size_t max_items); // max items NECESSARY so we drain deterministic amnt without producer adding shi during drain (important when we allocate fix sized data struct to acquire our drain!!)
     void close();
     int trim_ends(size_t guard_samples);
     bool get_trimmed_snapshot(std::vector<T>& out, size_t trimFront, size_t trimBack) const;
