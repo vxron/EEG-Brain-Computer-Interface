@@ -640,14 +640,15 @@ try{
             }
             const fs::path PROJECT_ROOT = sesspaths::find_project_root();
             const fs::path data_dir = PROJECT_ROOT / "data";
-            fs::path log_path;
-            if(session != "" && !session.empty()){
-                log_path = data_dir / subject / session / "run_classifier_log.csv";
-            }
-            // fallback to making new "unknown session" path -> overwrites
-            else {
-                log_path = data_dir / subject / "run_mode_logs" / "run_classifier_log.csv";
-            }
+                
+            // Timestamp this specific run entry so logs don't accumulate
+            auto now = std::chrono::system_clock::now();
+            auto t = std::chrono::system_clock::to_time_t(now);
+            std::ostringstream ts;
+            ts << std::put_time(std::localtime(&t), "%Y-%m-%d_%H-%M-%S");
+                
+            fs::path log_path = data_dir / subject / "run_logs" / (ts.str() + "_run_classifier_log.csv");
+
             // Create directory if it doesn't exist
             std::error_code ec;
             fs::create_directories(log_path.parent_path(), ec);
@@ -895,6 +896,14 @@ try{
             firstRunWindowBuilt = false; // reset
             firstWinCheckPtr = &firstRunWindowBuilt;
         } 
+        else if (currState == UIState_Hardware_Checks && prevState != UIState_Hardware_Checks){
+            window_run.stash_len = 0;
+            std::vector<float> tmp(window_run.winLen);
+            window_run.sliding_window.drain(tmp.data(), tmp.size());
+            windowPtr = &window_run;
+            firstRunWindowBuilt = false;
+            firstWinCheckPtr = &firstRunWindowBuilt;
+        }
 
         // run_mode_onnx_ready must be reset to false on run mode exit
         if(prevState == UIState_Active_Run && currState != UIState_Active_Run){
@@ -920,10 +929,25 @@ try{
         // 2) ============================= build the new window =============================
         float discard; // first pop
         if(*firstWinCheckPtr){
+            LOG_ALWAYS("ADVDBG PRE state=" << (int)currState
+                << " first=" << *firstWinCheckPtr
+                << " count=" << windowPtr->sliding_window.get_count()
+                << " winLen=" << windowPtr->winLen
+                << " winHop=" << windowPtr->winHop
+                << " stash_len=" << windowPtr->stash_len);
+            if (windowPtr->winHop == 0) {
+                LOG_ALWAYS("BUG: winHop == 0 for active window");
+            }
+            size_t popped = 0;
             size_t to_pop = std::min(windowPtr->winHop, windowPtr->sliding_window.get_count()); // guard against truncated windows
             for(size_t k=0; k<to_pop; k++){
-                windowPtr->sliding_window.pop(&discard); 
+                if(windowPtr->sliding_window.pop(&discard)) {
+                    popped++;
+                }
             }
+            LOG_ALWAYS("ADVDBG POST-POP count=" << windowPtr->sliding_window.get_count()
+                << " popped=" << popped
+                << " stash_len=" << windowPtr->stash_len);
         }
 
         while(windowPtr->sliding_window.get_count()<windowPtr->winLen){ // now push
@@ -979,6 +1003,9 @@ try{
 				}
 			}
 		}
+
+        LOG_ALWAYS("ADVDBG POST-REFILL count=" << windowPtr->sliding_window.get_count()
+            << " stash_len=" << windowPtr->stash_len);
 
         // 3) once window is full, read ui_state/freq again and decide if window is "valid" to emit based on comparison with initial ui_state and freq
         // -> if the two snapshots disagree, ui changed mid-window: drop this window 

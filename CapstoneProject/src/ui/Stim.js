@@ -2561,6 +2561,15 @@ function updateActuationDebugOverlay(data) {
       dot.addEventListener("animationend", () => dot.remove(), { once: true });
     }
   }
+  if (!d.is_artifactual && d.predicted_state === 2) {
+    const container = document.getElementById("act-trace-center");
+    if (container) {
+      const dot = document.createElement("div");
+      dot.className = "act-trace-dot";
+      container.appendChild(dot);
+      dot.addEventListener("animationend", () => dot.remove(), { once: true });
+    }
+  }
 
   // --- actuation flash: rising edge on actuation_count only ---
   if (actDbgLastActuationCount === undefined) {

@@ -1315,6 +1315,23 @@ def make_group_holdout_split(
 
     # Phase 2: Size-aware round-robin (LFD strategy)
     # Sort groups by size descending within each class
+    
+    # Ensure NONE gets proportional holdout representation manually bcuz it keeps falling short (hacky ik but it is what it is)
+    rest_target_frac = float((y == 2).sum()) / n  # REST's fraction of total data
+    # Cap at 90% of proportional share to avoid overshooting with tiny groups
+    rest_target_count = int(np.ceil(total_target * rest_target_frac * 0.90))
+
+    while holdout_count[2] < rest_target_count and has_remaining(2):
+        g = groups_by_class[2][pos[2]]
+        pos[2] += 1
+        holdout_gids.append(g["gid"])
+        holdout_indices.extend(g["idxs"].tolist())
+        holdout_count[2] += g["size"]
+        holdout_total += g["size"]
+
+    if logger:
+        logger.log(f"[HOLDOUT] After REST top-up: REST in holdout={holdout_count[2]} (target={rest_target_count})")
+
     for cls in (0, 1, 2):
         groups_by_class[cls].sort(key=lambda g: -g["size"])
 

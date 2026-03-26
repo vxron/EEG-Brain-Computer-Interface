@@ -89,7 +89,7 @@ else()
   )
   target_include_directories(CapstoneProject PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
+  )
   message(STATUS "Building with REAL Unicorn acquisition backend")
   target_compile_definitions(CapstoneProject PRIVATE ACQ_BACKEND_UNICORN)
   target_sources(CapstoneProject PRIVATE

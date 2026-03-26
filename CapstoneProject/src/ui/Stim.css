@@ -1229,6 +1229,15 @@ body:not(.fullscreen-mode) {
   box-shadow: 0 0 6px rgba(196, 181, 253, 0.55);
 }
 
+.act-trace-center {
+  left: 50%;
+  transform: translateX(-50%);
+}
+.act-trace-center .act-trace-dot {
+  background: rgba(148, 163, 184, 0.7);
+  box-shadow: 0 0 6px rgba(148, 163, 184, 0.3);
+}
+
 @keyframes trace-dot-fade {
   0% {
     opacity: 0.9;

@@ -23,9 +23,13 @@ constexpr ONNXTensorElementDataType CNN_EXPECTED_INPUT_DATA_TYPE = ONNX_TENSOR_E
 constexpr std::array<int64_t, 4> CNN_EXPECTED_SHAPE = {1, 1, CNN_EXPECTED_C, CNN_EXPECTED_T};
 
 #ifdef ACQ_BACKEND_FAKE
-constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.80; // required confidence in active prediction to publish to consumer (else rtn unknown -> acts like no-op)
+constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.80f; // required confidence in active prediction to publish to consumer (else default to REST when uncertain)
+constexpr float REQ_SSVEP_THRESHOLD = 0.60f;  // require strong SSVEP confidence
+constexpr float REST_VETO_THRESHOLD = 0.20f;  // if REST is this likely, don't commit to SSVEP
 #else
-constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.75;
+constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.75f;
+constexpr float REQ_SSVEP_THRESHOLD = 0.60f;  
+constexpr float REST_VETO_THRESHOLD = 0.20f;
 #endif
 
 
