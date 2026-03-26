@@ -1,4 +1,5 @@
 #include "SignalQualityAnalyzer.h"
+#include "../utils/Logger.hpp"
 
 // ========================= INLINE STATS HELPERS =====================
 static inline float safe_sqrt(float x) { return std::sqrt(std::max(0.0f, x)); }
@@ -133,7 +134,8 @@ void SignalQualityAnalyzer_C::check_artifact_and_flag_window(sliding_window_t& w
     int failsEntTestCount = 0;
 
     window.sliding_window.get_data_snapshot(win_snapshot_);
-    if (win_snapshot_.size() < WINDOW_SCANS * NUM_CH_CHUNK) {
+    if (win_snapshot_.size() < window.winLen) {
+        const size_t expected_samples = window.winLen;
         return; // not enough samples yet
         // shouldn't reach here if it's placed properly in main
     }

@@ -13,6 +13,7 @@ message(STATUS ">>> CMAKE_TOOLCHAIN_FILE='${CMAKE_TOOLCHAIN_FILE}'")
 option(USE_FAKE_ACQ "Use fake acquisition backend" OFF)
 option(CALIBRATION_MODE "Calibrate Mode to Train Model" ON)
 option(USE_EEG_FILTERS "Use EEG filters for preprocessing" ON)
+option(MOCK_SERVO "Use mock servo hardware" ON) 
 
 set(SKIP_TRAINING "" CACHE STRING
     "If non-empty, skip training and load pretrained model from this path")

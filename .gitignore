@@ -48,3 +48,9 @@ train_debug_plots/
 
 # Unicorn api dump
 /CapstoneProject/unicorn/bin
+
+# Datasets
+*.mat
+*.bin
+*.loc
+*.7z

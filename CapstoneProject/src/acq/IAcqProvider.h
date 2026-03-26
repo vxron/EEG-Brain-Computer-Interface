@@ -12,6 +12,8 @@
 #pragma once
 #include <cstddef>   // std::size_t
 #include <cstdint>   // uint32_t
+#include <vector>
+#include <string>
 
 struct IAcqProvider_S {
 	// Virtual function interface for acquisition providers
@@ -22,7 +24,7 @@ struct IAcqProvider_S {
 	virtual bool unicorn_start_acq(bool testMode) = 0; // start acquisition
 	virtual bool unicorn_stop_and_close() = 0;
 	virtual bool dump_config_and_indices() = 0;
-	virtual void setActiveStimulus(double fStimHz) { }; // default no-op
+	virtual void setActiveStimulus(double fStimHz) { }; // default no-op -> don't force child classes to implement
 
 	// channel metadata
     virtual int  getNumChannels() const = 0;

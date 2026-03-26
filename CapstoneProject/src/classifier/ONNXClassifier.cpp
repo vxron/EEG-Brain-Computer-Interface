@@ -99,13 +99,23 @@ int ONNX_RT_C::apply_softmax_to_publish_final_class(std::array<float,3> &logits,
     // get max softmax now
     auto max_softmax_it = std::max_element(softmax_res.begin(), softmax_res.end());
     float max_softmax = *max_softmax_it; //deref
+    float rest_softmax = softmax_res[2];
     // get index of max element - returns idx (distance) btwn 2 iterators
     int idx_max = std::distance(softmax_res.begin(), max_softmax_it);
-    if(max_softmax > REQ_CONFIDENCE_TO_PUBLISH){
-        return idx_max;
-    }
-    else {
-        return -1; // should map to unknown ssvep in classify_window
+    if (idx_max == 0 || idx_max == 1){
+        // Candidate SSVEP prediction - apply stricter gate
+        if (max_softmax >= REQ_SSVEP_THRESHOLD && rest_softmax < REST_VETO_THRESHOLD){
+            return idx_max;
+        } else {
+            return 2; // treat as REST when SSVEP isn't convincing
+        }
+    } else {
+        if(max_softmax > REQ_CONFIDENCE_TO_PUBLISH){
+            return idx_max;
+        }
+        else {
+            return 2; // default to REST when uncertain
+        }
     }
 }
 

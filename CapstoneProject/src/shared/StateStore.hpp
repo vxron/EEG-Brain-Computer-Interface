@@ -11,6 +11,8 @@
     (...) and many more :,)
 */
 
+// TODO: integrate mech debug in UI
+
 struct StateStore_s{
 
     // =============== General info about active channels ==================
@@ -43,11 +45,29 @@ struct StateStore_s{
     std::string train_fail_msg = ""; // used as final train fail msg
     std::vector<TrainingIssue_s> train_fail_issues{};
 
-    // ==================== Training Protocol Info (Used during CALIB ONLY) ========================================
+    // ==================== Training Protocol Info & Fake Acq ========================================
     std::atomic<int> g_block_id{0}; // block index in protocol
     std::atomic<TestFreq_E> g_freq_hz_e{TestFreq_None}; 
     std::atomic<int> g_freq_hz{0}; // ************USED FOR FAKE ACQ DURING RUN MODE
+    trainingProto_S training_proto; // ***********USED FOR FAKE ACQ STREAMER DURING CALIB
 
+    // ======================== For AcqStreamerFromDataset class (demo mode) =============================================
+    // cv from stim controller -> producer for notifying producer when its time to start calib/run mode dataset streaming
+    // i.e. producer will then call unicorn_start_acq w appropriate settings
+    std::mutex mtx_streaming_request;
+    std::condition_variable streaming_request;
+    bool streaming_requested = false;
+    bool test_mode_arg = 0; // 1 for calib, 0 for run
+    std::mutex mtx_streamer_freqs;
+    std::vector<int> acc_freqs_in_use_by_streamer;
+
+    // Reading demo/debug mode snapshots with mutex protection
+    std::mutex mtx_demo_inference;
+    ONNXInferenceSnapshot_s OnnxInferenceSnapshot{}; // Contains ref to DemoStreamerSnapshot_s if applicable 
+    // Demo streamer snapshot (producer writes, consumer reads)
+    std::mutex mtx_demo_streamer_snapshot;
+    DemoStreamerSnapshot_s DemoStreamerSnapshot{};
+    
     // ============ For displaying signal in real-time on UI (hardware checks page) ============
     std::atomic<bool> g_hasEegChunk{false};
     // custom types require mutex protection
@@ -63,6 +83,18 @@ struct StateStore_s{
         std::lock_guard<std::mutex> lock(last_chunk_mutex);
         g_lastEegChunk = v;
     }
+
+    // ================== Actuation information =====================================
+    ArduinoStatus_s arduinoStatus{};
+    // Display serial console
+    struct HwSerialEntry_s {
+        std::string line;
+        long long   ts_ms;
+        bool        fromArduino;
+    };
+    static constexpr std::size_t HW_LOG_CAPACITY = 200;
+    mutable std::mutex              hw_serial_log_mtx;
+    std::deque<HwSerialEntry_s>     hw_serial_log;
 
     // ============= Running statistic measures of EEG (rolling 45s) for bad window detection/removal ============================
     // AFTER bandpass + CAR + artifact rejection
@@ -178,17 +210,6 @@ struct StateStore_s{
     // flag for when sessions have been loaded from disk at startup
     std::atomic<bool> g_sessions_loaded_from_disk{false};
 
-    // ======================== Actuation thread Sync ======================
-    // cv to notify thread when consumer makes non-neutral inference (either left or right ssvep)
-    std::mutex mtx_actuation_request;
-    std::condition_variable actuation_request;
-    bool actuation_requested = false;
-    SSVEPState_E actuation_direction = SSVEP_Unknown; // data that comes with req
-
-    // atomic to notify consumer when actuator is actuating (consumer should sleep during this brief period)
-    std::atomic<bool> g_is_currently_actuating{false}; // consumer should freeze during actuation
-    std::atomic<bool> g_consumer_ack_actuation_stop{true}; // force consumer to ack actuation stop (this gets set to false when actuating starts and must be set to true again by cons)
-
     // =================== Multi-thread training request flow after calibration finishes ===================================
     // (1) finalize request slot from stim controller -> consumer after calibration success
     // conditional variable! 
@@ -215,10 +236,12 @@ struct StateStore_s{
         std::atomic<SettingStimMode_E> stim_mode{StimMode_Flicker};
         std::atomic<SettingWaveform_E> waveform{Waveform_Square};
         std::atomic<SettingHparam_E> hparam_setting{HPARAM_OFF};
+        std::atomic<bool> demo_mode{false}; // full demo mode
+        std::atomic<bool> debug_mode{false}; // show onnx overlay during runtime
         // frequency pool: up to 6 (fixed size array)
         // these are the defaults:
         std::array<TestFreq_E, 6> selected_freqs_e{
-            TestFreq_8_Hz, TestFreq_11_Hz, TestFreq_14_Hz,
+            TestFreq_9_Hz, TestFreq_14_Hz,
             TestFreq_17_Hz, TestFreq_20_Hz, TestFreq_None
         };
         // array mutation requires mtx protection

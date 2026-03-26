@@ -35,5 +35,7 @@ private:
     void handle_get_quality(const httplib::Request& req, httplib::Response& res);
     void handle_get_eeg(const httplib::Request& req, httplib::Response& res);
     void handle_get_sessions(const httplib::Request& req, httplib::Response& res);
+    void handle_get_runtime_inference_snapshot(const httplib::Request& req, httplib::Response& res); // for demo/debug mode overlays in run mode
+    void handle_get_hw_serial(const httplib::Request&, httplib::Response& res); // for actuation (arduino) monitoring on ui
     void write_json(httplib::Response& res, std::string_view json_body) const;
 }; // HttpServer_C

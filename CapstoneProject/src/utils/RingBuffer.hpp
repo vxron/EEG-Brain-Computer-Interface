@@ -41,7 +41,7 @@ notes:
 // semaphore template parameter type is ptrdiff_t (type for the update param in the release() function)
 // setting its max to 250 means we're saying, 10000 is the max we can release at once (really we'll keep it at 1 for this)
 static constexpr std::ptrdiff_t SEM_BUFFER_CAPACITY = 10000;
-inline constexpr std::size_t ACQ_RING_BUFFER_CAPACITY = 50;    // ring buffer holds scans (added in bouts of 128ms)
+inline constexpr std::size_t ACQ_RING_BUFFER_CAPACITY = 75;    // ring buffer holds scans (added in bouts of 128ms)
 
 // "T" will be eeg sample reads for this application (defined in types.h)
 template<typename T>
@@ -58,7 +58,7 @@ public:
     // ring buffer methods
     bool pop(T *dest);
     bool push(const T& data);
-    size_t drain(T *dest);
+    size_t drain(T *dest, size_t max_items); // max items NECESSARY so we drain deterministic amnt without producer adding shi during drain (important when we allocate fix sized data struct to acquire our drain!!)
     void close();
     int trim_ends(size_t guard_samples);
     bool get_trimmed_snapshot(std::vector<T>& out, size_t trimFront, size_t trimBack) const;

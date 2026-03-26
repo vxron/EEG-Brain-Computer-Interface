@@ -13,9 +13,9 @@
 constexpr int FAKE_ACTIVE_REPS = 2; // LEFT x 2, RIGHT x 2 
 constexpr int FAKE_NO_SSVEP_REPS = 8; // 2x total active
 // Duration ranges (ms)
-constexpr int FAKE_ACTIVE_MIN_MS = 1000;
+constexpr int FAKE_ACTIVE_MIN_MS = 2500;
 constexpr int FAKE_ACTIVE_MAX_MS = 6000;
-constexpr int FAKE_REST_MIN_MS   = 1000;
+constexpr int FAKE_REST_MIN_MS   = 2500;
 constexpr int FAKE_REST_MAX_MS   = 8000;
 #endif
 
@@ -69,6 +69,8 @@ private:
     void onStateExit(UIState_E state, UIStateEvent_E ev);
     int checkStimFreqIsIntDivisorOfRefresh(bool isCalib, int desiredTestFreq);
     static bool has_divisor_6_to_20(int n);
+
+    bool sim_demo_mode_ = false; // toggle to use backend dataset instead of unicorn headset
 
 #ifdef ACQ_BACKEND_FAKE
     void fakeAcq_buildSeqAndShuffle();

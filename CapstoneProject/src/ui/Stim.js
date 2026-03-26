@@ -173,6 +173,9 @@ const FREQ_MAX_SELECT = 6;
 let currentWaveform = "square"; // "square" | "sine"
 let currentModulation = "flicker"; // "flicker" | "grow"
 let currentHparam = 0; // 0=Off, 2=Quick, 1=Full (match backend Types.h)
+let currentDemoMode = false;
+let currentDebugMode = false;
+let InferenceSnapLoadInFlight = false;
 let settingsInitiallyUpdated = false;
 // Slider elements
 const elDurActive = document.getElementById("set-duration-active");
@@ -210,6 +213,50 @@ const elPauseOverlay = document.getElementById("pause-overlay");
 const btnResume = document.getElementById("btn-resume");
 const btnPauseExit = document.getElementById("btn-pause-exit");
 
+// Demo & Debug Mode DOM elements
+const viewDemoRun = document.getElementById("view-demo-run");
+const elDebugHwBadge = document.getElementById("debug-hw-badge");
+const elDebugFakeBadge = document.getElementById("debug-fake-badge");
+const elDemoDisabledOverlay = document.getElementById("demo-disabled-overlay");
+const elDemoModeToggle = document.getElementById("toggle-demo-mode");
+const elOnnxOverlayToggle = document.getElementById("toggle-onnx-overlay");
+const elDemoModeStatusBadge = document.getElementById("demo-mode-status-badge");
+const elOnnxOverlayStatusBadge = document.getElementById(
+  "onnx-overlay-status-badge",
+);
+const elDemoSessionLabel = document.getElementById("demo-session-label");
+let consumedDemoMode = false;
+let consumedDebugMode = false;
+let inferenceSnapInterval = null;
+let demoFirstDataReceived = false;
+// Frequencies available in the Tsinghua SSVEP dataset (integer Hz only, indices 0-7)
+const TSINGHUA_VALID_HZ = new Set([8, 9, 10, 11, 12, 13, 14, 15]);
+let lastStateData = null; // needed for get/inference snap argument
+// DEBUG
+const elActTraceLeft = document.getElementById("act-trace-left");
+const elActTraceRight = document.getElementById("act-trace-right");
+// Actuation debug flash (non-demo run mode)
+const elActuationDebugOverlay = document.getElementById(
+  "actuation-debug-overlay",
+);
+const elActDbgDir = document.getElementById("act-dbg-dir");
+let actDbgLastActuationCount = undefined;
+const actuatingBanner = document.getElementById("actuating-banner");
+let hwDebugEnabled = false;
+let hwSerialInterval = null;
+let hwLastEntryTs = 0;
+// SERIAL CONSOLE overlay
+const elToggleHwDebug = document.getElementById("toggle-hw-debug");
+const elHwDebugStatusBadge = document.getElementById("hw-debug-status-badge");
+const elHwOverlay = document.getElementById("hw-debug-overlay");
+const elHwSerialLog = document.getElementById("hw-serial-log");
+const elHwBadgeMock = document.getElementById("hw-badge-mock");
+const elHwBadgeConn = document.getElementById("hw-badge-conn");
+const elHwBadgeCalib = document.getElementById("hw-badge-calib");
+const elHwBadgeEstop = document.getElementById("hw-badge-estop");
+const elHwBadgeMode = document.getElementById("hw-badge-mode");
+const elHwBadgeAct = document.getElementById("hw-badge-action");
+
 let currIdx = 0;
 let prevIdx = 0;
 let prevTrainFailMsg = "";
@@ -245,6 +292,7 @@ function showView(name) {
     viewCalibOptions,
     viewSettings,
     viewNoSSVEP,
+    viewDemoRun,
   ];
 
   for (const v of allViews) {
@@ -281,6 +329,9 @@ function showView(name) {
       break;
     case "no_ssvep":
       viewNoSSVEP.classList.remove("hidden");
+      break;
+    case "demo_run":
+      viewDemoRun.classList.remove("hidden");
       break;
     default:
       viewHome.classList.remove("hidden");
@@ -363,6 +414,19 @@ function hideModal() {
   modalVisible = false;
 }
 
+function hideRunActuationFlash() {
+  if (!elActuationDebugOverlay) return;
+  elActuationDebugOverlay.classList.add("hidden");
+  elActuationDebugOverlay.style.animation = "none";
+  clearTimeout(elActuationDebugOverlay._timer);
+}
+
+function hideRunDebugConfidence() {
+  const rdcPanel = document.getElementById("run-debug-conf");
+  if (!rdcPanel) return;
+  rdcPanel.classList.add("hidden");
+}
+
 // (5a) pending training overlay helper
 function showTrainingOverlay(show) {
   if (!elTrainingOverlay) return;
@@ -374,6 +438,11 @@ function showTrainingOverlay(show) {
 // (5b) paused overlay helper
 function setPauseButtonVisible(visible) {
   if (!btnPause) return;
+  // In demo mode the pause button lives in the demo-header; keep original hidden
+  if (document.body.classList.contains("demo-run-active")) {
+    btnPause.classList.add("hidden");
+    return;
+  }
   btnPause.classList.toggle("hidden", !visible);
 }
 
@@ -406,6 +475,8 @@ function updateSettingsFromState(data) {
   const stim_mode_i = data.settings.stim_mode; // 0=flicker, 1=grow
   const waveform_i = data.settings.waveform; // 0=square, 1=sine
   const hparam_i = data.settings.hparam;
+  const debug_mode_i = data.settings.debug_mode;
+  const demo_mode_i = data.settings.demo_mode;
   const duractive_i = Number(data.settings.duration_active_s);
   const durnone_i = Number(data.settings.duration_none_s);
   const durrest_i = Number(data.settings.duration_rest_s);
@@ -420,6 +491,27 @@ function updateSettingsFromState(data) {
   currentModulation = selModulation?.value ?? "flicker";
   const trainArchNow = Number(selTrainArch?.value ?? arch ?? 0);
   renderHparamUI(hparam_i ?? 0, trainArchNow); // dep on train arch...
+  currentDemoMode = demo_mode_i === true;
+  currentDebugMode = debug_mode_i === true;
+  if (elDemoModeToggle) elDemoModeToggle.checked = currentDemoMode;
+  if (elOnnxOverlayToggle) elOnnxOverlayToggle.checked = currentDebugMode;
+  if (elDemoModeStatusBadge) {
+    elDemoModeStatusBadge.textContent = currentDemoMode ? "ON" : "OFF";
+    elDemoModeStatusBadge.classList.toggle("on", currentDemoMode);
+    elDemoModeStatusBadge.classList.toggle("off", !currentDemoMode);
+  }
+  if (elOnnxOverlayStatusBadge) {
+    elOnnxOverlayStatusBadge.textContent = currentDebugMode ? "ON" : "OFF";
+    elOnnxOverlayStatusBadge.classList.toggle("on", currentDebugMode);
+    elOnnxOverlayStatusBadge.classList.toggle("off", !currentDebugMode);
+  }
+  // hw debug toggle — restore state on settings page entry
+  if (elToggleHwDebug) elToggleHwDebug.checked = hwDebugEnabled;
+  if (elHwDebugStatusBadge) {
+    elHwDebugStatusBadge.textContent = hwDebugEnabled ? "ON" : "OFF";
+    elHwDebugStatusBadge.classList.toggle("on", hwDebugEnabled);
+    elHwDebugStatusBadge.classList.toggle("off", !hwDebugEnabled);
+  }
 
   if (elDurActive && !Number.isNaN(duractive_i))
     elDurActive.value = String(duractive_i);
@@ -450,6 +542,7 @@ function updateSettingsFromState(data) {
 
   updateFreqCounterUI();
   updateFreqCompatibilityIndicators();
+  updateTsinghuaFreqOverlay();
 
   settingsInitiallyUpdated = true; // rising edge
   if (elSettingsStatus) elSettingsStatus.textContent = "";
@@ -890,7 +983,7 @@ function renderTrainingResult(state) {
   }
 }
 
-// toggle home "welcome" containers visibility
+// (12) toggle home "welcome" containers visibility
 function setHomeWelcomeVisible(visible) {
   const welcomeElements = [
     document.querySelector("#view-home > h2"),
@@ -907,6 +1000,51 @@ function setHomeWelcomeVisible(visible) {
       }
     }
   });
+}
+
+// (13) DEMO MODE STUFF
+// (13a) ON ENTRY: track whether we've received first real inference payload (as dataset is loading)
+// so we can show skeleton loading ui while loading :)
+function setDemoPanelsLoading(isLoading) {
+  const panels = document.querySelectorAll("#view-demo-run .demo-panel");
+  panels.forEach((p) => p.classList.toggle("is-loading", isLoading));
+}
+// (13b) move header buttons in demo mode bcuz they don't fit how they usually would in run view
+function injectDemoHeaderButtons() {
+  const header = document.querySelector("#view-demo-run .demo-header");
+  if (!header || header.querySelector(".demo-header-actions")) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "demo-header-actions";
+
+  const pauseBtn = document.createElement("button");
+  pauseBtn.type = "button";
+  pauseBtn.className = "btn ghost btn-pause-demo";
+  pauseBtn.textContent = "Pause";
+  pauseBtn.addEventListener("click", () => sendSessionEvent("pause"));
+
+  const exitBtn = document.createElement("button");
+  exitBtn.type = "button";
+  exitBtn.className = "btn btn-exit-demo";
+  exitBtn.textContent = "Exit Session";
+  exitBtn.addEventListener("click", () => sendSessionEvent("exit"));
+
+  wrap.appendChild(pauseBtn);
+  wrap.appendChild(exitBtn);
+  header.appendChild(wrap);
+
+  // Tell CSS to hide the original fixed-position buttons
+  document.body.classList.add("demo-run-active");
+}
+
+// (13c) ON EXIT: reset everything & move buttons black in place
+function removeDemoHeaderButtons() {
+  const wrap = document.querySelector("#view-demo-run .demo-header-actions");
+  if (wrap) wrap.remove();
+  document.body.classList.remove("demo-run-active");
+  // Reset skeleton for next entry
+  demoFirstDataReceived = false;
+  setDemoPanelsLoading(false);
 }
 
 // ==================== 4) CONNECTION STATUS HELPER =====================
@@ -1103,13 +1241,13 @@ function testFreqEnumToHz(e) {
     case 1:
       return 8;
     case 2:
-      return 10;
-    case 3:
-      return 11;
-    case 4:
-      return 12;
-    case 5:
       return 9;
+    case 3:
+      return 10;
+    case 4:
+      return 11;
+    case 5:
+      return 12;
     case 6:
       return 13;
     case 7:
@@ -1249,12 +1387,43 @@ function updateUiFromState(data) {
     setHomeWelcomeVisible(true); // Show welcome content instead of training status
   }
 
+  // detect when leaving run mode
+  if (prevStimState == 0 && stimState != 0) {
+    stopInferenceSnapPolling();
+    consumedDemoMode = false;
+    consumedDebugMode = false; // <-- add this
+    removeDemoHeaderButtons();
+    actDbgLastActuationCount = undefined;
+    if (elActTraceLeft) elActTraceLeft.innerHTML = "";
+    if (elActTraceRight) elActTraceRight.innerHTML = "";
+    if (actuatingBanner) actuatingBanner.classList.add("hidden");
+    if (hwSerialInterval) {
+      clearInterval(hwSerialInterval);
+      hwSerialInterval = null;
+    }
+    hideRunDebugConfidence();
+    if (elHwOverlay) elHwOverlay.style.display = "none";
+    if (elActuationDebugOverlay)
+      elActuationDebugOverlay.classList.add("hidden");
+  }
+
   const pauseVisible =
     stimState === 0 || // Active_Run
     stimState === 1 || // Active_Calib
     stimState === 2 || // Instructions
     stimState === 10; // NoSSVEP_Test
   setPauseButtonVisible(pauseVisible);
+
+  {
+    // checking compile time flag
+    const isFake = data.is_fake_acq === true; // backend sends string "true"/"false"
+    if (elDebugHwBadge) elDebugHwBadge.classList.toggle("hidden", isFake);
+    if (elDebugFakeBadge) elDebugFakeBadge.classList.toggle("hidden", !isFake);
+    // Only allow demo mode toggle in FAKE builds
+    if (elDemoModeToggle) elDemoModeToggle.disabled = !isFake;
+    if (elDemoDisabledOverlay)
+      elDemoDisabledOverlay.classList.toggle("hidden", isFake);
+  }
 
   // 0 = Active_Run, 1 = Active_Calib, 2 = Instructions, 3 = Home, 4 = saved_sessions, 5 = run_options, 6 = hardware_checks, 7 = calib_options, 8 = pending_training, 9 = settings, 10 = no_ssvep, 11 = paused, 12 = None
   if (stimState === 3 /* Home */ || stimState === 12 /* None */) {
@@ -1321,12 +1490,48 @@ function updateUiFromState(data) {
       startCalibFlicker(calibFreqHz); // keep it running
     }
   } else if (stimState === 0 /* Active_Run */) {
-    applyBodyMode({ fullscreen: true, targets: true, run: true });
-    showView("active_run");
-    // default to freq_hz if undef right/left
-    const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
-    const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
-    startRunFlicker(runLeftHz, runRightHz);
+    const isDemoMode = data.settings.demo_mode === true;
+    if (isDemoMode) {
+      // show inference dashboard instead of arrows
+      applyBodyMode({ fullscreen: true, targets: false, run: false });
+      stopAllStimuli();
+      showView("demo_run");
+      if (!consumedDemoMode) {
+        startInferenceSnapPolling();
+        if (elDemoSessionLabel) {
+          const subj = data.active_subject_id || "unknown";
+          const sess = data.active_session_id || "";
+          elDemoSessionLabel.textContent = sess
+            ? `${subj} · ${sess.slice(0, 16)}`
+            : `${subj} · live dataset stream`;
+        }
+        injectDemoHeaderButtons(); // make inline buttons (specific to demo mode)
+        demoFirstDataReceived = false; // reset skeleton flag
+        setDemoPanelsLoading(true); // show skeleton
+        consumedDemoMode = true; // rising edge complete
+      }
+    } else {
+      const isDebugMode = data.settings.debug_mode === true;
+      if (elActTraceLeft)
+        elActTraceLeft.style.display = isDebugMode ? "" : "none";
+      if (elActTraceRight)
+        elActTraceRight.style.display = isDebugMode ? "" : "none";
+      // start/stop polling on edges only — same pattern as demo mode
+      if (isDebugMode && !consumedDebugMode) {
+        startInferenceSnapPolling();
+        consumedDebugMode = true;
+      } else if (!isDebugMode && consumedDebugMode) {
+        stopInferenceSnapPolling();
+        consumedDebugMode = false;
+      }
+      applyBodyMode({ fullscreen: true, targets: true, run: true });
+      showView("active_run");
+      const runLeftHz = data.freq_left_hz ?? data.freq_hz ?? 0;
+      const runRightHz = data.freq_right_hz ?? data.freq_hz ?? 0;
+      startRunFlicker(runLeftHz, runRightHz);
+
+      hideRunActuationFlash();
+    }
   } else if (stimState === 4 /* Saved Sessions */) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
@@ -1358,6 +1563,7 @@ function updateUiFromState(data) {
   } else if (stimState == 8) {
     stopAllStimuli();
     applyBodyMode({ fullscreen: false, targets: false, run: false });
+    showView("home");
   } else if (stimState == 9) {
     applyBodyMode({ fullscreen: false, targets: false, run: false });
     if (!settingsInitiallyUpdated) {
@@ -1410,6 +1616,8 @@ function updateUiFromState(data) {
   if (popupEnumIdx !== 0 && popupAckInFlight) {
     // keep modal hidden
     prevStimState = stimState;
+    prevIdx = currIdx;
+    prevTrainFailMsg = currTrainFailMsg;
     return;
   }
 
@@ -1453,6 +1661,11 @@ function updateUiFromState(data) {
           "There was an internal error. Please try calibration again.",
         );
         break;
+      case 8: // UIPopup_ArduinoDisconnected
+        showModal(
+          "Arduino Disconnected",
+          "The actuator hardware is not responding and run mode is unavailable. Please try reconnecting Arduino.",
+        );
       default:
         showModal(
           "DEBUG MSG",
@@ -1461,6 +1674,10 @@ function updateUiFromState(data) {
         break;
     }
   }
+  // HW actuation debug overlay: sync visibility + update badges
+  syncHwOverlayVisibility(stimState);
+  if (data.actuation) updateHwStatusStrip(data.actuation);
+
   // update state
   prevStimState = stimState;
   prevIdx = currIdx;
@@ -1488,6 +1705,7 @@ async function pollStateOnce() {
 
     // 5.3.) parse json & update dom
     const data = await res.json();
+    lastStateData = data;
     updateUiFromState(data);
     console.log("STATE:", data);
   } catch (err) {
@@ -2022,7 +2240,535 @@ async function selectSession(sessIdx, cardEl) {
   }
 }
 
-// ================ 12) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
+// ==================== 12) DEMO MODE RUNTIME BUILDER ==========================================================
+// Main fetch + render function for entering the saved sessions page
+async function fetchAndRenderInferenceSnap(state) {
+  if (
+    typeof InferenceSnapLoadInFlight != "undefined" &&
+    InferenceSnapLoadInFlight == true
+  )
+    return; // don't render again if we're already trying to render
+  InferenceSnapLoadInFlight = true;
+
+  try {
+    const freq_left_hz = state.freq_left_hz;
+    const freq_right_hz = state.freq_right_hz;
+
+    const res = await fetch(`${API_BASE}/runtime_inference_snapshot`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = await res.json();
+
+    updateDemoRunView(data, freq_left_hz, freq_right_hz);
+    updateActuationDebugOverlay(data);
+  } catch (err) {
+    console.log("GET /runtime_inference_snapshot error:", err);
+  } finally {
+    InferenceSnapLoadInFlight = false; // always reset before exiting this func...
+  }
+}
+
+// demo mode view for dataset streamer
+// state = get/state
+// data = get/runtime_inference_snapshot
+function updateDemoRunView(data, freq_left_hz, freq_right_hz) {
+  const d = data.onnx_inference;
+  if (!d) return;
+
+  // clear skeleton on first real payload
+  if (!demoFirstDataReceived && d.total_windows > 0) {
+    demoFirstDataReceived = true;
+    setDemoPanelsLoading(false);
+  }
+
+  // 1) Prediction panel
+  const predEl = document.getElementById("demo-pred-state");
+  const predIcon = document.getElementById("demo-pred-icon");
+  const predLabel = document.getElementById("demo-pred-label");
+  const predSub = document.getElementById("demo-pred-sub");
+  const artBadge = document.getElementById("demo-artifact-badge");
+  const actFlash = document.getElementById("demo-actuation-flash");
+
+  // Remove all state classes
+  if (predEl)
+    predEl.classList.remove("left", "right", "none", "unknown", "artifact");
+
+  if (d.is_artifactual) {
+    if (predEl) predEl.classList.add("artifact");
+    if (predIcon) predIcon.textContent = "⚡";
+    if (predLabel) predLabel.textContent = "ARTIFACT";
+    if (predSub) predSub.textContent = "Window rejected — signal quality check";
+    if (artBadge) artBadge.classList.remove("hidden");
+  } else {
+    if (artBadge) artBadge.classList.add("hidden");
+    const ps = d.predicted_state; // 0=L 1=R 2=None 3=Unknown
+    const stateMap = {
+      0: { cls: "left", icon: "←", lbl: "LEFT", sub: "Looking left detected" },
+      1: {
+        cls: "right",
+        icon: "→",
+        lbl: "RIGHT",
+        sub: "Looking right detected",
+      },
+      2: { cls: "none", icon: "·", lbl: "NONE", sub: "No SSVEP detected" },
+      3: {
+        cls: "unknown",
+        icon: "?",
+        lbl: "UNKNOWN",
+        sub: "Classifier returned unknown",
+      },
+    };
+    const info = stateMap[ps] ?? stateMap[3];
+    if (predEl) predEl.classList.add(info.cls);
+    if (predIcon) predIcon.textContent = info.icon;
+    if (predLabel) predLabel.textContent = info.lbl;
+    if (predSub) predSub.textContent = info.sub;
+  }
+
+  // 2) Debounce bar
+  const sc = d.stable_count ?? 0;
+  const st = d.stable_target ?? 10;
+  const pct = st > 0 ? Math.min(100, Math.round((sc / st) * 100)) : 0;
+  const debounceBar = document.getElementById("demo-debounce-bar");
+  const debounceFrac = document.getElementById("demo-debounce-fraction");
+  if (debounceBar) debounceBar.style.width = pct + "%";
+  if (debounceFrac) debounceFrac.textContent = `${sc} / ${st}`;
+
+  // only show a climbing debounce for L/R predictions, not none/unkonwn bcuz backend doesn't use debounce for these (makes no sense)
+  const isActionablePred =
+    !d.is_artifactual && (d.predicted_state === 0 || d.predicted_state === 1);
+  if (isActionablePred) {
+    const pct = st > 0 ? Math.min(100, Math.round((sc / st) * 100)) : 0;
+    if (debounceBar) {
+      debounceBar.style.width = pct + "%";
+      debounceBar.classList.remove("is-none-pred");
+    }
+    if (debounceFrac) debounceFrac.textContent = `${sc} / ${st}`;
+  } else {
+    // NONE / UNKNOWN / artifact: reset bar to zero
+    if (debounceBar) {
+      debounceBar.style.width = "0%";
+      debounceBar.classList.add("is-none-pred");
+    }
+    if (debounceFrac) debounceFrac.textContent = `0 / ${st}`;
+  }
+
+  // Actuation flash: show briefly when actuation_count increments
+  if (actFlash) {
+    // seed _lastcount from curr value so we flash on NEW actuations only, not stale ones from prev sessions
+    if (!actFlash._lastCount) actFlash._lastCount = d.actuation_count ?? 0;
+    if (d.actuation_count > actFlash._lastCount) {
+      actFlash._lastCount = d.actuation_count;
+      actFlash.classList.remove("hidden");
+      clearTimeout(actFlash._timer);
+      actFlash._timer = setTimeout(
+        () => actFlash.classList.add("hidden"),
+        1200,
+      );
+    }
+  }
+
+  // 3) Softmax confidence bars
+  const sm = Array.isArray(d.softmax) ? d.softmax : [0.333, 0.333, 0.334];
+  const pcts = sm.map((v) => Math.round(v * 100));
+  ["left", "right", "none"].forEach((side, i) => {
+    const bar = document.getElementById(`demo-bar-${side}`);
+    const pctEl = document.getElementById(`demo-pct-${side}`);
+    if (bar) bar.style.width = pcts[i] + "%";
+    if (pctEl) pctEl.textContent = pcts[i] + "%";
+  });
+
+  // 4) Raw logits
+  const lg = Array.isArray(d.logits) ? d.logits : [0, 0, 0];
+  ["left", "right", "none"].forEach((side, i) => {
+    const el = document.getElementById(`demo-logit-${side}`);
+    if (el) el.textContent = typeof lg[i] === "number" ? lg[i].toFixed(3) : "—";
+  });
+
+  // 5) Streamer panel
+  const str = data.streamer ?? {};
+  const gtHzEl = document.getElementById("demo-gt-hz");
+  const gtLblEl = document.getElementById("demo-gt-label");
+  const tgtIdxEl = document.getElementById("demo-target-idx");
+  const trialIdxEl = document.getElementById("demo-trial-idx");
+  const blockIdxEl = document.getElementById("demo-block-idx");
+  const cyclingEl = document.getElementById("demo-cycling-badge");
+
+  const hz = str.active_target_hz ?? 0;
+  const targetIdx = str.active_target_idx ?? -1;
+  if (gtHzEl)
+    gtHzEl.textContent = targetIdx === -1 || hz <= 0 ? "—" : `${hz} Hz`;
+
+  // Map hz → LEFT/RIGHT/NONE using session's freq pair
+  let gtLabel = "NO SSVEP";
+  if (targetIdx !== -1 && hz > 0) {
+    const leftHz = freq_left_hz ?? -1;
+    const rightHz = freq_right_hz ?? -1;
+    if (Math.abs(hz - leftHz) < 0.5) gtLabel = "LEFT";
+    else if (Math.abs(hz - rightHz) < 0.5) gtLabel = "RIGHT";
+    else gtLabel = `OTHER (${hz} Hz)`;
+  }
+  if (gtLblEl) gtLblEl.textContent = gtLabel;
+
+  if (tgtIdxEl)
+    tgtIdxEl.textContent =
+      str.active_target_idx >= 0 ? str.active_target_idx : "—";
+  if (trialIdxEl)
+    trialIdxEl.textContent =
+      str.active_trial_idx >= 0 ? str.active_trial_idx : "—";
+  if (blockIdxEl)
+    blockIdxEl.textContent = str.block_idx >= 0 ? str.block_idx : "—";
+  if (cyclingEl) cyclingEl.classList.toggle("hidden", !str.is_cycling);
+
+  // 6) Verdict
+  const verdictEl = document.getElementById("demo-verdict");
+  const verdictIcon = document.getElementById("demo-verdict-icon");
+  const verdictLabel = document.getElementById("demo-verdict-label");
+  const verdictSub = document.getElementById("demo-verdict-sub");
+
+  if (verdictEl)
+    verdictEl.classList.remove(
+      "verdict-correct",
+      "verdict-incorrect",
+      "verdict-unknown",
+    );
+
+  if (d.is_artifactual) {
+    if (verdictEl) verdictEl.classList.add("verdict-unknown");
+    if (verdictIcon) verdictIcon.textContent = "—";
+    if (verdictLabel) verdictLabel.textContent = "N/A";
+    if (verdictSub) verdictSub.textContent = "Artifact window";
+  } else {
+    // Map predicted_state (int) to direction string
+    const predDir =
+      d.predicted_state === 0
+        ? "LEFT"
+        : d.predicted_state === 1
+          ? "RIGHT"
+          : d.predicted_state === 2
+            ? "NONE"
+            : "UNKNOWN";
+
+    if (gtLabel === "LEFT" || gtLabel === "RIGHT" || gtLabel === "NO SSVEP") {
+      const gtDir = gtLabel === "NO SSVEP" ? "NONE" : gtLabel;
+      if (predDir === "UNKNOWN") {
+        if (verdictEl) verdictEl.classList.add("verdict-unknown");
+        if (verdictIcon) verdictIcon.textContent = "?";
+        if (verdictLabel) verdictLabel.textContent = "UNKNOWN";
+        if (verdictSub) verdictSub.textContent = `GT: ${gtDir}`;
+      } else if (predDir === gtDir) {
+        if (verdictEl) verdictEl.classList.add("verdict-correct");
+        if (verdictIcon) verdictIcon.textContent = "✓";
+        if (verdictLabel) verdictLabel.textContent = "CORRECT";
+        if (verdictSub) verdictSub.textContent = `${predDir} = ${gtDir}`;
+      } else {
+        if (verdictEl) verdictEl.classList.add("verdict-incorrect");
+        if (verdictIcon) verdictIcon.textContent = "✗";
+        if (verdictLabel) verdictLabel.textContent = "INCORRECT";
+        if (verdictSub)
+          verdictSub.textContent = `Got ${predDir}, expected ${gtDir}`;
+      }
+    } else {
+      if (verdictEl) verdictEl.classList.add("verdict-unknown");
+      if (verdictIcon) verdictIcon.textContent = "—";
+      if (verdictLabel) verdictLabel.textContent = "UNKNOWN";
+      if (verdictSub) verdictSub.textContent = "GT not determined";
+    }
+  }
+
+  // 7) Window counters
+  const winCount = document.getElementById("demo-win-count");
+  const artCount = document.getElementById("demo-art-count");
+  const actCount = document.getElementById("demo-act-count");
+  if (winCount) winCount.textContent = d.total_windows ?? 0;
+  if (artCount) artCount.textContent = d.artifactual_windows ?? 0;
+  if (actCount) actCount.textContent = d.actuation_count ?? 0;
+}
+
+// separate timer and polling function just for inference snapshots (demo/debug modes), independent of state poll
+function startInferenceSnapPolling() {
+  if (inferenceSnapInterval) return;
+  inferenceSnapInterval = setInterval(() => {
+    if (!InferenceSnapLoadInFlight && lastStateData)
+      fetchAndRenderInferenceSnap(lastStateData);
+  }, 100);
+}
+function stopInferenceSnapPolling() {
+  if (inferenceSnapInterval) {
+    clearInterval(inferenceSnapInterval);
+    if (elDemoSessionLabel)
+      elDemoSessionLabel.textContent = "Live inference · dataset stream";
+    inferenceSnapInterval = null;
+  }
+  const actFlash = document.getElementById("demo-actuation-flash");
+  if (actFlash) actFlash._lastCount = undefined; // reset last count back to 0 for next session (since it's a monotonic counter in backend)
+  hideRunActuationFlash();
+  // reset skeleton for next entry
+  demoFirstDataReceived = false;
+  setDemoPanelsLoading(false);
+}
+
+function updateActuationDebugOverlay(data) {
+  const d = data.onnx_inference;
+  if (!d || !elActuationDebugOverlay) return;
+
+  // --- actuation banner (debug + demo modes) ---
+  const isActuating = d.is_actuating === true;
+  const actDir = d.actuating_direction;
+  const msRemaining = d.actuation_busy_ms_remaining ?? 0;
+  const secRemaining = (msRemaining / 1000).toFixed(1);
+  if (actuatingBanner) {
+    if (isActuating) {
+      const dirLabel = actDir === 0 ? "← LEFT" : "→ RIGHT";
+      actuatingBanner.textContent = `Actuating ${dirLabel}  ·  ${secRemaining}s`;
+      actuatingBanner.classList.remove("hidden");
+    } else {
+      actuatingBanner.classList.add("hidden");
+    }
+  }
+
+  // --- run mode debug confidence strip ---
+  const rdcPanel = document.getElementById("run-debug-conf");
+  if (rdcPanel) {
+    const inDemoMode = currentDemoMode === true;
+    const inDebugMode = currentDebugMode === true;
+    const showRdc =
+      inDebugMode && !inDemoMode && lastStateData?.stim_window === 0;
+    rdcPanel.classList.toggle("hidden", !showRdc);
+    if (showRdc && Array.isArray(d.softmax)) {
+      ["left", "right", "none"].forEach((side, i) => {
+        const pct = Math.round((d.softmax[i] ?? 0) * 100);
+        const bar = document.getElementById(`rdc-bar-${side}`);
+        const lbl = document.getElementById(`rdc-pct-${side}`);
+        if (bar) bar.style.width = pct + "%";
+        if (lbl) lbl.textContent = pct + "%";
+      });
+    }
+  }
+
+  // --- sparkle trace: fire a dot on every new L/R prediction window ---
+  // (only meaningful in non-demo debug mode — demo has no arrows to trace against)
+  if (
+    !d.is_artifactual &&
+    (d.predicted_state === 0 || d.predicted_state === 1)
+  ) {
+    const container =
+      d.predicted_state === 0 ? elActTraceLeft : elActTraceRight;
+    if (container) {
+      const dot = document.createElement("div");
+      dot.className = "act-trace-dot";
+      container.appendChild(dot);
+      dot.addEventListener("animationend", () => dot.remove(), { once: true });
+    }
+  }
+  if (!d.is_artifactual && d.predicted_state === 2) {
+    const container = document.getElementById("act-trace-center");
+    if (container) {
+      const dot = document.createElement("div");
+      dot.className = "act-trace-dot";
+      container.appendChild(dot);
+      dot.addEventListener("animationend", () => dot.remove(), { once: true });
+    }
+  }
+
+  // --- actuation flash: rising edge on actuation_count only ---
+  if (actDbgLastActuationCount === undefined) {
+    actDbgLastActuationCount = d.actuation_count ?? 0;
+    return;
+  }
+  // green flash is redundant in non-demo debug; yellow banner handles it
+  const inDemoMode = currentDemoMode === true;
+
+  if (!inDemoMode) {
+    if (elActuationDebugOverlay) {
+      elActuationDebugOverlay.classList.add("hidden");
+      elActuationDebugOverlay.style.animation = "none";
+      clearTimeout(elActuationDebugOverlay._timer);
+    }
+    actDbgLastActuationCount = d.actuation_count ?? 0;
+    return;
+  }
+
+  // restore animation capability when demo mode is actually allowed
+  elActuationDebugOverlay.style.animation = "";
+
+  if (actDbgLastActuationCount === undefined) {
+    actDbgLastActuationCount = d.actuation_count ?? 0;
+    return;
+  }
+
+  if ((d.actuation_count ?? 0) > actDbgLastActuationCount) {
+    actDbgLastActuationCount = d.actuation_count ?? 0;
+
+    const isLeft = d.predicted_state === 0;
+    if (elActDbgDir) {
+      elActDbgDir.textContent = isLeft ? "ACTUATED ←" : "ACTUATED →";
+    }
+
+    elActuationDebugOverlay.classList.remove("hidden");
+    elActuationDebugOverlay.style.animation = "none";
+    void elActuationDebugOverlay.offsetHeight;
+    elActuationDebugOverlay.style.animation = "";
+
+    clearTimeout(elActuationDebugOverlay._timer);
+    elActuationDebugOverlay._timer = setTimeout(() => {
+      elActuationDebugOverlay.classList.add("hidden");
+    }, 900);
+  }
+}
+
+// DATASET ONLY HAS CERTAIN FREQS SO WE SHOULDNT TRAIN OR TRY TO TRAIN EVEN ON ONES IT DOESNT HAVE (pointless hehe) -> so grey them out
+function updateTsinghuaFreqOverlay() {
+  if (!currentDemoMode) {
+    // remove any tsinghua overlays if demo mode is off
+    freqInputs.forEach((inp) => {
+      const checkbox = inp.closest(".freq-checkbox");
+      checkbox.classList.remove("freq-tsinghua-invalid");
+    });
+    return;
+  }
+  freqInputs.forEach((inp) => {
+    const hz = Number(inp.dataset.hz);
+    const checkbox = inp.closest(".freq-checkbox");
+    const isValid = TSINGHUA_VALID_HZ.has(hz);
+    checkbox.classList.toggle("freq-tsinghua-invalid", !isValid);
+    // uncheck invalid freqs if selected
+    if (!isValid && inp.checked) {
+      inp.checked = false;
+      updateFreqCounterUI();
+    }
+  });
+}
+
+// HW ACTUATION DEBUG OVERLAY
+
+function syncHwOverlayVisibility(stimState) {
+  // only active during run mode (stim_window === 0 = UIState_Active_Run)
+  const inRunMode = stimState === 0;
+  const shouldShow = hwDebugEnabled && inRunMode;
+
+  if (!elHwOverlay) return;
+  elHwOverlay.style.display = shouldShow ? "flex" : "none";
+
+  if (shouldShow && !hwSerialInterval) {
+    // entering run mode with toggle on — reset log and start polling
+    hwLastEntryTs = 0;
+    if (elHwSerialLog) elHwSerialLog.innerHTML = "";
+    hwSerialInterval = setInterval(pollHwSerial, 300);
+    pollHwSerial(); // immediate first fetch
+  } else if (!shouldShow && hwSerialInterval) {
+    clearInterval(hwSerialInterval);
+    hwSerialInterval = null;
+  }
+  // in demo mode the overlay sits on top of the demo view; bump z-index so it clears the demo panels
+  if (elHwOverlay) {
+    elHwOverlay.style.zIndex =
+      lastStateData?.settings?.demo_mode === true ? "700" : "600";
+  }
+}
+
+async function pollHwSerial() {
+  try {
+    const res = await fetch(`${API_BASE}/hw_serial`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderHwSerialEntries(data.entries);
+  } catch (_) {}
+}
+
+function renderHwSerialEntries(entries) {
+  if (!entries?.length || !elHwSerialLog) return;
+
+  const fresh = entries.filter((e) => e.ts_ms > hwLastEntryTs);
+  if (!fresh.length) return;
+
+  const frag = document.createDocumentFragment();
+  for (const e of fresh) {
+    const row = document.createElement("div");
+    row.className = "hw-log-line";
+
+    // semantic highlight class based on content
+    if (e.dir === "rx") {
+      const u = e.line.toUpperCase();
+      if (u === "DONE") row.classList.add("is-done");
+      else if (u === "ESTOP" || u === "STATUS:ESTOP_ON")
+        row.classList.add("is-estop");
+      else if (u === "NOCALIB") row.classList.add("is-nocalib");
+      else if (u.startsWith("STATUS:")) row.classList.add("is-status");
+    }
+
+    const tsEl = document.createElement("span");
+    tsEl.className = "hw-log-ts";
+    tsEl.textContent = fmtHwTs(e.ts_ms);
+
+    const dirEl = document.createElement("span");
+    dirEl.className = "hw-log-dir";
+    dirEl.textContent = e.dir === "rx" ? "←" : "→";
+
+    const lineEl = document.createElement("span");
+    lineEl.className = e.dir === "rx" ? "hw-log-rx" : "hw-log-tx";
+    lineEl.textContent = e.line;
+
+    row.appendChild(tsEl);
+    row.appendChild(dirEl);
+    row.appendChild(lineEl);
+    frag.appendChild(row);
+  }
+
+  elHwSerialLog.appendChild(frag);
+  hwLastEntryTs = fresh[fresh.length - 1].ts_ms;
+
+  // cap DOM to avoid unbounded growth
+  while (elHwSerialLog.children.length > 150) {
+    elHwSerialLog.removeChild(elHwSerialLog.firstChild);
+  }
+  elHwSerialLog.scrollTop = elHwSerialLog.scrollHeight;
+}
+
+function fmtHwTs(ts_ms) {
+  const d = new Date(ts_ms);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function updateHwStatusStrip(act) {
+  if (!act) return;
+
+  if (elHwBadgeMock) {
+    elHwBadgeMock.style.display = act.is_mock ? "inline-flex" : "none";
+  }
+
+  if (elHwBadgeConn) {
+    elHwBadgeConn.textContent = act.connected ? "CONNECTED" : "DISCONNECTED";
+    elHwBadgeConn.className =
+      "hw-badge " + (act.connected ? "hw-badge-ok" : "hw-badge-err");
+  }
+
+  if (elHwBadgeCalib) {
+    elHwBadgeCalib.textContent = act.calibrated
+      ? `CAL ${act.bookWidth}px`
+      : "UNCALIBRATED";
+    elHwBadgeCalib.className =
+      "hw-badge " + (act.calibrated ? "hw-badge-ok" : "hw-badge-warn");
+  }
+
+  if (elHwBadgeEstop) {
+    elHwBadgeEstop.style.display = act.estop ? "inline-flex" : "none";
+  }
+
+  if (elHwBadgeMode) {
+    elHwBadgeMode.textContent = act.mode ?? "UNKNOWN";
+  }
+
+  if (elHwBadgeAct) {
+    const flipping = act.mode === "FUNCTION";
+    elHwBadgeAct.style.display = flipping ? "inline-flex" : "none";
+  }
+}
+
+// ================ 13) HARDWARE CHECKS MAIN RUN LOOP & PLOTTING HELPERS ===================================
 // MAIN LOOP
 async function hardwareLoop() {
   // if user left hw mode, do nothing
@@ -2251,7 +2997,6 @@ function initHardwareCharts(nChannels, labels, fs, units) {
   }
 }
 
-// ============================== 13) HW HEALTH HELPERS ! =============================
 function pct(x) {
   if (x == null || Number.isNaN(x)) return "—";
   return (x * 100).toFixed(1) + "%";
@@ -2414,6 +3159,8 @@ async function sendSettingsAndSave() {
     stim_mode: stimModeToInt(modStr),
     waveform: waveformToInt(waveformStr),
     hparam: trainArch === 0 ? currentHparam : 0, // force off for SVM
+    demo_mode: currentDemoMode,
+    debug_mode: currentDebugMode,
     duration_active_s: Number(elDurActive?.value ?? 11), // otherwise default
     duration_none_s: Number(elDurNone?.value ?? 10),
     duration_rest_s: Number(elDurRest?.value ?? 8),
@@ -2634,6 +3381,113 @@ async function init() {
       sendSessionEvent("cancel_popup");
     });
   }
+
+  if (elDemoModeToggle) {
+    elDemoModeToggle.addEventListener("change", () => {
+      currentDemoMode = elDemoModeToggle.checked;
+      // Constraint: demo mode requires debug mode
+      if (currentDemoMode) {
+        currentDebugMode = true;
+        if (elOnnxOverlayToggle) elOnnxOverlayToggle.checked = true;
+        if (elOnnxOverlayStatusBadge) {
+          elOnnxOverlayStatusBadge.textContent = "ON";
+          elOnnxOverlayStatusBadge.classList.add("on");
+          elOnnxOverlayStatusBadge.classList.remove("off");
+        }
+      }
+      // Update demo badge
+      if (elDemoModeStatusBadge) {
+        elDemoModeStatusBadge.textContent = currentDemoMode ? "ON" : "OFF";
+        elDemoModeStatusBadge.classList.toggle("on", currentDemoMode);
+        elDemoModeStatusBadge.classList.toggle("off", !currentDemoMode);
+      }
+      updateTsinghuaFreqOverlay();
+    });
+  }
+
+  if (elToggleHwDebug) {
+    elToggleHwDebug.addEventListener("change", () => {
+      hwDebugEnabled = elToggleHwDebug.checked;
+      if (elHwDebugStatusBadge) {
+        elHwDebugStatusBadge.textContent = hwDebugEnabled ? "ON" : "OFF";
+        elHwDebugStatusBadge.classList.toggle("on", hwDebugEnabled);
+        elHwDebugStatusBadge.classList.toggle("off", !hwDebugEnabled);
+      }
+      syncHwOverlayVisibility(prevStimState);
+    });
+  }
+
+  if (elOnnxOverlayToggle) {
+    elOnnxOverlayToggle.addEventListener("change", () => {
+      currentDebugMode = elOnnxOverlayToggle.checked;
+      // Constraint: turning off debug mode must also turn off demo mode
+      if (!currentDebugMode && currentDemoMode) {
+        currentDemoMode = false;
+        if (elDemoModeToggle) elDemoModeToggle.checked = false;
+        if (elDemoModeStatusBadge) {
+          elDemoModeStatusBadge.textContent = "OFF";
+          elDemoModeStatusBadge.classList.remove("on");
+          elDemoModeStatusBadge.classList.add("off");
+        }
+      }
+      // Update debug badge
+      if (elOnnxOverlayStatusBadge) {
+        elOnnxOverlayStatusBadge.textContent = currentDebugMode ? "ON" : "OFF";
+        elOnnxOverlayStatusBadge.classList.toggle("on", currentDebugMode);
+        elOnnxOverlayStatusBadge.classList.toggle("off", !currentDebugMode);
+      }
+    });
+  }
+  // DRAGGABLE HW OVERLAY
+  (function makeDraggable() {
+    const el = document.getElementById("hw-debug-overlay");
+    if (!el) return;
+    let startX = 0,
+      startY = 0,
+      startLeft = 0,
+      startTop = 0,
+      dragging = false;
+
+    const titleBar = el; // drag anywhere on the panel
+    titleBar.addEventListener("mousedown", (e) => {
+      // don't steal clicks on the log scroll area
+      if (e.target.closest(".hw-serial-log")) return;
+      dragging = true;
+      el.classList.add("is-dragging");
+      const rect = el.getBoundingClientRect();
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = rect.left;
+      startTop = rect.top;
+      // switch from bottom/left anchoring to top/left so transforms are predictable
+      el.style.bottom = "auto";
+      el.style.top = rect.top + "px";
+      el.style.left = rect.left + "px";
+      e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      const newLeft = Math.max(
+        0,
+        Math.min(window.innerWidth - el.offsetWidth, startLeft + dx),
+      );
+      const newTop = Math.max(
+        0,
+        Math.min(window.innerHeight - el.offsetHeight, startTop + dy),
+      );
+      el.style.left = newLeft + "px";
+      el.style.top = newTop + "px";
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      el.classList.remove("is-dragging");
+    });
+  })();
 }
 // Init as soon as page loads
 window.addEventListener("DOMContentLoaded", () => {
