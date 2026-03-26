@@ -52,6 +52,8 @@ void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
     bool was_streaming = false; 
+    using clock = std::chrono::steady_clock;
+    clock::time_point next_chunk_deadline = clock::now();
 
 try {
     LOG_ALWAYS("producer start");
@@ -147,6 +149,7 @@ try {
             if(!was_streaming && still_requested){
                 acqDemoDriver.unicorn_start_acq(testmode);
                 was_streaming = true;
+                next_chunk_deadline = clock::now();
             }
 
             // only publish from prod -> cons if we're currently streaming
@@ -165,6 +168,15 @@ try {
             // not demo mode
             acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data());
         }
+
+        // pace fake/demo acquisition to real chunk timing
+        constexpr double chunk_period_sec =
+            static_cast<double>(NUM_SCANS_CHUNK) / static_cast<double>(250); // 250 hz
+
+        next_chunk_deadline += std::chrono::duration_cast<clock::duration>(
+            std::chrono::duration<double>(chunk_period_sec));
+
+        std::this_thread::sleep_until(next_chunk_deadline);
 #else
         acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
 #endif
@@ -200,6 +212,7 @@ try {
                 // stop streaming
                 acqDemoDriver.unicorn_demo_stop_acq();
                 was_streaming = false;
+                next_chunk_deadline = clock::now();
                 continue; // loop back; next iteration will wait
             }
         }
@@ -295,6 +308,20 @@ try{
     std::string active_data_dir;
     bool settings_written = false;
     std::string settings_written_session_id;
+
+    // flush backlog when entering hardware checks so we don't inherit old queued EEG (need live)
+    auto flush_upstream_chunk_backlog = [&](const char* reason) {
+        const size_t stale_n = rb.get_count();
+        if (stale_n > 0) {
+            std::vector<bufferChunk_S> stale(stale_n);
+            const size_t drained = rb.drain(stale.data(), stale_n);
+            LOG_ALWAYS("consumer: flushed upstream chunk backlog for " << reason
+                       << "; requested=" << stale_n
+                       << " drained=" << drained);
+        } else {
+            LOG_ALWAYS("consumer: upstream chunk backlog already empty for " << reason);
+        }
+    };
     
     // follow the session the stim controller created
     auto refresh_active_session_paths = [&]() -> bool {
@@ -900,6 +927,7 @@ try{
             window_run.stash_len = 0;
             std::vector<float> tmp(window_run.winLen);
             window_run.sliding_window.drain(tmp.data(), tmp.size());
+            flush_upstream_chunk_backlog("enter hardware checks");
             windowPtr = &window_run;
             firstRunWindowBuilt = false;
             firstWinCheckPtr = &firstRunWindowBuilt;
@@ -920,6 +948,15 @@ try{
             // reset snapshot
             std::lock_guard<std::mutex> lock_demo(stateStoreRef.mtx_demo_inference);
             stateStoreRef.OnnxInferenceSnapshot = ONNXInferenceSnapshot_s{};
+
+            // reset sw and get rid of backlog
+            window_run.stash_len = 0;
+            {
+                std::vector<float> tmp(window_run.winLen);
+                window_run.sliding_window.drain(tmp.data(), tmp.size());
+            }
+            flush_upstream_chunk_backlog("leave active run");
+            firstRunWindowBuilt = false;
         }
 
         // save this as prev state to check after window is built to make sure UI state hasn't changed in between
@@ -927,14 +964,9 @@ try{
         prevLabel = currLabel;
         
         // 2) ============================= build the new window =============================
+        bool consumed_new_chunk_this_window = false;
         float discard; // first pop
         if(*firstWinCheckPtr){
-            LOG_ALWAYS("ADVDBG PRE state=" << (int)currState
-                << " first=" << *firstWinCheckPtr
-                << " count=" << windowPtr->sliding_window.get_count()
-                << " winLen=" << windowPtr->winLen
-                << " winHop=" << windowPtr->winHop
-                << " stash_len=" << windowPtr->stash_len);
             if (windowPtr->winHop == 0) {
                 LOG_ALWAYS("BUG: winHop == 0 for active window");
             }
@@ -945,9 +977,6 @@ try{
                     popped++;
                 }
             }
-            LOG_ALWAYS("ADVDBG POST-POP count=" << windowPtr->sliding_window.get_count()
-                << " popped=" << popped
-                << " stash_len=" << windowPtr->stash_len);
         }
 
         while(windowPtr->sliding_window.get_count()<windowPtr->winLen){ // now push
@@ -984,6 +1013,7 @@ try{
 			if(!rb.pop(&temp)){
 				break;
 			} else {
+                consumed_new_chunk_this_window = true; // this means stash-only refill does NOT count as new data!!
 				// pop successful -> push into sliding window
 				if(amnt_left_to_add >= NUM_SAMPLES_CHUNK){
                     for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
@@ -1004,8 +1034,12 @@ try{
 			}
 		}
 
-        LOG_ALWAYS("ADVDBG POST-REFILL count=" << windowPtr->sliding_window.get_count()
-            << " stash_len=" << windowPtr->stash_len);
+        if (*firstWinCheckPtr &&
+            windowPtr->sliding_window.get_count() == windowPtr->winLen &&
+            !consumed_new_chunk_this_window) {
+            LOG_ALWAYS("consumer: skipping stale rebuilt window (no new chunk consumed)");
+            continue;
+        }
 
         // 3) once window is full, read ui_state/freq again and decide if window is "valid" to emit based on comparison with initial ui_state and freq
         // -> if the two snapshots disagree, ui changed mid-window: drop this window 

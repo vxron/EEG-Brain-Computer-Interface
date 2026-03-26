@@ -94,9 +94,6 @@ void SignalQualityAnalyzer_C::update_statestore(){
     const float denom = (global_win_acq_ > 0) ? static_cast<float>(global_win_acq_) : 1.0f;
     stateStoreRef_->SignalStats.overall_bad_win_rate = (global_win_acq_ > 0) ? (float)overall_bad_win_num_ / (float)global_win_acq_ : 0.0f;
     stateStoreRef_->SignalStats.current_bad_win_rate = (numWins > 0) ? (float)current_bad_win_num_ / (float)numWins : 0.0f;
-    LOG_ALWAYS("quality publish: numWins=" << numWins
-           << " rms0=" << rolling_avg.rms_uv[0]
-           << " badRate=" << stateStoreRef_->SignalStats.current_bad_win_rate);
     return;
 }
 
@@ -137,7 +134,8 @@ void SignalQualityAnalyzer_C::check_artifact_and_flag_window(sliding_window_t& w
     int failsEntTestCount = 0;
 
     window.sliding_window.get_data_snapshot(win_snapshot_);
-    if (win_snapshot_.size() < WINDOW_SCANS * NUM_CH_CHUNK) {
+    if (win_snapshot_.size() < window.winLen) {
+        const size_t expected_samples = window.winLen;
         return; // not enough samples yet
         // shouldn't reach here if it's placed properly in main
     }
