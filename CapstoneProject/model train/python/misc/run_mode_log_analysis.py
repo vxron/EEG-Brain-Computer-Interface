@@ -137,6 +137,8 @@ def analyze_confidence(df):
 
 def plot_timeline(df, save_path):
     """Plot prediction timeline vs ground truth."""
+    df = df.iloc[::10].reset_index(drop=True)  # keep every 10th row for plotting
+
     fig, axes = plt.subplots(4, 1, figsize=(16, 12), sharex=True)
     
     # 1. Ground truth vs prediction

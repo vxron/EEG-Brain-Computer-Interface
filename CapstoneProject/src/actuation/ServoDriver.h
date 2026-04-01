@@ -1,39 +1,152 @@
 #pragma once
 
-// Map motor IDs exposed by Servo API to enum so we can easily assign cmds to apropriate motor
-enum MotorId_E {
-    SERVOMOTOR_1,
-    SERVOMOTOR_2,
-    SERVOMOTOR_3,
-    SERVOMOTOR_4,
-    // etc
-};
+// Serial interface to the Arduino page turner
+// Sends single character command over USB (or Bluetooth) COM port
+// Reads DONE ack from Arduino for closed-loop fdbk
 
-struct TorqueCmd_S {
-    float pending_torque_cmd_ = 0.0;
-    float last_published_torque_cmd_ = 0.0;
-    MotorId_E dest_motor;
-    //.. anything that should be aggregated w the numerical cmd
-};
+// Commands sent to Arduino: 
+//     'F' = fwd page flip
+//     'B' = bwd page flip
+//     'O' = open clips
+//     'C' = close clips/zero pos
+
+// Architecture: A background reader thread inside ServoDriver continuously reads
+// the serial poer. When DONE is received, 'busy' flag is cleared atomically.
+// isBusy() reflects real hardware state (no blind timers).
+
+// Non-blocking mechanism: sendChar() writes 1 byte and returns in ms.
+// isBusy() is an atomic load (returns instantly).
+// Reader thread runs independently and never blocks the caller.
+
+#include <cstdint>
+#include <chrono>
+#include <mutex>
+#include <string>
+#include <atomic>
+#include <thread>
+#include "../utils/SWTimer.hpp"
+#include "../utils/Types.h"
+#include "../shared/StateStore.hpp"
+#ifndef MOCK_HARDWARE
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+#endif
 
 class ServoDriver_C {
 public:
-    // Default Constructor/Destructor
-    ServoDriver_C();
+    // Default Constructor/Destructor (ss ref null for real hw)
+    explicit ServoDriver_C(const std::string& portName = "COM3", unsigned int baudRate = 9600, StateStore_s* ss = nullptr);
     ~ServoDriver_C();
 
     // Disable copy & move constructors / assignment operators
     // (Should only have one instance of driver)
 	ServoDriver_C(const ServoDriver_C&) = delete; // copy
     ServoDriver_C(ServoDriver_C&&) = delete; // move
+
     ServoDriver_C& operator=(const ServoDriver_C&) = delete;
     ServoDriver_C& operator=(ServoDriver_C&&) = delete;
-
-    // API consumer thread will use
-    bool init_all_motors();
-    bool execute_prev_page_turn();
-    bool execute_fwd_page_turn();
-private:
-    bool validate_torque_cmd_before_publishing();
+ 
+    // Commands
+    void flipForward();
+    void flipBackward();
+    void openClips();
+    void zeroPosition();
     
+    // States
+    bool isConnected() const; // True if COM port opened successfully
+    bool isBusy() const; // True while Arduino is executing command
+
+    // Returns how long we expect the current command to still be running.
+    // Mock: exact (based on mockBusyUntil).
+    // Real: estimate based on per-command constant, counts down from send time.
+    //       Returns 0 once Arduino sends DONE (busy cleared) or estimate expires (from consumer sanity check).
+    std::chrono::milliseconds estimatedBusyRemaining() const;
+
+    // Live health/status (updated by reader thread!)
+    // *fields r atomic/mtx-protected for thread safety
+    ArduinoStatus_s arduinoStatus;
+
+private:
+    StateStore_s* stateStoreRef_ = nullptr; // for log writing in mock path    
+
+    // Send one byte char, set busy flag
+    bool sendChar(char command);
+    
+    // Background reader threads to talk to arduino, watches serial port for DONE
+    void readerThreadFn();
+    void heartbeatThreadFn();
+    std::thread readerThread; // background thread that watches for DONE from arduino
+    std::thread heartbeatThread;
+    // protects WriteFile() so only one thread can write to serial port at a time
+    std::mutex writeMutex;
+
+    // Serial port lifecycle
+    bool openPort(const std::string& portName, unsigned int baudRate);
+    void closePort();
+    bool waitForReady(std::chrono::milliseconds timeout);
+    void setBlockingTimeouts(bool blocking);
+
+    void parseStatusLine(const std::string& line);
+    void log(const std::string& msg) const;
+
+    // Atomics across threads
+    std::atomic<bool> connected  {false};
+    std::atomic<bool> busy       {false};
+    std::atomic<bool> stopReader {false};
+    std::atomic<bool> stopHeartbeat {false};
+
+    // handle COM
+#ifndef MOCK_HARDWARE
+        void* m_hSerial = nullptr;
+#endif
+
+    // FOR MOCK ACTUATION, timeout estimation
+    using Clock = std::chrono::steady_clock;
+    using TimePoint = std::chrono::time_point<Clock>;
+    TimePoint mockBusyUntil {};
+    static constexpr int MOCK_BUSY_FLIP_FWD_MS   = 3500;
+    static constexpr int MOCK_BUSY_FLIP_BWD_MS  = 3500;
+    static constexpr int MOCK_BUSY_OPEN_CLIPS_MS =  500;
+    static constexpr int MOCK_BUSY_ZERO_MS       = 1000;
+
+    // time estimates for handling actuator timeout
+    // conservative upper bounds (actual DONE should arrive earlier)
+    // consumer deadline will be these nums + a small buffer (~ms)
+    static constexpr int REAL_BUSY_FLIP_FWD_MS   = 7000; // TODO: measure once hardware is ready
+    static constexpr int REAL_BUSY_FLIP_BWD_MS   = 7000;
+    static constexpr int REAL_BUSY_OPEN_CLIPS_MS =  800;
+    static constexpr int REAL_BUSY_ZERO_MS       = 1500;
+    // Tracks estimated duration for current real-hardware command (started in sendChar(), expires at the estimate)
+    SW_Timer_C realBusyEstimateTimer_;
+    int realBusyEstimate_ms_ = 0; // set per command before starting timer
+
+    // HEARTBEAT CONFIG
+    // Send 'H' every N ms; warn if no reply for > TIMEOUT ms
+    static constexpr int HEARTBEAT_INTERVAL_MS = 3000;  // 3s between pings
+    static constexpr int HEARTBEAT_TIMEOUT_MS  = 10000; // publish disconnect after 10s silence
+
+    bool handshakeOk_ = false;
+
+#ifdef MOCK_HARDWARE
+    // Mock state mirrors real Arduino firmware exactly
+    struct MockState_s {
+        bool calibrated      = false;
+        int  bookWidth       = 0;
+        bool estopActive     = false;
+        bool injectNocalib   = false; // next flip returns NOCALIB
+        bool injectEstopMid  = false; // ESTOP fires mid-flip
+        int  flipDuration_ms = 3500;
+    };
+    MockState_s       mockState_;
+    std::thread       mockThread_;
+    std::atomic<bool> mockStop_  {false};
+    std::atomic<bool> mockBusy_  {false};
+
+    void emitLine(const std::string& line, bool fromArduino);
+    void mockRunFlip(bool forward);
+    void mockRunCalibration();
+#else
+    void emitLine(const std::string& line, bool fromArduino);
+#endif
+
 };

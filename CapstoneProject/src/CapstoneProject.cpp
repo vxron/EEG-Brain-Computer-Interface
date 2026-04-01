@@ -29,12 +29,13 @@
 #include "utils/json.hpp"
 #include <unordered_set>
 
-#ifdef USE_EEG_FILTERS
+#ifdef USE_EEG_FILTERS 
 #include "utils/Filters.hpp"
 #endif
 
 #ifdef ACQ_BACKEND_FAKE
 #include "acq/FakeAcquisition.h"
+#include "acq/AcqStreamerFromDataset.h"
 #endif
 
 constexpr bool TEST_MODE = 0;
@@ -50,6 +51,10 @@ void handle_sigint(int) {
 void producer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStoreRef){
     using namespace std::chrono_literals;
     logger::tlabel = "producer";
+    bool was_streaming = false; 
+    using clock = std::chrono::steady_clock;
+    clock::time_point next_chunk_deadline = clock::now();
+
 try {
     LOG_ALWAYS("producer start");
 
@@ -64,6 +69,7 @@ try {
     // random artifacts, alpha and beta sources off for now
 
     FakeAcquisition_C acqDriver(fakeCfg);
+    AcqStreamerFromDataset_C acqDemoDriver(&stateStoreRef);
 
 #else
     LOG_ALWAYS("PATH=HARDWARE");
@@ -84,6 +90,11 @@ try {
         rb.close();
         return;
     };
+#ifdef ACQ_BACKEND_FAKE
+    if (acqDemoDriver.unicorn_init() == false){
+        LOG_ALWAYS("demo mode did not initialize successfully");
+    };
+#endif
 
     size_t tick_count = 0;
 
@@ -117,11 +128,59 @@ try {
         bufferChunk_S chunk{};
 
 #ifdef ACQ_BACKEND_FAKE
-	int currSimFreq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
-    acqDriver.setActiveStimulus(static_cast<double>(currSimFreq)); // if 0, backend won't produce sinusoid
-#endif
-        
+        bool isDemoModeOn = stateStoreRef.settings.demo_mode.load(std::memory_order_acquire);
+
+        // we want to start demo mode acq when user presses calib mode or run mode and demo is toggled on
+        // todo: all other buttons/controls should be greyed out
+        // todo: run mode toggled off until calib mode is ran
+        // if we're in demo mode & NOT streaming, block here until streaming turns on (or stop)
+        if (isDemoModeOn){    
+            std::unique_lock<std::mutex> streaming_lock(stateStoreRef.mtx_streaming_request);
+            stateStoreRef.streaming_request.wait(streaming_lock, [&]{
+                return g_stop.load(std::memory_order_relaxed) || stateStoreRef.streaming_requested;
+            });
+
+            if (g_stop.load(std::memory_order_relaxed)) break; // handle stop predicate
+
+            bool testmode = stateStoreRef.test_mode_arg;
+            bool still_requested = stateStoreRef.streaming_requested;
+            streaming_lock.unlock(); // RELEASE BEFORE CALLING INTO DRIVER
+            // start streaming if we woke up from cv
+            if(!was_streaming && still_requested){
+                acqDemoDriver.unicorn_start_acq(testmode);
+                was_streaming = true;
+                next_chunk_deadline = clock::now();
+            }
+
+            // only publish from prod -> cons if we're currently streaming
+            if(stateStoreRef.streaming_requested) {
+                DemoStreamerSnapshot_s streamerSnap = acqDemoDriver.getStreamerSnapshot();
+                std::lock_guard<std::mutex> lk(stateStoreRef.mtx_demo_streamer_snapshot);
+                stateStoreRef.DemoStreamerSnapshot = streamerSnap;
+            }
+        }
+
+	    int currSimFreq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+        acqDriver.setActiveStimulus(static_cast<double>(currSimFreq)); // if 0, backend won't produce sinusoid
+        if(isDemoModeOn){
+            acqDemoDriver.getData(NUM_SCANS_CHUNK, chunk.data.data());
+        } else {
+            // not demo mode
+            acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data());
+        }
+
+        // pace fake/demo acquisition to real chunk timing
+        constexpr double chunk_period_sec =
+            static_cast<double>(NUM_SCANS_CHUNK) / static_cast<double>(250); // 250 hz
+
+        next_chunk_deadline += std::chrono::duration_cast<clock::duration>(
+            std::chrono::duration<double>(chunk_period_sec));
+
+        std::this_thread::sleep_until(next_chunk_deadline);
+#else
         acqDriver.getData(NUM_SCANS_CHUNK, chunk.data.data()); // chunk.data.data() gives type float* (addr of first float in std::array obj)
+#endif
+
         tick_count++;
         chunk.tick = tick_count;
 
@@ -139,7 +198,28 @@ try {
             LOG_ALWAYS("RingBuffer closed while pushing; stopping producer");
             break;
         } 
+
+        // check if we've been asked to stop streaming
+#ifdef ACQ_BACKEND_FAKE
+        if(isDemoModeOn){
+            bool still_streaming = true;
+            {
+                // TODO: given we're doing it w/ this arch now -> do we still need to explicitly notify from stim controller for off requests??
+                std::lock_guard<std::mutex> lk(stateStoreRef.mtx_streaming_request);
+                still_streaming = stateStoreRef.streaming_requested;
+            }
+            if(!still_streaming){
+                // stop streaming
+                acqDemoDriver.unicorn_demo_stop_acq();
+                was_streaming = false;
+                next_chunk_deadline = clock::now();
+                continue; // loop back; next iteration will wait
+            }
+        }
+#endif
+        
     }
+
     // on thread shutdown, close queue to call release n unblock any consumer waiting for acquire
     LOG_ALWAYS("producer shutting down; stopping acquisition backend...");
     acqDriver.unicorn_stop_and_close();
@@ -168,6 +248,7 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     size_t run_mode_clean_window_count = 0;
     SW_Timer_C run_mode_bad_window_timer;
     SW_Timer_C reload_timer_guard;
+    SW_Timer_C actuation_cooldown_timer;
 
     // run mode pseudo state machine
     int window_class = -1;
@@ -177,18 +258,28 @@ void consumer_thread_fn(RingBuffer_C<bufferChunk_S>& rb, StateStore_s& stateStor
     int num_windows_stable_prediction = 0;
     int num_windows_unknown = 0;
     int bad_win_from_onnx_ct = 0;
+    // debug/demo mode trackers
+    int debug_total_windows   = 0;
+    int debug_artifact_windows = 0;
+    int debug_actuation_count  = 0;
     // new window every 0.32s -> means we'll have 3s/0.32s = 9.375 windows necessary for 2s
-    int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10; // req users to look at stimulus for min 3s
+    int NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 10;
     int NUM_ALLOWED_WRONG_WINDOWS_BEFORE_DEBOUNCE_RESET = 3; // TODO
     ClassifyResult_s currResults{};
+    int ACTUATION_COOLDOWN_MS = 3000; // 3s cooldown after any actuation
     
     // single instance of onnx env
     ONNX_RT_C ONNX_RT;
-
-    // actually don't require concurrent actuation... since it should occur right after consumer requests it, and consumer shouldn't do anything else while actuating
-    // actually ACTUALLY haha we do want actuation on its own thread because we need to run it at a fixed frequency (control loop)
-    // TODO: EXCEPT if user presses button on UI that's "STOP IMMEDIATELY" -> then it should get interrupted immediately (torque cmd to zero)
-    // thus need to decide frequency at which controller is operating (sending out torque cmds) & that will be freq at which we poll atomic g_actuation_stop_requested from state store
+    
+    // single instance of Servo Driver env
+    // sets connected=false on failure
+    ServoDriver_C servoDriver("COM13", 9600, &stateStoreRef);
+    bool servo_available = servoDriver.isConnected();
+    if(!servo_available){
+        LOG_ALWAYS("consumer: servo unavailable AT STARTUP, actuation disabled");
+    }
+    bool servo_connected_prev = servoDriver.isConnected();
+    bool hw_disconnect_handled = !servo_connected_prev; // alr handled above if its alr disconn at startup...
 
 try{
     SignalQualityAnalyzer_C SignalQualityAnalyzer(&stateStoreRef);
@@ -217,6 +308,20 @@ try{
     std::string active_data_dir;
     bool settings_written = false;
     std::string settings_written_session_id;
+
+    // flush backlog when entering hardware checks so we don't inherit old queued EEG (need live)
+    auto flush_upstream_chunk_backlog = [&](const char* reason) {
+        const size_t stale_n = rb.get_count();
+        if (stale_n > 0) {
+            std::vector<bufferChunk_S> stale(stale_n);
+            const size_t drained = rb.drain(stale.data(), stale_n);
+            LOG_ALWAYS("consumer: flushed upstream chunk backlog for " << reason
+                       << "; requested=" << stale_n
+                       << " drained=" << drained);
+        } else {
+            LOG_ALWAYS("consumer: upstream chunk backlog already empty for " << reason);
+        }
+    };
     
     // follow the session the stim controller created
     auto refresh_active_session_paths = [&]() -> bool {
@@ -562,14 +667,15 @@ try{
             }
             const fs::path PROJECT_ROOT = sesspaths::find_project_root();
             const fs::path data_dir = PROJECT_ROOT / "data";
-            fs::path log_path;
-            if(session != "" && !session.empty()){
-                log_path = data_dir / subject / session / "run_classifier_log.csv";
-            }
-            // fallback to making new "unknown session" path -> overwrites
-            else {
-                log_path = data_dir / subject / "run_mode_logs" / "run_classifier_log.csv";
-            }
+                
+            // Timestamp this specific run entry so logs don't accumulate
+            auto now = std::chrono::system_clock::now();
+            auto t = std::chrono::system_clock::to_time_t(now);
+            std::ostringstream ts;
+            ts << std::put_time(std::localtime(&t), "%Y-%m-%d_%H-%M-%S");
+                
+            fs::path log_path = data_dir / subject / "run_logs" / (ts.str() + "_run_classifier_log.csv");
+
             // Create directory if it doesn't exist
             std::error_code ec;
             fs::create_directories(log_path.parent_path(), ec);
@@ -696,6 +802,52 @@ try{
         LOG_ALWAYS("notify");
         stateStoreRef.cv_train_job_request.notify_one();
     };
+
+    // lambda to publish wtv the servo is storing in its arduinoStatus obj to the one in statestore bcuz we cant rlly raw copy w mutexes and atomics n shi 
+    auto publish_servo_status_to_state = [&]() {
+        stateStoreRef.arduinoStatus.port_opened.store(
+            servoDriver.arduinoStatus.port_opened.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.handshake_ok.store(
+            servoDriver.arduinoStatus.handshake_ok.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.connected.store(
+            servoDriver.arduinoStatus.connected.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.calibrated.store(
+            servoDriver.arduinoStatus.calibrated.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.book_width.store(
+            servoDriver.arduinoStatus.book_width.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.estop_active.store(
+            servoDriver.arduinoStatus.estop_active.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.mode.store(
+            servoDriver.arduinoStatus.mode.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.heartbeats_sent.store(
+            servoDriver.arduinoStatus.heartbeats_sent.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.heartbeats_acked.store(
+            servoDriver.arduinoStatus.heartbeats_acked.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.last_rx_ts_ms.store(
+            servoDriver.arduinoStatus.last_rx_ts_ms.load(std::memory_order_acquire),
+            std::memory_order_release);
+
+        stateStoreRef.arduinoStatus.set_last_status(
+            servoDriver.arduinoStatus.get_last_status());
+    };
     
     UIState_E currState  = UIState_None;
     UIState_E prevState = UIState_None;
@@ -704,13 +856,36 @@ try{
     bool firstCalibWindowBuilt = false;
     bool firstRunWindowBuilt = false;
     bool* firstWinCheckPtr = &firstRunWindowBuilt;
+    bool actuation_lockout = false;
+    SSVEPState_E lockout_direction = SSVEP_Unknown; // direction that triggered lockout
 
     while(!g_stop.load(std::memory_order_relaxed)){
-        // if currently actuating -> skip everything
-        if(stateStoreRef.g_is_currently_actuating.load(std::memory_order_acquire)){
-            continue;
+        // 0) publish current servo status to statstore & detect if disconnect & if its been handled
+        publish_servo_status_to_state();
+        // detect runtime disconnect edge
+        bool servo_connected_now = servoDriver.isConnected();
+        if (servo_connected_prev && !servo_connected_now && !hw_disconnect_handled) {
+            LOG_ALWAYS("Arduino disconnected during runtime; disabling actuation");
+            servo_available = false;
+            hw_disconnect_handled = false;
         }
+        servo_connected_prev = servo_connected_now;
+        // handle disconnect once if its not handled yet
+        if(!hw_disconnect_handled && !servo_connected_now){
+            stateStoreRef.g_ui_popup.store(UIPopup_ArduinoDisconnected, std::memory_order_release);
+            UIState_E ui = stateStoreRef.g_ui_state.load(std::memory_order_acquire);
+            if (ui == UIState_Active_Run) {
+                stateStoreRef.g_ui_event.store(UIStateEvent_ArduinoDisconnected, std::memory_order_release);
+            }
         
+            {
+                std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                stateStoreRef.OnnxInferenceSnapshot.is_actuating = false;
+                stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 0;
+            }
+            hw_disconnect_handled = true;
+        }
+
         // 1) ========= before we slide/build new window: assess artifacts + read snapshot of ui_state and freq ============ 
         // check if we need to stop writing calib data and start training thread
         handle_finalize_if_requested();
@@ -734,7 +909,7 @@ try{
         if(currState == UIState_NoSSVEP_Test && prevState != UIState_NoSSVEP_Test){
             window_calib.stash_len = 0; // flush stale stash
             std::vector<float> tmp(window_calib.winLen); // max amount we might need to drain is winLen
-            window_calib.sliding_window.drain(tmp.data()); // as well as any partial refill
+            window_calib.sliding_window.drain(tmp.data(), tmp.size()); // as well as any partial refill
             windowPtr = &window_calib;
             firstCalibWindowBuilt = false; // reset
             firstWinCheckPtr = &firstCalibWindowBuilt;
@@ -743,16 +918,45 @@ try{
         else if (currState == UIState_Pending_Training && prevState != UIState_Pending_Training){
             window_run.stash_len = 0; // flush stale stash
             std::vector<float> tmp(window_run.winLen);
-            window_run.sliding_window.drain(tmp.data()); // as well as any partial refill
+            window_run.sliding_window.drain(tmp.data(), tmp.size()); // as well as any partial refill
             windowPtr = &window_run;
             firstRunWindowBuilt = false; // reset
             firstWinCheckPtr = &firstRunWindowBuilt;
         } 
+        else if (currState == UIState_Hardware_Checks && prevState != UIState_Hardware_Checks){
+            window_run.stash_len = 0;
+            std::vector<float> tmp(window_run.winLen);
+            window_run.sliding_window.drain(tmp.data(), tmp.size());
+            flush_upstream_chunk_backlog("enter hardware checks");
+            windowPtr = &window_run;
+            firstRunWindowBuilt = false;
+            firstWinCheckPtr = &firstRunWindowBuilt;
+        }
 
         // run_mode_onnx_ready must be reset to false on run mode exit
         if(prevState == UIState_Active_Run && currState != UIState_Active_Run){
             run_mode_onnx_ready = false;
             run_log_opened = false; // redo logging each run sess
+
+            // also reset counters for debug mode
+            debug_actuation_count = 0;
+            debug_artifact_windows = 0;
+            debug_actuation_count = 0;
+            actuation_lockout = false;       
+            lockout_direction = SSVEP_Unknown;
+            actuation_cooldown_timer.stop_timer(); 
+            // reset snapshot
+            std::lock_guard<std::mutex> lock_demo(stateStoreRef.mtx_demo_inference);
+            stateStoreRef.OnnxInferenceSnapshot = ONNXInferenceSnapshot_s{};
+
+            // reset sw and get rid of backlog
+            window_run.stash_len = 0;
+            {
+                std::vector<float> tmp(window_run.winLen);
+                window_run.sliding_window.drain(tmp.data(), tmp.size());
+            }
+            flush_upstream_chunk_backlog("leave active run");
+            firstRunWindowBuilt = false;
         }
 
         // save this as prev state to check after window is built to make sure UI state hasn't changed in between
@@ -760,11 +964,18 @@ try{
         prevLabel = currLabel;
         
         // 2) ============================= build the new window =============================
+        bool consumed_new_chunk_this_window = false;
         float discard; // first pop
         if(*firstWinCheckPtr){
+            if (windowPtr->winHop == 0) {
+                LOG_ALWAYS("BUG: winHop == 0 for active window");
+            }
+            size_t popped = 0;
             size_t to_pop = std::min(windowPtr->winHop, windowPtr->sliding_window.get_count()); // guard against truncated windows
             for(size_t k=0; k<to_pop; k++){
-                windowPtr->sliding_window.pop(&discard); 
+                if(windowPtr->sliding_window.pop(&discard)) {
+                    popped++;
+                }
             }
         }
 
@@ -802,6 +1013,7 @@ try{
 			if(!rb.pop(&temp)){
 				break;
 			} else {
+                consumed_new_chunk_this_window = true; // this means stash-only refill does NOT count as new data!!
 				// pop successful -> push into sliding window
 				if(amnt_left_to_add >= NUM_SAMPLES_CHUNK){
                     for(std::size_t j=0;j<NUM_SAMPLES_CHUNK;j++){
@@ -821,6 +1033,13 @@ try{
 				}
 			}
 		}
+
+        if (*firstWinCheckPtr &&
+            windowPtr->sliding_window.get_count() == windowPtr->winLen &&
+            !consumed_new_chunk_this_window) {
+            LOG_ALWAYS("consumer: skipping stale rebuilt window (no new chunk consumed)");
+            continue;
+        }
 
         // 3) once window is full, read ui_state/freq again and decide if window is "valid" to emit based on comparison with initial ui_state and freq
         // -> if the two snapshots disagree, ui changed mid-window: drop this window 
@@ -888,11 +1107,6 @@ try{
         }
         
         else if(currState == UIState_Active_Run){
-            // if actuation stop must be acked -> ack and reset all counters/preds to be safe
-            if(!stateStoreRef.g_consumer_ack_actuation_stop.load(std::memory_order_acquire)){
-                stateStoreRef.g_consumer_ack_actuation_stop.store(true, std::memory_order_release);
-                // resets
-            }
 
             // if we have a new sess, we need the onnx models to be reloaded
             // check our curr model path from statestore
@@ -947,26 +1161,51 @@ try{
             int stim_hz = -1; // default for non-fake acq
 #ifdef ACQ_BACKEND_FAKE
             stim_hz = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+            bool demo_mode = stateStoreRef.settings.demo_mode.load(std::memory_order_acquire);
 #endif
+            bool debug_mode = stateStoreRef.settings.debug_mode.load(std::memory_order_acquire);
+            ONNXInferenceSnapshot_s snap;
             if(windowPtr->isArtifactualWindow){
                 if(!run_mode_bad_window_timer.is_started()){
                     run_mode_bad_window_timer.start_timer(std::chrono::milliseconds{9000});
                 }
                 run_mode_bad_window_count++;
+                if(debug_mode){
+                    debug_artifact_windows++;
+                    debug_total_windows++;
+                }
                 // reset counter for debounce (TODO: DECIDE IF WANT TO KEEP OR REMOVE FOR MORE AGGRESSIVENESS IN PRED)
                 num_windows_stable_prediction = 0; // reset
                 last_win_prediction = SSVEP_Unknown;
                 ClassifyResult_s dummy_clf{};
                 log_run_classifier_window(stim_hz, true, false, dummy_clf, -1, SSVEP_Unknown, 0, false, SSVEP_Unknown);
+                snap.is_artifactual = true;
                 continue; // don't use this window
             } else {
                 // clean window
+                if (debug_mode) {
+                    debug_total_windows++;
+                }
                 if(run_mode_bad_window_timer.is_started()){
                     // add to within-timer clean window count for comparison
                     run_mode_clean_window_count++;
                 }
                 currResults = ONNX_RT.classify_window(*windowPtr);
                 window_class = currResults.final_class;
+
+#ifdef ACQ_BACKEND_FAKE
+                // demo mode: model rarely predicts NONE because Tsinghua dataset has
+                // little REST data relative to real calibration.
+                // so we force it to NONE for demo only (override onnx prediction which would always be L/R due to excessive L/R data from dataset)
+                if(demo_mode){
+                    NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION = 5; // let it move faster so we dont wait too long since we dont have that much data
+                    int curr_freq = stateStoreRef.g_freq_hz.load(std::memory_order_acquire);
+                    if(curr_freq == -1){
+                        window_class = 2;
+                    }
+                }
+#endif
+
                 if (window_class == -1) {
                     bad_win_from_onnx_ct++;
                 }
@@ -998,22 +1237,156 @@ try{
                     // passed debounce
                     // request actuation if it's an actuating state
                     if(curr_win_prediction == SSVEP_Left || curr_win_prediction == SSVEP_Right){
-                        actuation_fired = true;
-                        act_dir = curr_win_prediction;
-                        std::lock_guard<std::mutex> lock_actuation(stateStoreRef.mtx_actuation_request);
-                        stateStoreRef.actuation_requested = true;
-                        stateStoreRef.actuation_direction = curr_win_prediction;
-                        stateStoreRef.actuation_request.notify_one(); // notify actuator thread
-                        // reset num_windows_stable_prediction
-                        num_windows_stable_prediction = 0;
+                        if(!actuation_lockout){
+                            actuation_fired = true;
+                            act_dir = curr_win_prediction;
+                            actuation_lockout = true;          // engage lockout
+#ifdef ACQ_BACKEND_FAKE
+                            // in demo mode -> dataset has limited trials so we need no cooldown
+                            if(demo_mode){
+                                ACTUATION_COOLDOWN_MS = 300;
+                            }
+#endif
+                            actuation_cooldown_timer.start_timer(std::chrono::milliseconds{ACTUATION_COOLDOWN_MS}); // start timer
+                            lockout_direction = curr_win_prediction;
+                            
+                            // Perform actuation inline - consumer blocks here until done 
+                            // no windows need to be classified during actuation
+                            // make sure its available first
+                            if(servoDriver.isConnected() && !servoDriver.isBusy()){
+                                switch(curr_win_prediction){
+                                        case SSVEP_Left: servoDriver.flipBackward(); break;
+                                        case SSVEP_Right: servoDriver.flipForward(); break;
+                                        default: break;
+                                }
+                                // block until servo signals done
+                                // Deadline = estimate + 1s buffer (in case DONE arrives a bit late)
+                                auto est = servoDriver.estimatedBusyRemaining();
+                                auto actuation_deadline = std::chrono::steady_clock::now() + est + std::chrono::seconds{1};
+                                while(servoDriver.isBusy() 
+                                    && servoDriver.isConnected() // make sure its still conn and we didnt lose it :,)
+                                    && std::chrono::steady_clock::now() < actuation_deadline 
+                                    && !g_stop.load(std::memory_order_relaxed)){ // TODO: consider exiting this loop when we exit outta run mode (wud need to updat stim controller for this to block exiting run  mode when actuating)
+                                    
+                                    // EXIT early if user left run mode mid-actuation
+                                    if(stateStoreRef.g_ui_state.load(std::memory_order_acquire) != UIState_Active_Run){
+                                        if(debug_mode){
+                                            std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                                            stateStoreRef.OnnxInferenceSnapshot.is_actuating = false;
+                                            stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 0;
+                                        }
+                                        break;
+                                    }
+                                    
+                                    // publish actuation state to snapshot so UI can show countdown
+                                    if(debug_mode){
+                                        auto remaining_ms = servoDriver.estimatedBusyRemaining().count();
+                                        std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                                        stateStoreRef.OnnxInferenceSnapshot.is_actuating = true;
+                                        stateStoreRef.OnnxInferenceSnapshot.actuating_direction = static_cast<int>(act_dir);
+                                        stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 
+                                            std::max(0LL, remaining_ms);
+                                    }
+                                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+                                }
+                                LOG_ALWAYS("consumer: actuation wait loop ended; connected="
+                                    << servoDriver.isConnected()
+                                    << " busy=" << servoDriver.isBusy()
+                                    << " ui_state=" << (int)stateStoreRef.g_ui_state.load(std::memory_order_acquire));
+
+                                publish_servo_status_to_state(); // loop can take a while so lets recheck
+                                if (!servoDriver.isConnected()) {
+                                    LOG_ALWAYS("actuation loop interrupted because Arduino disconnected");
+                                }
+
+                                // JUST ACTUATED :)
+                                // only do post-actuation cleanup if we're still in run mode.
+                                // if user exited mid-flip, the state transition at the top of the while loop will handle cleanup
+                                // drain stale EEG that accumulated during actuation so we dont classify data from 3.5s ago as if it's current
+                                if(stateStoreRef.g_ui_state.load(std::memory_order_acquire) == UIState_Active_Run)
+                                {
+                                    const size_t stale_n = rb.get_count();
+                                    if (stale_n > 0) {
+                                        std::vector<bufferChunk_S> stale(stale_n);
+                                        // DETERMINISTIC DRAIN AMNT
+                                        const size_t drained = rb.drain(stale.data(), stale_n);
+                                        LOG_ALWAYS("post-actuation drain complete; requested=" << stale_n
+                                            << " drained=" << drained);
+                                    } else {
+                                        LOG_ALWAYS("post-actuation drain skipped (empty rb)");
+                                    }
+                                }
+
+                                // also reset the window meta stuff so we dont use prior stale windows as valid "prevs"
+                                num_windows_stable_prediction = 0;
+                                last_win_prediction = SSVEP_Unknown;
+                                windowPtr->stash_len = 0;
+                                if(debug_mode){
+                                    // clear actuation state
+                                    std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                                    stateStoreRef.OnnxInferenceSnapshot.is_actuating = false;
+                                    stateStoreRef.OnnxInferenceSnapshot.actuation_busy_ms_remaining = 0;
+                                }
+                            }
+                            if(debug_mode){
+                                debug_actuation_count++; 
+                            }
+                        }
+                        // Lockout releases only when prediction direction changes
+                    }
+                }
+
+                // Release lockout only after cooldown has elapsed AND prediction changed direction
+                // This prevents immediate re-actuation after a flip
+                if (actuation_lockout) {
+                    bool cooldown_done = actuation_cooldown_timer.is_started() && 
+                                         actuation_cooldown_timer.check_timer_expired();
+                    bool direction_changed = (curr_win_prediction != lockout_direction);
+
+                    if (cooldown_done && direction_changed) {
+                        actuation_lockout = false;
+                        lockout_direction = SSVEP_Unknown;
+                        actuation_cooldown_timer.stop_timer();
                     }
                 }
                 
                 log_run_classifier_window(stim_hz, false, true, currResults, window_class, curr_win_prediction, 
                                    num_windows_stable_prediction, actuation_fired, act_dir);
-            } 
+            }
+            // publish snapshot if debug mode 
+            if(debug_mode){
+                snap.logits              = { currResults.logits[0],
+                                              currResults.logits[1],
+                                              currResults.logits[2] };
+                snap.softmax             = { currResults.softmax[0],
+                                              currResults.softmax[1],
+                                              currResults.softmax[2] };
+                snap.final_class         = window_class;
+                snap.predicted_state     = static_cast<int>(curr_win_prediction);
+                snap.is_artifactual      = false; // not artifactual if we made it here
+                snap.stable_count        = num_windows_stable_prediction;
+                snap.stable_target       = NUM_REQ_STABLE_WINDOWS_FOR_ACTUATION;
+                snap.total_windows       = debug_total_windows;
+                snap.artifactual_windows = debug_artifact_windows;
+                snap.actuation_count     = debug_actuation_count;
+#ifdef ACQ_BACKEND_FAKE
+                if (demo_mode){
+                    DemoStreamerSnapshot_s streamerSnap;
+                    {
+                        std::lock_guard<std::mutex> lk(stateStoreRef.mtx_demo_streamer_snapshot);
+                        streamerSnap = stateStoreRef.DemoStreamerSnapshot;
+                    }
+                    snap.streamerRef = std::make_shared<DemoStreamerSnapshot_s>(streamerSnap);
+                }
+#endif
+                {
+                    std::lock_guard<std::mutex> inf_lock(stateStoreRef.mtx_demo_inference);
+                    stateStoreRef.OnnxInferenceSnapshot = snap;
+                }
+            }
         }
 	}
+    LOG_ALWAYS("consumer: exited main loop. g_stop=" << g_stop.load());
     // exiting due to producer exiting means we need to close window rb
     windowPtr->sliding_window.close();
     rb.close();
@@ -1459,28 +1832,6 @@ void training_manager_thread_fn(StateStore_s& stateStoreRef){
     }
 }
 
-void actuation_controller_thread_fn(StateStore_s& stateStoreRef){
-    // TODO: turn their Python code into C++ here
-    // implement cv to notify from consumer when ssvep signal is detected
-    // send torque commands as needed 
-    // do this by implementing custom driver for servos that exposes api to turn one way or the other
-    // ^^w guards
-    // OR could call their python script directly w the appropriate 'turn_left' or 'turn_right' args...,
-    // but this would introduce a lot of latency overheads & is def not optimal soln
-    ServoDriver_C ServoDriver;
-
-    while(!g_stop.load(std::memory_order_acquire)){
-        // (1) continuously wait for cv request from consumer thread -> then wake up
-        std::unique_lock<std::mutex> actuation_lock(stateStoreRef.mtx_actuation_request); // acquire lock momentarily
-        stateStoreRef.actuation_request.wait(actuation_lock, [&]{return stateStoreRef.actuation_requested;}); // go to sleep until notified -> then reacquire lock and lambda fxn[&] to check predicate (arg2)
-        SSVEPState_E requested_direction = stateStoreRef.actuation_direction;
-        
-        // (2) Implement requested_direction cycle using ServoDriver API
-
-        // sleep (fixed rate frequency)
-    }
-
-}
 
 int main() {
     LOG_ALWAYS("start (VERBOSE=" << logger::verbose() << ")");
@@ -1507,7 +1858,6 @@ int main() {
     std::thread http(http_thread_fn, std::ref(server));
     std::thread stim(stimulus_thread_fn, std::ref(stateStore));
     std::thread train(training_manager_thread_fn, std::ref(stateStore));
-    std::thread actuate(actuation_controller_thread_fn, std::ref(stateStore));
 
     // Poll the atomic flag g_stop; keep sleep tiny so Ctrl-C feels instant
     while(g_stop.load(std::memory_order_acquire) == 0){
@@ -1528,6 +1878,5 @@ int main() {
     http.join();
     stim.join();
     train.join();
-    actuate.join();
     return 0; 
 }

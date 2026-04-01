@@ -25,11 +25,16 @@ bool RingBuffer_C<T>::push (const T& data) {
     }
 
     std::lock_guard<std::mutex> lock(mtx_);
+    assert(capacity_ > 0);
+    assert(headIdx_ < capacity_);
+    assert(tailIdx_ < capacity_);
+    assert(count_ < capacity_);
 
     // push to tail
     ringBufferArr[tailIdx_] = data;
     // sems guarantee there's space to add when push happens
     count_++;
+    assert(count_ <= capacity_);
     
     // always finish push with tail increment & wrap-around if this increment causes tailIdx_ >= capacity
     tailIdx_ ++; 
@@ -51,10 +56,17 @@ bool RingBuffer_C<T>::pop(T *dest) {
     }
     sem_data_items_available.acquire(); // need to make sure there's something we can pop
     if(isClosed_.load((std::memory_order_relaxed))) {
+        //sem_data_items_available.release();
         return 0;
     }
 
     std::lock_guard<std::mutex> lock(mtx_);
+    assert(capacity_ > 0);
+    assert(headIdx_ < capacity_);
+    assert(tailIdx_ < capacity_);
+    assert(count_ > 0);
+    assert(count_ <= capacity_);
+
     // pop from head, then increment (& consider wrap-around)
     *dest = std::move(ringBufferArr[headIdx_]);
     headIdx_++;
@@ -64,23 +76,27 @@ bool RingBuffer_C<T>::pop(T *dest) {
     }
     sem_buffer_slots_available.release(); // added a slot
     count_--; 
+    assert(count_ <= capacity_);
     return 1;
 }
 
 // drain: pops as many as currently available items (non-blocking -> skips if can't acquire sem)
 // returns num of items
 template<typename T>
-size_t RingBuffer_C<T>::drain(T* dest) {
+size_t RingBuffer_C<T>::drain(T* dest, size_t max_items) {
     if(isClosed_.load(std::memory_order_acquire)){
         return 0;
     }
     // pop everything from head to tail - continue checking try_acquire() on sem until it fails
     size_t i = 0;
-    while(sem_data_items_available.try_acquire()){
+    while(i < max_items && sem_data_items_available.try_acquire()){
         if(isClosed_.load(std::memory_order_relaxed)) {
             break; // if closed, break and return how many you've added before close
         }
         std::lock_guard<std::mutex> lock(mtx_);
+        assert(count_ > 0);
+        assert(headIdx_ < capacity_);
+
         *(dest+i) = std::move(ringBufferArr[headIdx_]);
         headIdx_++;
         count_--;

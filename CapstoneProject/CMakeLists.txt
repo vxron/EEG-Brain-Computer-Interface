@@ -40,6 +40,7 @@ target_sources(CapstoneProject
       src/utils/Filters.hpp
       src/classifier/ONNXClassifier.hpp
       src/actuation/ServoDriver.h
+      src/acq/AcqStreamerFromDataset.h
 )
 
 # ==================== UI UNIT TESTS ==========================
@@ -73,6 +74,7 @@ if(USE_FAKE_ACQ)
   target_compile_definitions(CapstoneProject PRIVATE ACQ_BACKEND_FAKE)
   target_sources(CapstoneProject PRIVATE
     src/acq/FakeAcquisition.cpp
+    src/acq/AcqStreamerFromDataset.cpp
   )
 
 else()
@@ -83,6 +85,9 @@ else()
   src/utils/Logger.cpp
   )
   target_include_directories(UnicornSelfTest PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_include_directories(CapstoneProject PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
   message(STATUS "Building with REAL Unicorn acquisition backend")
@@ -150,5 +155,11 @@ if(NOT "${SKIP_TRAINING}" STREQUAL "")
   )
 else()
   target_compile_definitions(CapstoneProject PRIVATE SKIP_TRAINING=0)
+endif()
+
+# ======================= MOCK ACTUATION ===========================
+if(MOCK_SERVO)
+  message(STATUS "Building with MOCK servo hardware")
+  target_compile_definitions(CapstoneProject PRIVATE MOCK_HARDWARE)
 endif()
 

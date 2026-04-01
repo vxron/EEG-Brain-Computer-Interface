@@ -30,7 +30,7 @@ class DebugLogger:
 
 # =============== TRAINING DATA MINIMUM REQS & VALIDATOR FUNCTIONS ====================
 HOP_SAMPLES = 80                       # matches C++
-MIN_TOTAL_WINDOWS = 80                 # after filters (trimmed + not bad)
+MIN_TOTAL_WINDOWS = 40                 # after filters (trimmed + not bad)
 MIN_FREQS_FOR_PAIR_SEARCH = 2          # need at least 2 freqs with enough windows
 MIN_WINDOWS_PER_FREQ_FOR_SHORTLIST = 40 
 # For pair-level training sanity

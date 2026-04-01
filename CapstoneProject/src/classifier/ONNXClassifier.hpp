@@ -21,7 +21,20 @@ constexpr int32_t CNN_EXPECTED_C = NUM_CH_CHUNK; // num channels
 constexpr int32_t CNN_EXPECTED_T = WINDOW_SCANS_RUN_MODE; // num time samples in window
 constexpr ONNXTensorElementDataType CNN_EXPECTED_INPUT_DATA_TYPE = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
 constexpr std::array<int64_t, 4> CNN_EXPECTED_SHAPE = {1, 1, CNN_EXPECTED_C, CNN_EXPECTED_T};
-constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.75; // required confidence in active prediction to publish to consumer (else rtn unknown -> acts like no-op)
+
+#ifdef ACQ_BACKEND_FAKE
+constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.80f; // required confidence in GENERAL active prediction to publish to consumer (else default to REST when uncertain)
+constexpr float REQ_SSVEP_R_THRESHOLD = 0.70f;  // require strong SSVEP confidence
+constexpr float REQ_SSVEP_L_THRESHOLD = 0.70f;  // require strong SSVEP confidence
+constexpr float REST_VETO_THRESHOLD = 0.20f;  // if REST is this likely, don't commit to SSVEP
+#else
+constexpr float REQ_CONFIDENCE_TO_PUBLISH = 0.70f;
+constexpr float REQ_SSVEP_R_THRESHOLD = 0.25f;
+constexpr float REQ_SSVEP_L_THRESHOLD = 0.60f;  
+constexpr float REST_VETO_THRESHOLD = 0.30f;
+#endif
+
+
 // TODO: debounce window in consumer thread
 // - req sustained prediction for actuation before beginning actuation
 // - then freeze new predictions until actuation is complete

@@ -38,6 +38,7 @@ static const state_transition state_transition_table[] = {
     {UIState_Settings,         UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_NoSSVEP_Test,     UIStateEvent_UserPushesExit,                 UIState_Home},
     {UIState_Paused,           UIStateEvent_UserPushesExit,                 UIState_Home},
+    {UIState_Active_Run,       UIStateEvent_ArduinoDisconnected,            UIState_Home},
     
     {UIState_Active_Calib,     UIStateEvent_UserPushesPause,                UIState_Paused},  
     {UIState_Instructions,     UIStateEvent_UserPushesPause,                UIState_Paused},
@@ -165,6 +166,17 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
             // need to 1) collect frequency pool, 2) setup timer/first frequency
             // nossvep (4s) -> ssvep1 
 #ifdef ACQ_BACKEND_FAKE
+            bool isDemoModeOn = stateStoreRef_->settings.demo_mode.load(std::memory_order_acquire);
+            if(isDemoModeOn) {
+                // must start demo acq (cv-notify)
+                std::lock_guard<std::mutex> lock_mtx(stateStoreRef_->mtx_streaming_request);
+                stateStoreRef_->streaming_requested = true;
+                stateStoreRef_->test_mode_arg = 0; // run mode
+                stateStoreRef_->streaming_request.notify_one(); // notifies producer
+            }
+
+            // always build freq sequence for run mode (demo or not)
+            emulatedFreqsForFakeAcq_.clear();
             emulatedFreqsForFakeAcq_.push_back(-1); // -1 is no_ssvep
             // grab current models' frequencies
             {
@@ -213,12 +225,13 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
                     }
                 }
             }
-            break;
 
             if(prevState == UIState_Saved_Sessions){
                 // just switched sessions -> intrinsic guards mean the model must be ready.
                 stateStoreRef_->currentSessionInfo.g_isModelReady.store(true, std::memory_order_release);
             }
+
+            break;
         }
         
         case UIState_Active_Calib: {
@@ -307,6 +320,18 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
                     } 
                 }
 
+#ifdef ACQ_BACKEND_FAKE
+                bool isDemoModeOn = stateStoreRef_->settings.demo_mode.load(std::memory_order_acquire);
+                if(isDemoModeOn) {
+                    pending_subject_name_ = "DEMO";
+                    pending_epilepsy_ = EpilepsyRisk_No;
+                    std::lock_guard<std::mutex> lock_proto(stateStoreRef_->mtx_streaming_request);
+                    stateStoreRef_->training_proto = trainingProtocol_;
+                    stateStoreRef_->test_mode_arg = 1; // calib
+                    stateStoreRef_->streaming_requested = true;
+                    stateStoreRef_->streaming_request.notify_one(); // producer
+                }
+#endif 
                 // new session publishing
                 SessionPaths SessionPath;
                 try {
@@ -416,6 +441,9 @@ void StimulusController_C::onStateEnter(UIState_E prevState, UIState_E newState,
 }
 
 void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
+#ifdef ACQ_BACKEND_FAKE
+    bool isDemoModeOn = stateStoreRef_->settings.demo_mode.load(std::memory_order_acquire);
+#endif
     switch(state){
         case UIState_Active_Calib:
         case UIState_NoSSVEP_Test:
@@ -436,7 +464,7 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
                     std::lock_guard<std::mutex> lock(stateStoreRef_->mtx_finalize_request);
                     stateStoreRef_->finalize_requested = true;
                 }
-                stateStoreRef_->cv_finalize_request.notify_one();          
+                stateStoreRef_->cv_finalize_request.notify_one();   
             }
             if(ev == UIStateEvent_UserPushesExit) {
                 // calib incomplete... delete session (if still __IN_PROGRESS)
@@ -458,13 +486,36 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
                     stateStoreRef_->currentSessionInfo.g_active_model_path.clear();
                 }
             }
-            // TODO: any fault cases
+
+#ifdef ACQ_BACKEND_FAKE
+            if(isDemoModeOn && ev != UIStateEvent_StimControllerTimeout){
+                // in any case except regular flow -> we'll want to notify acqDemoDriver to stop streaming
+                std::lock_guard<std::mutex> lock_streamer(stateStoreRef_->mtx_streaming_request);
+                stateStoreRef_->streaming_requested = false;
+                stateStoreRef_->streaming_request.notify_one(); // notify producer
+            }
+#endif
+
             break;
 
         case UIState_Paused: {
             if(currentWindowTimer_.is_paused()){
                 currentWindowTimer_.unpause_timer();
             }
+            
+            // TODO: not sure if this is needed, may be handled fine in onstateenter for run/calib modes
+#ifdef ACQ_BACKEND_FAKE
+            bool prevCalib = (pausedFromState_ == UIState_Active_Calib || pausedFromState_ == UIState_Instructions || pausedFromState_ == UIState_NoSSVEP_Test);
+            bool prevRun = pausedFromState_ == UIState_Active_Run;
+            if((prevCalib || prevRun) && isDemoModeOn){
+                std::lock_guard<std::mutex> lock_streamer(stateStoreRef_->mtx_streaming_request);
+                stateStoreRef_->streaming_requested = true;
+                if(prevRun) { stateStoreRef_->test_mode_arg = 0; }
+                else { stateStoreRef_->test_mode_arg = 1; }
+                stateStoreRef_->streaming_request.notify_one(); // notify producer
+            }
+#endif
+            
             break;
         }
 
@@ -476,6 +527,12 @@ void StimulusController_C::onStateExit(UIState_E state, UIStateEvent_E ev){
                 fakeAcqRunModeTimer_.stop_timer();
                 emulatedFreqsForFakeAcq_.clear();
                 fakeAcqSeqIdx_ = 0;
+            }
+            else if(isDemoModeOn){
+                // notify acqDemoDriver to stop streaming
+                std::lock_guard<std::mutex> lock_streamer(stateStoreRef_->mtx_streaming_request);
+                stateStoreRef_->streaming_requested = false;
+                stateStoreRef_->streaming_request.notify_one(); // notify producer
             }
 #endif
             break;
@@ -523,6 +580,8 @@ void StimulusController_C::processEvent(UIStateEvent_E ev){
 
 std::optional<UIStateEvent_E> StimulusController_C::detectEvent(){
     // the following are in order of priority 
+
+    // todo: add check for ui toggles sim mode event
     // (1) read UI event sent in by POST: consume event & write it's now None
     UIStateEvent_E currEvent = stateStoreRef_->g_ui_event.exchange(UIStateEvent_None, std::memory_order_acq_rel);
     if(currEvent != UIStateEvent_None){
@@ -732,21 +791,34 @@ bool StimulusController_C::has_divisor_6_to_20(int n) {
 void StimulusController_C::fakeAcq_buildSeqAndShuffle() {
     fakeAcqShuffledSeq_.clear();
 
-    // emulatedFreqsForFakeAcq_ = { -1(REST), leftHz, rightHz }
-    // gather all the freqs w appropriate reps
-    for(int i = 0; i<static_cast<int>(emulatedFreqsForFakeAcq_.size()); i++){
-        int hz = emulatedFreqsForFakeAcq_[i];
-        int reps = (hz == -1) ? FAKE_NO_SSVEP_REPS : FAKE_ACTIVE_REPS;
-        for(int r = 0; r < reps; r++){
-            fakeAcqShuffledSeq_.push_back(hz);
+    // Collect active freqs only (not -1/rest)
+    std::vector<int> activeFreqs;
+    for (int hz : emulatedFreqsForFakeAcq_) {
+        if (hz != -1) activeFreqs.push_back(hz);
+    }
+
+    // Build reps of each active freq
+    std::vector<int> activePool;
+    for (int hz : activeFreqs) {
+        for (int r = 0; r < FAKE_ACTIVE_REPS; r++) {
+            activePool.push_back(hz);
         }
     }
-    // Fisher-Yates shuffle
-    for(int i = static_cast<int>(fakeAcqShuffledSeq_.size() - 1); i>0; i--){
+
+    // Fisher-Yates shuffle the active pool
+    for (int i = static_cast<int>(activePool.size() - 1); i > 0; i--) {
         std::uniform_int_distribution<int> pick(0, i);
-        std::swap(fakeAcqShuffledSeq_[i], fakeAcqShuffledSeq_[pick(fakeAcqRng_)]);
+        std::swap(activePool[i], activePool[pick(fakeAcqRng_)]);
     }
-    // init idx
+
+    // Interleave: rest -> active -> rest -> active ...
+    // Always start and end with rest, always have rest between every active
+    fakeAcqShuffledSeq_.push_back(-1); // opening rest
+    for (int hz : activePool) {
+        fakeAcqShuffledSeq_.push_back(hz);
+        fakeAcqShuffledSeq_.push_back(-1); // rest after every active block
+    }
+
     fakeAcqSeqIdx_ = 0;
 }
 
@@ -797,7 +869,6 @@ void StimulusController_C::runUIStateMachine(){
 #ifdef ACQ_BACKEND_FAKE
         if(state_ == UIState_Active_Run){
             if (fakeAcqRunModeTimer_.check_timer_expired()){
-                // move to next stim
                 fakeAcq_advanceToNextSSVEP();
             }
         }
@@ -813,6 +884,7 @@ void StimulusController_C::runUIStateMachine(){
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+
 }
 
 void StimulusController_C::stopStateMachine(){

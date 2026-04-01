@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>EEG BCI Page-Turner – Local UI</title>
-    <link rel="stylesheet" href="Stim.css?v=20251122-13" />
+    <link rel="stylesheet" href="Stim.css?v=20251122-14" />
   </head>
   <body>
     <div class="app-shell">
@@ -360,6 +360,30 @@
                 </div>
               </div>
 
+              <div id="run-debug-conf" class="run-debug-conf hidden">
+                <div class="rdc-row">
+                  <span class="rdc-lbl">L</span>
+                  <div class="rdc-track">
+                    <div class="rdc-fill rdc-left" id="rdc-bar-left"></div>
+                  </div>
+                  <span class="rdc-pct" id="rdc-pct-left">—</span>
+                </div>
+                <div class="rdc-row">
+                  <span class="rdc-lbl">R</span>
+                  <div class="rdc-track">
+                    <div class="rdc-fill rdc-right" id="rdc-bar-right"></div>
+                  </div>
+                  <span class="rdc-pct" id="rdc-pct-right">—</span>
+                </div>
+                <div class="rdc-row">
+                  <span class="rdc-lbl">N</span>
+                  <div class="rdc-track">
+                    <div class="rdc-fill rdc-none" id="rdc-bar-none"></div>
+                  </div>
+                  <span class="rdc-pct" id="rdc-pct-none">—</span>
+                </div>
+              </div>
+
               <!-- RIGHT -->
               <div class="target-col">
                 <div class="target-action-label">Turn page forward</div>
@@ -368,6 +392,224 @@
                   <div class="flicker-block arrow-right" id="run-right">
                     <span class="arrow">→</span>
                   </div>
+                </div>
+              </div>
+            </div>
+            <!-- ONNX prediction sparkle traces (debug_mode on, non-demo run mode) -->
+            <div id="act-trace-left" class="act-trace act-trace-left"></div>
+            <div id="act-trace-center" class="act-trace act-trace-center"></div>
+            <div id="act-trace-right" class="act-trace act-trace-right"></div>
+
+            <!-- Actuation debug flash (debug_mode on, non-demo run mode) -->
+            <div
+              id="actuation-debug-overlay"
+              class="demo-actuation-flash hidden"
+              style="
+                position: absolute;
+                top: 1.2rem;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 50;
+              "
+            >
+              <span class="daf-icon">⚡</span>
+              <span id="act-dbg-dir">ACTUATED LEFT</span>
+            </div>
+          </section>
+
+          <!-- DEMO RUN VIEW — replaces run arrows when demo_mode is ON -->
+          <section
+            id="view-demo-run"
+            class="view hidden"
+            aria-label="Demo Mode — Live Inference"
+          >
+            <!-- Top bar -->
+            <header class="demo-header">
+              <div class="demo-header-left">
+                <div class="demo-mode-dot"></div>
+                <span class="demo-mode-label">DEMO MODE</span>
+                <span class="demo-session-id" id="demo-session-label"
+                  >Live inference · dataset stream</span
+                >
+              </div>
+              <div class="demo-header-right">
+                <div class="demo-window-counters">
+                  <span class="demo-counter-chip">
+                    <span class="dcc-k">Windows</span>
+                    <span class="dcc-v" id="demo-win-count">0</span>
+                  </span>
+                  <span class="demo-counter-chip warn">
+                    <span class="dcc-k">Artifacts</span>
+                    <span class="dcc-v" id="demo-art-count">0</span>
+                  </span>
+                  <span class="demo-counter-chip accent">
+                    <span class="dcc-k">Actuations</span>
+                    <span class="dcc-v" id="demo-act-count">0</span>
+                  </span>
+                </div>
+              </div>
+            </header>
+
+            <!-- Main 3-panel grid -->
+            <div class="demo-grid">
+              <!-- ── LEFT PANEL: Prediction ── -->
+              <div class="demo-panel demo-panel-pred" id="demo-panel-pred">
+                <div class="demo-panel-title">Classifier Output</div>
+
+                <!-- Big prediction state indicator -->
+                <div class="demo-pred-state unknown" id="demo-pred-state">
+                  <div class="demo-pred-icon" id="demo-pred-icon">?</div>
+                  <div class="demo-pred-label" id="demo-pred-label">
+                    UNKNOWN
+                  </div>
+                  <div class="demo-pred-sub" id="demo-pred-sub">
+                    Awaiting window…
+                  </div>
+                </div>
+
+                <!-- Artifact badge (shown when current window is artifactual) -->
+                <div
+                  class="demo-artifact-badge hidden"
+                  id="demo-artifact-badge"
+                >
+                  <span class="dab-icon">⚡</span>
+                  <span class="dab-label">Artifact Window</span>
+                </div>
+
+                <!-- Debounce progress -->
+                <div class="demo-debounce">
+                  <div class="demo-debounce-head">
+                    <span class="demo-debounce-title">Debounce</span>
+                    <span class="demo-debounce-frac" id="demo-debounce-fraction"
+                      >0 / 10</span
+                    >
+                  </div>
+                  <div class="demo-debounce-track">
+                    <div
+                      class="demo-debounce-bar"
+                      id="demo-debounce-bar"
+                      style="width: 0%"
+                    ></div>
+                  </div>
+                </div>
+
+                <!-- Actuation flash (animates on actuation) -->
+                <div
+                  class="demo-actuation-flash hidden"
+                  id="demo-actuation-flash"
+                >
+                  <span class="daf-icon">⚡</span>
+                  <span class="daf-label">ACTUATED</span>
+                </div>
+              </div>
+
+              <!-- ── CENTER PANEL: Confidence ── -->
+              <div class="demo-panel demo-panel-conf" id="demo-panel-conf">
+                <div class="demo-panel-title">Softmax Confidence</div>
+
+                <!-- Softmax bars -->
+                <div class="demo-conf-bars">
+                  <div class="demo-conf-row">
+                    <span class="demo-conf-lbl">LEFT</span>
+                    <div class="demo-conf-track">
+                      <div
+                        class="demo-conf-fill fill-left"
+                        id="demo-bar-left"
+                        style="width: 33%"
+                      ></div>
+                    </div>
+                    <span class="demo-conf-pct" id="demo-pct-left">33%</span>
+                  </div>
+
+                  <div class="demo-conf-row">
+                    <span class="demo-conf-lbl">RIGHT</span>
+                    <div class="demo-conf-track">
+                      <div
+                        class="demo-conf-fill fill-right"
+                        id="demo-bar-right"
+                        style="width: 33%"
+                      ></div>
+                    </div>
+                    <span class="demo-conf-pct" id="demo-pct-right">33%</span>
+                  </div>
+
+                  <div class="demo-conf-row">
+                    <span class="demo-conf-lbl">NONE</span>
+                    <div class="demo-conf-track">
+                      <div
+                        class="demo-conf-fill fill-none"
+                        id="demo-bar-none"
+                        style="width: 34%"
+                      ></div>
+                    </div>
+                    <span class="demo-conf-pct" id="demo-pct-none">34%</span>
+                  </div>
+                </div>
+
+                <!-- Raw logits -->
+                <div class="demo-logits">
+                  <div class="demo-panel-title" style="margin-top: 14px">
+                    Raw Logits
+                  </div>
+                  <div class="demo-logits-row">
+                    <div class="demo-logit-chip">
+                      <span class="dlc-k">L</span>
+                      <span class="dlc-v" id="demo-logit-left">0.000</span>
+                    </div>
+                    <div class="demo-logit-chip">
+                      <span class="dlc-k">R</span>
+                      <span class="dlc-v" id="demo-logit-right">0.000</span>
+                    </div>
+                    <div class="demo-logit-chip">
+                      <span class="dlc-k">N</span>
+                      <span class="dlc-v" id="demo-logit-none">0.000</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ── RIGHT PANEL: Dataset Streamer ── -->
+              <div class="demo-panel demo-panel-stream" id="demo-panel-stream">
+                <div class="demo-panel-title">Dataset Streamer</div>
+
+                <div class="demo-gt-display">
+                  <div class="demo-gt-hz" id="demo-gt-hz">—</div>
+                  <div class="demo-gt-label" id="demo-gt-label">No target</div>
+                </div>
+
+                <div class="demo-verdict unknown" id="demo-verdict">
+                  <span class="demo-verdict-icon" id="demo-verdict-icon"
+                    >—</span
+                  >
+                  <span class="demo-verdict-label" id="demo-verdict-label"
+                    >AWAITING</span
+                  >
+                  <span class="demo-verdict-sub" id="demo-verdict-sub">—</span>
+                </div>
+
+                <!-- Trial metadata grid -->
+                <div class="demo-stream-meta">
+                  <div class="demo-meta-item">
+                    <span class="dmi-k">Target idx</span>
+                    <span class="dmi-v" id="demo-target-idx">—</span>
+                  </div>
+                  <div class="demo-meta-item">
+                    <span class="dmi-k">Trial idx</span>
+                    <span class="dmi-v" id="demo-trial-idx">—</span>
+                  </div>
+                  <div class="demo-meta-item">
+                    <span class="dmi-k">Block idx</span>
+                    <span class="dmi-v" id="demo-block-idx">—</span>
+                  </div>
+                  <div class="demo-meta-item">
+                    <span class="dmi-k">Dataset</span>
+                    <span class="dmi-v">Tsinghua</span>
+                  </div>
+                </div>
+
+                <div class="demo-cycling-badge hidden" id="demo-cycling-badge">
+                  <span>🔁</span>
+                  <span>Dataset cycling (all trials used)</span>
                 </div>
               </div>
             </div>
@@ -902,7 +1144,7 @@
 
                   <div id="freq-warning" class="freq-warning">2 selected</div>
                 </div>
-                <!-- Card: Hyperparameter Tuning -->
+                <!-- Settings Card: Hyperparameter Tuning -->
                 <div class="settings-card hparam-card" id="hparam-card">
                   <div class="hparam-head">
                     <div class="hparam-title-row">
@@ -976,6 +1218,119 @@
 
                     <div id="hparam-cnn-only" class="hparam-note hidden">
                       This option currently applies to <b>CNN</b> training only.
+                    </div>
+                  </div>
+                </div>
+                <!-- Settings Card: Debug & Demo -->
+                <div class="settings-card debug-demo-card" id="debug-demo-card">
+                  <div class="debug-demo-head">
+                    <div class="debug-demo-title-row">
+                      <h3>Debug &amp; Demo</h3>
+                      <!-- Badge changes based on is_fake_backend -->
+                      <span id="debug-hw-badge" class="debug-build-badge hw"
+                        >HARDWARE BUILD</span
+                      >
+                      <span
+                        id="debug-fake-badge"
+                        class="debug-build-badge fake hidden"
+                        >FAKE BUILD</span
+                      >
+                    </div>
+                    <p class="muted">
+                      Diagnostic overlays and dataset-streaming demo mode. Demo
+                      Mode requires a <code>ACQ_BACKEND_FAKE</code> build.
+                    </p>
+                  </div>
+
+                  <div class="debug-toggles">
+                    <!-- Toggle 1: Demo Mode -->
+                    <div class="debug-toggle-row" id="demo-mode-row">
+                      <!-- Greyed overlay when disabled -->
+                      <div
+                        class="debug-disabled-overlay hidden"
+                        id="demo-disabled-overlay"
+                      >
+                        <span class="debug-lock-icon">🔒</span>
+                        <span>Requires FAKE build</span>
+                      </div>
+
+                      <div class="debug-toggle-info">
+                        <div class="debug-toggle-label">
+                          Demo Mode
+                          <span
+                            id="demo-mode-status-badge"
+                            class="debug-status-badge off"
+                            >OFF</span
+                          >
+                        </div>
+                        <div class="debug-toggle-sub">
+                          Streams EEG from the Tsinghua dataset instead of live
+                          hardware. Run mode shows a live inference dashboard
+                          instead of flickering arrows.
+                        </div>
+                      </div>
+
+                      <label class="toggle-switch" id="demo-mode-toggle-wrap">
+                        <input type="checkbox" id="toggle-demo-mode" disabled />
+                        <span class="toggle-track">
+                          <span class="toggle-thumb"></span>
+                        </span>
+                      </label>
+                    </div>
+
+                    <div class="debug-divider"></div>
+
+                    <!-- Toggle 2: Show ONNX Overlay -->
+                    <div class="debug-toggle-row">
+                      <div class="debug-toggle-info">
+                        <div class="debug-toggle-label">
+                          Show ONNX Overlay
+                          <span
+                            id="onnx-overlay-status-badge"
+                            class="debug-status-badge off"
+                            >OFF</span
+                          >
+                        </div>
+                        <div class="debug-toggle-sub">
+                          Overlays real-time classifier output (softmax bars +
+                          predicted class) on the standard run mode screen.
+                          Works in both hardware and demo builds.
+                        </div>
+                      </div>
+
+                      <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-onnx-overlay" />
+                        <span class="toggle-track">
+                          <span class="toggle-thumb"></span>
+                        </span>
+                      </label>
+                    </div>
+
+                    <div class="debug-divider"></div>
+
+                    <!-- Toggle 3: Show HW Actuation Debug -->
+                    <div class="debug-toggle-row">
+                      <div class="debug-toggle-info">
+                        <div class="debug-toggle-label">
+                          HW Actuation Debug
+                          <span
+                            id="hw-debug-status-badge"
+                            class="debug-status-badge off"
+                            >OFF</span
+                          >
+                        </div>
+                        <div class="debug-toggle-sub">
+                          Shows Arduino serial console and actuation status
+                          overlay during run mode.
+                        </div>
+                      </div>
+
+                      <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-hw-debug" />
+                        <span class="toggle-track">
+                          <span class="toggle-thumb"></span>
+                        </span>
+                      </label>
                     </div>
                   </div>
                 </div>
@@ -1258,6 +1613,49 @@
           <h3>Event Log</h3>
           <div id="log" class="log-body"></div>
         </section>
+
+        <!-- ACTUATION BANNER (debug + demo modes) -->
+        <div
+          id="actuating-banner"
+          class="actuating-banner hidden"
+          aria-live="polite"
+        ></div>
+
+        <!-- HW Actuation Debug Overlay — run mode only, toggle-gated -->
+        <div
+          id="hw-debug-overlay"
+          class="hw-debug-overlay"
+          style="display: none"
+        >
+          <div class="hw-status-strip">
+            <span
+              id="hw-badge-mock"
+              class="hw-badge hw-badge-mock"
+              style="display: none"
+              >MOCK</span
+            >
+            <span id="hw-badge-conn" class="hw-badge hw-badge-err"
+              >DISCONNECTED</span
+            >
+            <span id="hw-badge-calib" class="hw-badge hw-badge-warn"
+              >UNCALIBRATED</span
+            >
+            <span
+              id="hw-badge-estop"
+              class="hw-badge hw-badge-err"
+              style="display: none"
+              >E-STOP</span
+            >
+            <span id="hw-badge-mode" class="hw-badge hw-badge-mode">IDLE</span>
+            <span
+              id="hw-badge-action"
+              class="hw-badge hw-badge-action"
+              style="display: none"
+              >⟳ FLIPPING</span
+            >
+          </div>
+          <div id="hw-serial-log" class="hw-serial-log"></div>
+        </div>
       </main>
     </div>
 
@@ -1267,6 +1665,6 @@
     <!-- Local Chart.js (open src lib)) -->
     <script src="lib/chart.umd.min.js"></script>
     <!-- Main script -->
-    <script src="Stim.js?v=20251119-21"></script>
+    <script src="Stim.js?v=20251119-22"></script>
   </body>
 </html>
